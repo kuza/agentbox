@@ -230,24 +230,48 @@ if ! podman run --rm -v "$AGENT_VOL:$AGENT_PREFIX:ro" --entrypoint test "$IMAGE"
 fi
 
 # ---------------------------------------------------------------------------
-# Skip the first-run onboarding wizard. Interactive Claude Code may ignore
-# CLAUDE_CODE_OAUTH_TOKEN during onboarding and show the browser login picker
-# (anthropics/claude-code#46259). Setting hasCompletedOnboarding in
-# ~/.claude.json (inside the ab-claude-home volume) is the documented workaround.
-# Merges into the existing file, other settings are preserved.
+# Prepare the agent's home volume (one short-lived container, no network).
+#
+# 1. Ownership of mount-point parents. Read-only config and skills are
+#    bind-mounted into ~/.claude or ~/.pi/agent. Podman creates missing parents
+#    of a mount point as root, so on a fresh volume the agent could not write
+#    its own config directory (e.g. pi failed to create ~/.pi/agent/sessions).
+#    Create them as node first; chown also repairs volumes already affected.
+#    Runs as root inside the user namespace: uid 0 there is a subuid on the
+#    host, uid 1000 (node) is you.
+#
+# 2. Claude Code only: skip the first-run onboarding wizard. Interactive
+#    Claude Code may ignore CLAUDE_CODE_OAUTH_TOKEN during onboarding and show
+#    the browser login picker (anthropics/claude-code#46259). Setting
+#    hasCompletedOnboarding in ~/.claude.json is the documented workaround.
+#    Merges into the existing file, other settings are preserved.
 # ---------------------------------------------------------------------------
-if [[ "$AGENT" == claude ]]; then
-  podman run --rm --network none --userns="$USERNS" \
-    -v ab-claude-home:/home/node \
-    --entrypoint node "$IMAGE" -e '
-      const fs = require("fs"), f = "/home/node/.claude.json";
-      let c = {};
-      try { c = JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) {}
-      if (c.hasCompletedOnboarding !== true) {
-        c.hasCompletedOnboarding = true;
-        fs.writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
-      }'
-fi
+case "$AGENT" in
+  claude) home_dirs=(.claude) ;;
+  pi)     home_dirs=(.pi .pi/agent) ;;
+esac
+podman run --rm --network none --userns="$USERNS" --user 0 \
+  -e AGENT="$AGENT" \
+  -v "$AGENT_HOME:/home/node" \
+  --entrypoint sh "$IMAGE" -c '
+    set -eu
+    cd /home/node
+    for d in "$@"; do
+      mkdir -p "$d"
+      chown node:node "$d"
+    done
+    if [ "$AGENT" = claude ]; then
+      node -e "
+        const fs = require(\"fs\"), f = \"/home/node/.claude.json\";
+        let c = {};
+        try { c = JSON.parse(fs.readFileSync(f, \"utf8\")); } catch (e) {}
+        if (c.hasCompletedOnboarding !== true) {
+          c.hasCompletedOnboarding = true;
+          fs.writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
+        }"
+      chown node:node /home/node/.claude.json
+    fi
+  ' sh "${home_dirs[@]}"
 
 # ---------------------------------------------------------------------------
 # Sidecars. Started once and reused across sessions, so several sessions can
@@ -357,8 +381,8 @@ git_mounts=()
 if [[ -d "$REPO/.git" ]]; then
   mkdir -p "$REPO/.git/hooks"
   git_mounts+=(
-    -v "$REPO/.git/hooks:/work/.git/hooks:ro,Z"
-    -v "$REPO/.git/config:/work/.git/config:ro,Z"
+    -v "$REPO/.git/hooks:/work/.git/hooks:ro,z"
+    -v "$REPO/.git/config:/work/.git/config:ro,z"
   )
 elif [[ -f "$REPO/.git" ]]; then
   echo "agentbox: warning: $REPO is a git worktree or submodule;" \
@@ -410,14 +434,15 @@ case "$AGENT" in
       --secret "claude_oauth,type=env,target=CLAUDE_CODE_OAUTH_TOKEN"
     )
     if [[ -n "$SKILLS_SRC" ]]; then
-      agent_args+=(-v "$SKILLS_SRC:/home/node/.claude/skills:ro,Z")
+      agent_args+=(-v "$SKILLS_SRC:/home/node/.claude/skills:ro,z")
     fi
     ;;
   pi)
     # PI_OFFLINE, PI_SKIP_VERSION_CHECK, PI_TELEMETRY: no model catalog refresh,
-    # no version check, no telemetry. Model traffic goes either to chatgpt.com
-    # via squid (ChatGPT subscription, openai-codex provider) or through the
-    # ab-llm-openai sidecar (API key); tools go through the MCP sidecars.
+    # no version check, no telemetry. Model traffic goes either to
+    # api.openai.com via squid (ChatGPT subscription, "Sign in with ChatGPT")
+    # or through the ab-llm-openai sidecar (API key); tools go through the MCP
+    # sidecars.
     # models.json, mcp.json, skills/ and extensions/ come from the host,
     # read-only: the agent cannot redirect its model, add MCP servers, or plant
     # extensions (which pi loads and executes) that would persist in ab-pi-home.
@@ -429,24 +454,37 @@ case "$AGENT" in
       -e PI_SKIP_VERSION_CHECK=1
       -e PI_TELEMETRY=0
       --secret "grafana_mcp_caller,type=env,target=GRAFANA_MCP_TOKEN"
-      -v "$SCRIPT_DIR/pi/models.json:/home/node/.pi/agent/models.json:ro,Z"
-      -v "$SCRIPT_DIR/pi/mcp.json:/home/node/.pi/agent/mcp.json:ro,Z"
-      -v "$SCRIPT_DIR/pi/extensions:/home/node/.pi/agent/extensions:ro,Z"
+      -v "$SCRIPT_DIR/pi/mcp.json:/home/node/.pi/agent/mcp.json:ro,z"
+      -v "$SCRIPT_DIR/pi/extensions:/home/node/.pi/agent/extensions:ro,z"
     )
     if podman secret inspect github_mcp_caller >/dev/null 2>&1; then
       agent_args+=(--secret "github_mcp_caller,type=env,target=GITHUB_MCP_TOKEN")
     fi
-    # API-key mode only: caller token for the ab-llm-openai sidecar.
-    if podman secret inspect llm_openai_caller >/dev/null 2>&1; then
-      agent_args+=(--secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN")
+    # API-key mode only (openai_api_key secret exists): pi/models.json points
+    # the openai provider at the ab-llm-openai sidecar. In subscription mode it
+    # must NOT be mounted, or "Sign in with ChatGPT" requests would go to the
+    # sidecar instead of api.openai.com.
+    if podman secret inspect openai_api_key >/dev/null 2>&1 \
+       && podman secret inspect llm_openai_caller >/dev/null 2>&1; then
+      agent_args+=(
+        --secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN"
+        -v "$SCRIPT_DIR/pi/models.json:/home/node/.pi/agent/models.json:ro,z"
+      )
     fi
     if [[ -n "$SKILLS_SRC" ]]; then
-      agent_args+=(-v "$SKILLS_SRC:/home/node/.pi/agent/skills:ro,Z")
+      agent_args+=(-v "$SKILLS_SRC:/home/node/.pi/agent/skills:ro,z")
     fi
     ;;
 esac
 
 # ---------------------------------------------------------------------------
+# SELinux labels for host directories used by sessions: lowercase ":z" (shared)
+# on everything a session mounts from the host (repo, .git parts, skills, pi
+# config). Uppercase ":Z" gives a directory a label private to ONE container,
+# so a second session (Claude + pi in the same repo, or two sessions sharing
+# skills/) relabels it and the first one loses access. Sidecar config files
+# are each used by a single container and keep ":Z".
+#
 # Session: internal network only, no host credentials, read-only agent binary.
 # ---------------------------------------------------------------------------
 exec podman run --rm "${tty_flags[@]}" \
@@ -462,7 +500,7 @@ exec podman run --rm "${tty_flags[@]}" \
   -v "$AGENT_HOME:/home/node" \
   -v ab-cache:/home/node/.cache \
   -v ab-go:/home/node/go \
-  -v "$REPO:/work:Z" \
+  -v "$REPO:/work:z" \
   "${git_mounts[@]}" \
   "${agent_args[@]}" \
   "$IMAGE" "$@"

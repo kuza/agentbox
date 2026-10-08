@@ -62,6 +62,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
 - MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
+- "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, and `github.com` if you enable it) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
 
 ## Requirements
 
@@ -298,29 +299,30 @@ Leaving it off and asking the agent to read public repositories through the GitH
 
 > Do not use the Claude subscription token with pi. Anthropic permits subscription OAuth only in Claude Code and Claude.ai, not in third-party tools.
 
-There are two ways to give pi OpenAI models. `run.sh` picks the mode by whether the `openai_api_key` secret exists.
+There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (`openai/...` models); `run.sh` picks the mode by whether the `openai_api_key` secret exists.
 
 | | ChatGPT subscription (default) | OpenAI API key |
 |---|---|---|
-| pi provider | `openai-codex` | `openai` |
-| Billing | Your ChatGPT plan's Codex limits | Per token, OpenAI platform |
-| Sign-in | `/login` in pi, device code, once | `openai_api_key` Podman secret |
+| Sign-in | `/login` → OpenAI → *Sign in with ChatGPT*, once | `openai_api_key` Podman secret |
+| Billing | Your ChatGPT plan | Per token, OpenAI platform |
 | Credential in the agent container | **Yes**: `~/.pi/agent/auth.json` in `ab-pi-home`, incl. refresh token. Claude Code sessions cannot see it | **No**: only in the `ab-llm-openai` sidecar |
-| Egress | `auth.openai.com`, `chatgpt.com` via squid | none, through the sidecar |
-| Stability | Uses ChatGPT's Codex backend, which is not a public API and can change | Public API |
+| Egress | `auth.openai.com`, `api.openai.com` via squid | none, through the sidecar |
+| `pi/models.json` | not mounted | mounted: points the provider at the sidecar |
 
-OpenAI, unlike Anthropic, lets ChatGPT subscriptions be used from third-party coding agents. Check the current terms of your plan if this matters to you.
+**Do not use "OpenAI Codex (legacy)".** It is pi's older ChatGPT integration: it talks to ChatGPT's internal Codex backend (`chatgpt.com/backend-api`), which is not a public API and can change without notice, and pi marks it legacy. *Sign in with ChatGPT* on the OpenAI provider gets a token issued for the public API (`api.openai.com`) and uses the same endpoint and request format as API-key access. Check `/model` for the models your plan offers there.
 
 ### Setup: ChatGPT subscription
 
 1. Start pi in a repo: `cd ~/src/myrepo && ~/agentbox/pi.sh`. The first run installs pi into the `ab-pi-tools` volume.
-2. Run `/login`, choose OpenAI Codex / ChatGPT and the **device code** method. Open the shown URL in your browser on the host, enter the code, approve. pi stores the tokens in `~/.pi/agent/auth.json` in `ab-pi-home` and refreshes them itself; this is needed once per box, not per repo.
-3. Pick a model with `/model` (`openai-codex/...`) and press `Ctrl+S` to make it the default.
-4. Check MCP with `/mcp`. If you do not use the GitHub MCP sidecar, remove the `github` entry from `pi/mcp.json`.
+2. Run `/login`, choose **OpenAI**, then **Sign in with ChatGPT**. Open the shown URL in your browser on the host and approve.
+3. The browser is then redirected to `http://127.0.0.1:1455/auth/callback?...` and shows a connection error: the callback listener runs inside the container, not on your host. That is expected. **Copy the full URL from the address bar** and paste it into pi's prompt.
+4. pi stores the tokens in `~/.pi/agent/auth.json` in `ab-pi-home` and refreshes them itself; this is needed once per box, not per repo.
+5. Pick an `openai/...` model with `/model` and press `Ctrl+S` to make it the default.
+6. Check MCP with `/mcp`. If you do not use the GitHub MCP sidecar, remove the `github` entry from `pi/mcp.json`.
 
-**The token is readable by the agent**, as the Claude OAuth token is for Claude Code: pi has to write and refresh it, so it cannot be hidden in a sidecar. It can only be sent to hosts in the squid allowlist. To revoke it, sign out in pi (`/logout`) and end the session in your ChatGPT account's security settings.
+**The token is readable by the agent**, as the Claude OAuth token is for Claude Code: pi has to write and refresh it, so it cannot be hidden in a sidecar. To revoke it, run `/logout` in pi and end the session in your ChatGPT account's security settings.
 
-`auth.openai.com` and `chatgpt.com` are in `squid.conf` for this mode. Squid is shared, so Claude Code sessions can reach them too; remove the two lines if you switch pi to an API key.
+`auth.openai.com` and `api.openai.com` are in `squid.conf` for this mode. Squid is shared, so Claude Code sessions can reach them too; remove the two lines if you use pi with an API key or not at all. `chatgpt.com` is only needed for the legacy provider and is commented out.
 
 ### Setup: OpenAI API key
 
@@ -601,8 +603,10 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
 | pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 ./pi.sh`. |
-| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `auth.openai.com` or `chatgpt.com` missing in `squid.conf`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
-| pi (subscription): worked before, now fails after an update | The Codex backend is not a public API; update pi (`AB_UPDATE=1 ./pi.sh`), it usually follows changes quickly. |
+| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `auth.openai.com` or `api.openai.com` missing in `squid.conf`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
+| pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
+| pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json` is mounted only when the `openai_api_key` secret exists. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
+| pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
 | pi: MCP server `failed` in `/mcp` | Same checks as for Claude Code: sidecar logs. For `github`, the GitHub MCP sidecar is optional; remove the entry from `pi/mcp.json` if you don't use it. |
 | `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `PYTHON_VERSIONS` in `Containerfile` and `AB_UPGRADE=1 ./run.sh`. |
 | Sidecar can't resolve Grafana/Graylog | Internal DNS not visible to containers. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
@@ -659,7 +663,7 @@ read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 These parts are assembled from documentation and tests against fake upstreams, but have not been run end to end:
 
 - pi through the OpenAI sidecar against the real OpenAI API. The chain pi → nginx (caller check, key injection) → upstream was tested with a fake upstream.
-- pi's ChatGPT device-code sign-in through squid, and token refresh with `PI_OFFLINE=1` set.
+- pi's *Sign in with ChatGPT* through squid with the pasted callback URL, and token refresh with `PI_OFFLINE=1` set.
 
 - `github-mcp-server http` listening on all interfaces inside its container (nginx connects to it over the `ab-egress` network). If it binds to localhost only, nginx returns 502.
 - github-mcp-server honouring `X-MCP-Toolsets` and `X-MCP-Lockdown` as set by nginx.
