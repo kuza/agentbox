@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "url": "http://ab-mcp-grafana:8000/mcp",
+      "headers": { "Authorization": "Bearer ${GRAFANA_MCP_TOKEN}" },
+      "description": "Grafana dashboards, alerts and Prometheus/Loki queries (read-only)"
+    },
+    "graylog": {
+      "url": "http://ab-mcp-graylog:8080/mcp",
+      "description": "Search and analyse logs in Graylog (read-only)"
+    },
+    "github": {
+      "url": "http://ab-mcp-github:8080/mcp",
+      "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" },
+      "description": "GitHub pull requests, issues, CI runs and repository contents"
+    }
+  }
+}

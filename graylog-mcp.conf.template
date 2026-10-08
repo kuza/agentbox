@@ -1,0 +1,24 @@
+# nginx template, rendered by the official nginx image's envsubst entrypoint.
+# Only variables defined in the environment are substituted:
+#   GRAYLOG_URL    Graylog base URL (from run.sh)
+#   GRAYLOG_BASIC  base64("<api-token>:token"), from the podman secret
+# nginx's own variables (e.g. $proxy_host) are left untouched.
+server {
+    listen 8080;
+
+    location = /mcp {
+        proxy_pass ${GRAYLOG_URL}/api/mcp;
+        proxy_set_header Authorization "Basic ${GRAYLOG_BASIC}";
+        proxy_set_header Host $proxy_host;
+        # Graylog's CSRF protection requires this header on non-GET API calls.
+        proxy_set_header X-Requested-By agentbox;
+        proxy_ssl_server_name on;
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location / { return 404; }
+}
