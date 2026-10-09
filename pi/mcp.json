@@ -13,6 +13,10 @@
       "url": "http://ab-mcp-github:8080/mcp",
       "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" },
       "description": "GitHub pull requests, issues, CI runs and repository contents"
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "description": "Current library documentation and code examples, by library and version"
     }
   }
 }

@@ -3,7 +3,7 @@
 Run [Claude Code](https://code.claude.com/docs), or the [pi](https://pi.dev) coding agent with OpenAI models (ChatGPT subscription or API key), in an isolated rootless Podman container that can reach only:
 
 - the model API (Anthropic for Claude Code; OpenAI for pi),
-- MCP servers for **Grafana**, **Graylog**, **Prometheus** (via Grafana) and, optionally, **GitHub**.
+- MCP servers for **Grafana**, **Graylog**, **Prometheus** (via Grafana), **Context7** (library documentation) and, optionally, **GitHub**.
 
 No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub) live only in sidecar containers that the agent cannot read. `git push` is done on the host.
 
@@ -50,7 +50,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 
 **What is isolated**
 
-- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`) and package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), each removable. Everything else, GitHub included, gets a 403.
+- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), and the Context7 documentation server (`mcp.context7.com`), each removable. Everything else, GitHub included, gets a 403.
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
@@ -295,6 +295,38 @@ What it does and does not change:
 - **Main risk is inbound.** Public repositories, issues and READMEs are arbitrary third-party text and code: a prompt injection source and a supply-chain source, like PyPI. Weigh this against what the agent can read in the box: your code, and whatever the MCP servers return, such as logs.
 
 Leaving it off and asking the agent to read public repositories through the GitHub MCP tools (the PAT can read public repositories) is the more contained alternative.
+
+## Documentation (Context7)
+
+The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. `claude/CLAUDE.md` tells Claude to look there first.
+
+### Register
+
+`mcp.context7.com` is in `squid.conf`. After pulling this change, restart squid once, then register the server:
+
+```bash
+AB_RESTART=1 ./run.sh ~/src/myrepo -p "say ok"
+./run.sh ~/src/myrepo mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
+./run.sh ~/src/myrepo mcp get context7      # expect: Connected
+```
+
+pi gets it from `pi/mcp.json`; nothing to register.
+
+No API key is used: the anonymous tier has lower rate limits but needs no secret. If the limits get in the way, put the key in an nginx sidecar the way Graylog's token is handled, so it never enters the agent container.
+
+### Things to watch
+
+- **Queries leave the box.** Library names and questions go to Upstash. Write them as you would a search query, without code or data from the repo.
+- **Documentation is third-party text.** Anyone can add a library to Context7, so its content is a prompt injection source, like PyPI or public GitHub.
+- **A planted key is a write path.** Context7 accepts bearer keys. As with the other allowlisted APIs (see [Security model](#security-model)), a key planted through prompt injection would send queries to someone else's account.
+
+### Disable
+
+```bash
+./run.sh ~/src/myrepo mcp remove --scope user context7
+```
+
+Remove the `context7` entry from `pi/mcp.json` and the `mcp.context7.com` line from `squid.conf`, then `AB_RESTART=1 ./run.sh`.
 
 ## pi (OpenAI)
 
@@ -678,6 +710,8 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is Graylog's own `HTTP 405 Method Not Allowed` API error, so nginx works but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and check the Graylog version is 7.0+. |
 | `mcp get grafana` shows `403 ... forbidden: host not allowed` | mcp-grafana validates the `Host` header against `--allowed-hosts`. It must include the name Claude uses (`ab-mcp-grafana:8000`). Recreate with `AB_RESTART=1`. |
 | nginx sidecar exits on start | nginx resolves `GRAYLOG_URL` at startup. Fix DNS, or use an IP and check TLS/SNI. |
+| `mcp get context7` fails or Context7 tools return proxy errors | `mcp.context7.com` missing in `squid.conf`, or squid not restarted: `AB_RESTART=1 ./run.sh`. The squid log shows the denied host. |
+| Context7 tools return 429 | Anonymous rate limit. Wait, or add an API key through a sidecar (see [Documentation (Context7)](#documentation-context7)). |
 | `mcp get github` shows 401 | The caller token in Claude's registration does not match `github_mcp_caller`. Re-register (GitHub, step 3). |
 | `mcp get github` shows 502 | nginx cannot reach `ab-mcp-github-srv`: check `podman ps` and its logs. If that container was restarted on its own, restart both with `AB_RESTART=1` (nginx caches its IP). |
 | GitHub tools fail with 403 / 404 | The PAT lacks the permission, the repository is not selected in it, or an org-owned token is pending approval. Writes to code are expected to fail: Contents is read-only. |
@@ -729,6 +763,7 @@ These parts are assembled from documentation and tests against fake upstreams, b
 - pi through the OpenAI sidecar against the real OpenAI API. The chain pi → nginx (caller check, key injection) → upstream was tested with a fake upstream.
 - pi's *Sign in with ChatGPT* through squid with the pasted callback URL, and token refresh with `PI_OFFLINE=1` set.
 
+- Context7 through squid: Claude Code's and pi's HTTP MCP clients using `HTTPS_PROXY` for `mcp.context7.com`.
 - `github-mcp-server http` listening on all interfaces inside its container (nginx connects to it over the `ab-egress` network). If it binds to localhost only, nginx returns 502.
 - github-mcp-server honouring `X-MCP-Toolsets` and `X-MCP-Lockdown` as set by nginx.
 
