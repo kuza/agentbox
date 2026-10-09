@@ -30,6 +30,8 @@
 #                     image from scratch, update Claude Code, recreate sidecars
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <script dir>/skills)
+#   AB_ENV_DIR        host directory with per-project environment files,
+#                     <repo dir name>.env (default: <script dir>/env)
 #
 # See README.md for first-time setup (networks, secrets, MCP registration).
 set -euo pipefail
@@ -53,13 +55,18 @@ if [[ "$REPO" == "$SCRIPT_DIR" ]]; then
   exit 2
 fi
 echo "agentbox: repo $REPO" >&2
+# Mount point inside the session, named after the repo directory. Agents key
+# their per-project state by working directory (Claude Code: memory, session
+# history, project permissions), so one fixed path for every repo would make
+# all repos one project. Two repos with the same name still share that state.
+WORK_DIR="/work/$(basename "$REPO")"
 
 # ---------------------------------------------------------------------------
 # Configuration file: KEY=VALUE lines, # comments, optional quotes.
 # Parsed, not sourced, so it cannot run code, and only the keys below are
 # accepted. A variable already set in the environment wins over the file.
 # ---------------------------------------------------------------------------
-CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES)
+CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR)
 load_config() {
   local file="$1" line key val n=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -282,6 +289,11 @@ fi
 #    the browser login picker (anthropics/claude-code#46259). Setting
 #    hasCompletedOnboarding in ~/.claude.json is the documented workaround.
 #    Merges into the existing file, other settings are preserved.
+#
+# 3. Claude Code only: auto memory off by default. Set only when
+#    ~/.claude/settings.json has no autoMemoryEnabled yet, so an explicit
+#    choice there stays; a project enables it in its .claude/settings.json.
+#    An unreadable settings file is left alone.
 # ---------------------------------------------------------------------------
 case "$AGENT" in
   claude) home_dirs=(.claude) ;;
@@ -305,8 +317,15 @@ podman run --rm --network none --userns="$USERNS" --user 0 \
         if (c.hasCompletedOnboarding !== true) {
           c.hasCompletedOnboarding = true;
           fs.writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
+        }
+        const s = \"/home/node/.claude/settings.json\";
+        let t = {}, ok = true;
+        try { t = JSON.parse(fs.readFileSync(s, \"utf8\")); } catch (e) { ok = e.code === \"ENOENT\"; }
+        if (ok && t && typeof t === \"object\" && t.autoMemoryEnabled === undefined) {
+          t.autoMemoryEnabled = false;
+          fs.writeFileSync(s, JSON.stringify(t, null, 2));
         }"
-      chown node:node /home/node/.claude.json
+      chown node:node /home/node/.claude.json /home/node/.claude/settings.json
     fi
   ' sh "${home_dirs[@]}"
 
@@ -418,8 +437,8 @@ git_mounts=()
 if [[ -d "$REPO/.git" ]]; then
   mkdir -p "$REPO/.git/hooks"
   git_mounts+=(
-    -v "$REPO/.git/hooks:/work/.git/hooks:ro,z"
-    -v "$REPO/.git/config:/work/.git/config:ro,z"
+    -v "$REPO/.git/hooks:$WORK_DIR/.git/hooks:ro,z"
+    -v "$REPO/.git/config:$WORK_DIR/.git/config:ro,z"
   )
 elif [[ -f "$REPO/.git" ]]; then
   echo "agentbox: warning: $REPO is a git worktree or submodule;" \
@@ -451,6 +470,25 @@ fi
 # ---------------------------------------------------------------------------
 venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
 
+# ---------------------------------------------------------------------------
+# Per-project environment: <env dir>/<repo dir name>.env, if present, goes to
+# the session as --env-file (podman format: KEY=VALUE per line, # comments,
+# the value is taken literally, quotes included). Different projects can give
+# the same variable (DB_CONN) different values, and only the box sees them:
+# the agent on the host does not. The file stays on the host, outside the
+# repo, so the agent cannot change what its next session starts with, and
+# passwords in it never reach the project's git. Keyed by directory name:
+# two repos with the same name share one file. The -e options below take
+# precedence over --env-file, so it cannot override the proxy or agent setup.
+# ---------------------------------------------------------------------------
+ENV_DIR="${AB_ENV_DIR:-$SCRIPT_DIR/env}"
+env_file_args=()
+env_file="$ENV_DIR/$(basename "$REPO").env"
+if [[ -f "$env_file" ]]; then
+  env_file_args=(--env-file "$env_file")
+  echo "agentbox: env $env_file" >&2
+fi
+
 # Allocate a TTY only when attached to a terminal (keeps piping/scripts working).
 tty_flags=(-i)
 [[ -t 0 && -t 1 ]] && tty_flags+=(-t)
@@ -472,6 +510,12 @@ case "$AGENT" in
     )
     if [[ -n "$SKILLS_SRC" ]]; then
       agent_args+=(-v "$SKILLS_SRC:/home/node/.claude/skills:ro,z")
+    fi
+    # Personal instructions for every repo, from the host and read-only for
+    # the same reason as skills: written in ab-claude-home by the agent, they
+    # would persist into every future session.
+    if [[ -f "$SCRIPT_DIR/claude/CLAUDE.md" ]]; then
+      agent_args+=(-v "$SCRIPT_DIR/claude/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro,z")
     fi
     ;;
   pi)
@@ -530,6 +574,7 @@ exec podman run --rm "${tty_flags[@]}" \
   "${service_net[@]}" \
   --userns="$USERNS" \
   --cap-drop=ALL --security-opt no-new-privileges \
+  "${env_file_args[@]}" \
   -e HTTPS_PROXY=http://ab-egress:3128 \
   -e HTTP_PROXY=http://ab-egress:3128 \
   -e NO_PROXY=ab-mcp-grafana,ab-mcp-graylog,ab-mcp-github,ab-llm-openai \
@@ -538,7 +583,8 @@ exec podman run --rm "${tty_flags[@]}" \
   -v "$AGENT_HOME:/home/node" \
   -v ab-cache:/home/node/.cache \
   -v ab-go:/home/node/go \
-  -v "$REPO:/work:z" \
+  -v "$REPO:$WORK_DIR:z" \
+  --workdir "$WORK_DIR" \
   "${git_mounts[@]}" \
   "${agent_args[@]}" \
   "$IMAGE" "$@"

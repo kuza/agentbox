@@ -90,6 +90,8 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `graylog-mcp.conf.template` | nginx config that injects the Graylog auth header |
 | `github-mcp.conf.template` | nginx config for GitHub: caller auth, PAT injection, pinned toolsets |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent |
+| `claude/CLAUDE.md` | Optional. Personal instructions for Claude Code in every repo, mounted read-only |
+| `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `migrate-from-claude-box.sh` | One-off: move a claude-box setup (`cc-*` resources) to agentbox |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
 | `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories |
@@ -390,6 +392,14 @@ alias cbox=~/agentbox/run.sh
 
 Several sessions can run in parallel. Each gets its own `ab-claude-<pid>` container, and they share the sidecars.
 
+The repo is mounted at `/work/<repo dir name>`, which is also the working directory. Claude Code keeps per-project state (memory, session history, `/resume`, project permissions) by that path, so each repo gets its own; two repos with the same directory name share it.
+
+## Memory and personal instructions
+
+Claude Code's auto memory is **off by default** in the box: `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` when that key is not set yet, so an explicit choice there is kept. To use it in one project, set `"autoMemoryEnabled": true` in that repo's `.claude/settings.json`.
+
+Instructions that should apply in every repo go in `claude/CLAUDE.md` next to `run.sh`. It is mounted **read-only** as `~/.claude/CLAUDE.md`, for the same reason as personal skills (see [Skills](#skills)): written by the agent in `ab-claude-home`, it would carry over into every future session. Changes apply at the next session start.
+
 **About `--dangerously-skip-permissions`.** Inside this box it is a reasonable choice: the worst case is modified files in the repo (recoverable via git), read access to Grafana and Graylog within Viewer rights, and requests to allowlisted hosts. It is only reasonable if the service accounts are really read-only.
 
 ## Skills
@@ -581,8 +591,27 @@ On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` n
   ```
 - The attachment is persistent, also across container restarts. Undo with `podman network disconnect ab-services <name>`.
 - The services cannot reach the MCP/LLM sidecars, and the session gets no route to the host or the internet through them. A service that itself has internet access (e.g. a RabbitMQ shovel) could still be told to send data out; keep these to plain dev instances.
-- **The agent gets full access to that data** with whatever credentials you give it. Use dev data and dev passwords. Put connection settings in the repo's `.env` or tell the agent; there is no secret injection for them.
+- **The agent gets full access to that data** with whatever credentials you give it. Use dev data and dev passwords. Put connection settings in a [per-project environment](#per-project-environment) file.
 - Clients: the image has Python and Go, so `uv run --with redis`/`psycopg`/`pika` works. `psql` and `redis-cli` are not installed.
+
+## Per-project environment
+
+Environment variables for one project, seen only by sessions in the box, go in `env/<repo dir name>.env` next to `run.sh`:
+
+```
+# env/myapp.env
+DB_CONN=host=postgres port=5432 user=dev dbname=myapp_test sslmode=disable password=dev
+AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
+```
+
+`run.sh` passes the file for the mounted directory to the session with `--env-file` and prints its path on start; without a file nothing is passed. Changes apply at the next session start.
+
+- Different projects can use the same variable names with different values, and the agent on the host never sees them.
+- Podman format: `KEY=VALUE` per line, `#` comments, the value is taken literally (quotes become part of it). A line with only `KEY` copies that variable from the host environment.
+- The file is keyed by the directory name: two repos with the same name share one file.
+- The directory is on the host and not mounted, so the agent cannot change what its next session starts with, and the passwords never reach the project's git. `env/` is ignored by git here.
+- The variables `run.sh` sets itself (proxy, agent settings) take precedence and cannot be overridden from the file.
+- `AB_ENV_DIR` points to a different directory.
 
 ## Configuration reference
 
@@ -596,6 +625,7 @@ On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` n
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | GitHub MCP toolsets, enforced by nginx |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
+| `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets, `squid.conf` or the nginx templates |
