@@ -91,6 +91,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `github-mcp.conf.template` | nginx config for GitHub: caller auth, PAT injection, pinned toolsets |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent |
 | `claude/CLAUDE.md` | Optional. Personal instructions for Claude Code in every repo, mounted read-only |
+| `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `migrate-from-claude-box.sh` | One-off: move a claude-box setup (`cc-*` resources) to agentbox |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
@@ -399,6 +400,12 @@ The repo is mounted at `/work/<repo dir name>`, which is also the working direct
 Claude Code's auto memory is **off by default** in the box: `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` when that key is not set yet, so an explicit choice there is kept. To use it in one project, set `"autoMemoryEnabled": true` in that repo's `.claude/settings.json`.
 
 Instructions that should apply in every repo go in `claude/CLAUDE.md` next to `run.sh`. It is mounted **read-only** as `~/.claude/CLAUDE.md`, for the same reason as personal skills (see [Skills](#skills)): written by the agent in `ab-claude-home`, it would carry over into every future session. Changes apply at the next session start.
+
+## Status line
+
+`claude/statusline.py` draws Claude Code's status line: model, repo directory and git branch, context window use, the 5-hour and weekly subscription limits with their reset times, and the session cost. Percentages turn yellow from 50% and red from 80%. A part whose data Claude Code does not send (limits with an API key, context before the first reply) is left out.
+
+The script is mounted read-only as `~/.claude/statusline.py`. `run.sh` adds the `statusLine` setting to `~/.claude/settings.json` only when that key is absent, so your own status line there is kept; to switch to this one, delete the key and start a new session. Times use the host's time zone: `run.sh` passes it to the session as `TZ`.
 
 **About `--dangerously-skip-permissions`.** Inside this box it is a reasonable choice: the worst case is modified files in the repo (recoverable via git), read access to Grafana and Graylog within Viewer rights, and requests to allowlisted hosts. It is only reasonable if the service accounts are really read-only.
 

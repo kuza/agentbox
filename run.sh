@@ -297,17 +297,21 @@ fi
 #    hasCompletedOnboarding in ~/.claude.json is the documented workaround.
 #    Merges into the existing file, other settings are preserved.
 #
-# 3. Claude Code only: auto memory off by default. Set only when
-#    ~/.claude/settings.json has no autoMemoryEnabled yet, so an explicit
-#    choice there stays; a project enables it in its .claude/settings.json.
+# 3. Claude Code only: defaults in ~/.claude/settings.json, each set only
+#    while its key is absent, so an explicit choice there stays:
+#    - autoMemoryEnabled false; a project enables it in .claude/settings.json;
+#    - statusLine running claude/statusline.py, when that file exists.
 #    An unreadable settings file is left alone.
 # ---------------------------------------------------------------------------
 case "$AGENT" in
   claude) home_dirs=(.claude) ;;
   pi)     home_dirs=(.pi .pi/agent) ;;
 esac
+statusline=""
+[[ -f "$SCRIPT_DIR/claude/statusline.py" ]] && statusline=1
 podman run --rm --network none --userns="$USERNS" --user 0 \
   -e AGENT="$AGENT" \
+  -e AB_STATUSLINE="$statusline" \
   -v "$AGENT_HOME:/home/node" \
   --entrypoint sh "$IMAGE" -c '
     set -eu
@@ -328,9 +332,14 @@ podman run --rm --network none --userns="$USERNS" --user 0 \
         const s = \"/home/node/.claude/settings.json\";
         let t = {}, ok = true;
         try { t = JSON.parse(fs.readFileSync(s, \"utf8\")); } catch (e) { ok = e.code === \"ENOENT\"; }
-        if (ok && t && typeof t === \"object\" && t.autoMemoryEnabled === undefined) {
-          t.autoMemoryEnabled = false;
-          fs.writeFileSync(s, JSON.stringify(t, null, 2));
+        const d = { autoMemoryEnabled: false };
+        if (process.env.AB_STATUSLINE) {
+          d.statusLine = { type: \"command\", command: \"python3 /home/node/.claude/statusline.py\" };
+        }
+        if (ok && t && typeof t === \"object\") {
+          const add = Object.keys(d).filter((k) => t[k] === undefined);
+          for (const k of add) t[k] = d[k];
+          if (add.length) fs.writeFileSync(s, JSON.stringify(t, null, 2));
         }"
       chown node:node /home/node/.claude.json /home/node/.claude/settings.json
     fi
@@ -435,6 +444,12 @@ if [[ -n "$git_email" ]]; then
   git_env+=(-e "GIT_AUTHOR_EMAIL=$git_email" -e "GIT_COMMITTER_EMAIL=$git_email")
 fi
 
+# Host time zone, so times in the session (status line reset times, commit
+# dates) match the host clock instead of the image's UTC. TZ wins if set.
+tz_env=()
+host_tz="${TZ:-$(readlink -f /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/##p')}"
+[[ -n "$host_tz" ]] && tz_env=(-e "TZ=$host_tz")
+
 # ---------------------------------------------------------------------------
 # Protect .git/hooks and .git/config. Both are executed/interpreted by git on
 # the HOST (hooks, core.fsmonitor, core.sshCommand, ...), so a writable copy
@@ -524,6 +539,9 @@ case "$AGENT" in
     if [[ -f "$SCRIPT_DIR/claude/CLAUDE.md" ]]; then
       agent_args+=(-v "$SCRIPT_DIR/claude/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro,z")
     fi
+    if [[ -n "$statusline" ]]; then
+      agent_args+=(-v "$SCRIPT_DIR/claude/statusline.py:/home/node/.claude/statusline.py:ro,z")
+    fi
     ;;
   pi)
     # PI_OFFLINE, PI_SKIP_VERSION_CHECK, PI_TELEMETRY: no model catalog refresh,
@@ -587,6 +605,7 @@ exec podman run --rm "${tty_flags[@]}" \
   -e NO_PROXY=ab-mcp-grafana,ab-mcp-graylog,ab-mcp-github,ab-llm-openai \
   -e "UV_PROJECT_ENVIRONMENT=/home/node/.cache/venvs/$venv_key" \
   "${git_env[@]}" \
+  "${tz_env[@]}" \
   -v "$AGENT_HOME:/home/node" \
   -v ab-cache:/home/node/.cache \
   -v ab-go:/home/node/go \
