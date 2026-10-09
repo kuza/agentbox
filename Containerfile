@@ -21,7 +21,7 @@ RUN apt-get update \
 # python3.X shims in /usr/local/bin. System python3 (3.11) stays as is.
 # ---------------------------------------------------------------------------
 ARG UV_VERSION=0.12.23
-ARG PYTHON_VERSIONS="3.12 3.13"
+ARG PYTHON_VERSIONS="3.12 3.13 3.14"
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     UV_PYTHON_BIN_DIR=/usr/local/bin
 RUN python3 -m venv /opt/uv \
@@ -33,23 +33,24 @@ RUN python3 -m venv /opt/uv \
 # ---------------------------------------------------------------------------
 # Go toolchain and golangci-lint, from the official release archives,
 # verified against the published SHA-256 checksums.
-#   GO_VERSION             e.g. "1.27.1"; empty = latest stable at build time
+#   GO_VERSION             "1.26.3" exact; "1.26" = latest stable 1.26.x at
+#                          build time; empty = latest stable at build time
 #   GOLANGCI_LINT_VERSION  e.g. "2.14.0"; empty = latest release at build time
-# Empty means every AB_UPGRADE brings the newest release; pin to control it.
-# The resolved versions are printed in the build log.
+# Empty (or a minor version) means AB_UPGRADE brings newer releases; pin to
+# control it. The resolved versions are printed in the build log.
 # ---------------------------------------------------------------------------
-ARG GO_VERSION=""
+ARG GO_VERSION="1.26"
 ARG GOLANGCI_LINT_VERSION=""
 RUN set -eu; \
     arch="$(dpkg --print-architecture)"; \
-    v="${GO_VERSION:-$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1 | sed 's/^go//')}"; \
+    curl -fsSL 'https://go.dev/dl/?mode=json&include=all' -o /tmp/go.json; \
+    v="$(python3 -c "import json,sys; v=sys.argv[1]; rs=[r['version'][2:] for r in json.load(open('/tmp/go.json')) if r['stable']]; print(v if v.count('.')==2 else max((r for r in rs if not v or r.startswith(v+'.')), key=lambda r: tuple(map(int, r.split('.')))))" "$GO_VERSION")"; \
     f="go${v}.linux-${arch}.tar.gz"; \
-    sha="$(curl -fsSL 'https://go.dev/dl/?mode=json&include=all' \
-      | python3 -c "import json,sys; f=sys.argv[1]; print(next(x['sha256'] for r in json.load(sys.stdin) for x in r['files'] if x['filename']==f))" "$f")"; \
+    sha="$(python3 -c "import json,sys; f=sys.argv[1]; print(next(x['sha256'] for r in json.load(open('/tmp/go.json')) for x in r['files'] if x['filename']==f))" "$f")"; \
     curl -fsSL "https://go.dev/dl/$f" -o /tmp/go.tgz; \
     echo "$sha  /tmp/go.tgz" | sha256sum -c -; \
     tar -C /usr/local -xzf /tmp/go.tgz; \
-    rm /tmp/go.tgz; \
+    rm /tmp/go.tgz /tmp/go.json; \
     /usr/local/go/bin/go version
 RUN set -eu; \
     arch="$(dpkg --print-architecture)"; \

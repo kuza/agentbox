@@ -462,7 +462,7 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 
 | | |
 |---|---|
-| Interpreters | `PYTHON_VERSIONS` in `Containerfile` (default `3.12 3.13`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`. The system `python3` is Debian's 3.11 |
+| Interpreters | `PYTHON_VERSIONS` in `Containerfile` (default `3.12 3.13 3.14`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is Debian's 3.11 |
 | Packages | `uv add`, `uv sync`, `uv run`, `pip` inside a venv: PyPI is in the egress allowlist |
 | Virtualenv | Per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), via `UV_PROJECT_ENVIRONMENT`. Shared by both agents |
 | uv cache | `ab-cache`, persists across sessions, shared by both agents |
@@ -479,7 +479,7 @@ The image has the Go toolchain and [golangci-lint](https://golangci-lint.run), b
 
 | | |
 |---|---|
-| Versions | `GO_VERSION`, `GOLANGCI_LINT_VERSION` in `Containerfile`. Empty (default) = latest release at build time, so every `AB_UPGRADE` brings the newest; set them to pin. The build log prints what was installed |
+| Versions | `GO_VERSION`, `GOLANGCI_LINT_VERSION` in `Containerfile`. `GO_VERSION` defaults to `1.26`: a minor version means the latest stable patch release of it at build time, an exact version (`1.26.3`) pins it, empty means the latest stable Go. `GOLANGCI_LINT_VERSION` empty (default) = latest release at build time. `AB_UPGRADE` brings whatever these resolve to; the build log prints what was installed |
 | Modules | `proxy.golang.org` and `sum.golang.org` are in the egress allowlist, so `go mod download`, `go get`, `go build` work |
 | Caches | Module cache in `ab-go` (`~/go`), build cache in `ab-cache`, both persist and are shared by both agents |
 | Tools | `go install pkg@version` lands in `~/go/bin`, which is on `PATH` |
@@ -541,7 +541,7 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 | Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | Only on request: podman never re-pulls an image it already has | `AB_UPGRADE=1 ./run.sh` |
 | Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 ./run.sh` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
-| Go, golangci-lint | Latest at build time unless pinned in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
+| Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
 | uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` / edit `PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
 | Vendored skills | Only on request | `./sync-skills.sh <git-url> [ref]` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
