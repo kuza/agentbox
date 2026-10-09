@@ -85,7 +85,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `pi/models.json`, `pi/mcp.json` | pi configuration, mounted read-only: model endpoint and MCP servers |
 | `pi/extensions/` | pi extensions you choose to allow, mounted read-only (empty by default) |
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
-| `Containerfile` | Base image: node, git, ripgrep, uv with preinstalled Python versions, Go, golangci-lint, graphify |
+| `Containerfile` | Base image: node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress allowlist |
 | `graylog-mcp.conf.template` | nginx config that injects the Graylog auth header |
 | `github-mcp.conf.template` | nginx config for GitHub: caller auth, PAT injection, pinned toolsets |
@@ -484,6 +484,8 @@ The image has the Go toolchain and [golangci-lint](https://golangci-lint.run), b
 | Caches | Module cache in `ab-go` (`~/go`), build cache in `ab-cache`, both persist and are shared by both agents |
 | Tools | `go install pkg@version` lands in `~/go/bin`, which is on `PATH` |
 | Toolchain switching | Off: `GOTOOLCHAIN=local`. A `go.mod` that needs a newer Go fails with a clear error instead of downloading a toolchain; rebuild with `AB_UPGRADE=1` |
+| cgo | On: `gcc` and `libc6-dev` are in the image, so `go test -race` and packages with C code build |
+| make | Installed, so a project's `Makefile` targets run, except those that need podman/docker or hosts outside the allowlist |
 
 Things to know:
 
