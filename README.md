@@ -590,6 +590,7 @@ On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` n
   podman run -d --name redis --network podman -p 6379:6379 -v redis-data:/data docker.io/library/redis:7
   ```
 - The attachment is persistent, also across container restarts. Undo with `podman network disconnect ab-services <name>`.
+- A stopped service is started (`podman start`) and keeps running after the session ends. `run.sh` does not wait for it to become ready: a database that is still initialising refuses connections for a few seconds.
 - The services cannot reach the MCP/LLM sidecars, and the session gets no route to the host or the internet through them. A service that itself has internet access (e.g. a RabbitMQ shovel) could still be told to send data out; keep these to plain dev instances.
 - **The agent gets full access to that data** with whatever credentials you give it. Use dev data and dev passwords. Put connection settings in a [per-project environment](#per-project-environment) file.
 - Clients: the image has Python and Go, so `uv run --with redis`/`psycopg`/`pika` works. `psql` and `redis-cli` are not installed.
