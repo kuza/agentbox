@@ -561,6 +561,29 @@ Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 ./run.sh`. The pro
 
 The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour, as happened with mcp-grafana's caller-auth and Host checks. To control that, pin tags in the `IMG_*` variables at the top of `run.sh` and bump them deliberately.
 
+## Local services
+
+To let the agent use your dev containers (Redis, RabbitMQ, PostgreSQL, ...), list them in `config.env`:
+
+```
+AB_SERVICES=redis rabbitmq postgres
+```
+
+On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` network that the session joins, and the agent connects by container name and the container's own port: `redis:6379`, `rabbitmq:5672` (management UI `rabbitmq:15672`), `postgres:5432`. Ports published on the host (`-p`) are not used and not needed.
+
+- Only **rootless Podman** containers of the same user can be attached. Docker or rootful containers are invisible to rootless Podman networks; for those, run a copy under rootless Podman.
+- The container must be on a **bridge network**. Rootless containers started without `--network` use `pasta` and cannot join another network later (`"pasta" is not supported: invalid network mode`). Recreate them once with `--network podman` (the default bridge network; `-p` and volumes work as before), and `run.sh` attaches them to `ab-services` on the next start:
+
+  ```bash
+  podman inspect --format '{{.HostConfig.NetworkMode}}' redis   # pasta -> needs recreating
+  podman stop redis && podman rm redis      # data survives only if it is in a volume
+  podman run -d --name redis --network podman -p 6379:6379 -v redis-data:/data docker.io/library/redis:7
+  ```
+- The attachment is persistent, also across container restarts. Undo with `podman network disconnect ab-services <name>`.
+- The services cannot reach the MCP/LLM sidecars, and the session gets no route to the host or the internet through them. A service that itself has internet access (e.g. a RabbitMQ shovel) could still be told to send data out; keep these to plain dev instances.
+- **The agent gets full access to that data** with whatever credentials you give it. Use dev data and dev passwords. Put connection settings in the repo's `.env` or tell the agent; there is no secret injection for them.
+- Clients: the image has Python and Go, so `uv run --with redis`/`psycopg`/`pika` works. `psql` and `redis-cli` are not installed.
+
 ## Configuration reference
 
 | Variable | Default | Meaning |
@@ -572,6 +595,7 @@ The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change 
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic updates |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | GitHub MCP toolsets, enforced by nginx |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
+| `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets, `squid.conf` or the nginx templates |

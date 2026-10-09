@@ -59,7 +59,7 @@ echo "agentbox: repo $REPO" >&2
 # Parsed, not sourced, so it cannot run code, and only the keys below are
 # accepted. A variable already set in the environment wins over the file.
 # ---------------------------------------------------------------------------
-CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY)
+CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES)
 load_config() {
   local file="$1" line key val n=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -184,6 +184,43 @@ fi
 # ---------------------------------------------------------------------------
 podman network exists ab-internal || podman network create --internal ab-internal >/dev/null
 podman network exists ab-egress   || podman network create ab-egress >/dev/null
+
+# ---------------------------------------------------------------------------
+# Local services (AB_SERVICES): your own dev containers (databases, queues)
+# the agent may use, e.g. "redis rabbitmq postgres". Each is attached to
+# ab-services, a separate --internal network the session joins, and is
+# reachable by container name (redis:6379). Kept apart from ab-internal so
+# these containers cannot reach the MCP/LLM sidecars, and the session gets no
+# route to the host or the internet through them. Attachment is persistent;
+# undo with: podman network disconnect ab-services <name>.
+# Only rootless Podman containers of the same user can be attached.
+# ---------------------------------------------------------------------------
+service_net=()
+if [[ -n "${AB_SERVICES:-}" ]]; then
+  podman network exists ab-services || podman network create --internal ab-services >/dev/null
+  read -ra services <<< "${AB_SERVICES//,/ }"
+  for svc in "${services[@]}"; do
+    if ! podman container exists "$svc"; then
+      echo "agentbox: warning: AB_SERVICES: no container '$svc' (rootless podman of this user), skipped" >&2
+      continue
+    fi
+    # Containers started without --network use pasta/slirp4netns (rootless
+    # default) and cannot join any network later; they must be recreated
+    # on a bridge network (README, Local services).
+    mode="$(podman inspect --format '{{.HostConfig.NetworkMode}}' "$svc")"
+    if [[ "$mode" == pasta* || "$mode" == slirp4netns* || "$mode" == host || "$mode" == none ]]; then
+      echo "agentbox: warning: '$svc' uses network mode '$mode' and cannot be attached;" \
+           "recreate it with --network ab-services (see README, Local services)" >&2
+      continue
+    fi
+    if ! podman inspect --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$svc" \
+         | grep -qw ab-services; then
+      podman network connect ab-services "$svc" \
+        || echo "agentbox: warning: could not attach '$svc' to ab-services" >&2
+    fi
+  done
+  service_net=(--network ab-services)
+fi
 
 # ---------------------------------------------------------------------------
 # Full upgrade. podman never re-pulls an image it already has, and a cached
@@ -490,6 +527,7 @@ esac
 exec podman run --rm "${tty_flags[@]}" \
   --name "ab-$AGENT-$$" \
   --network ab-internal \
+  "${service_net[@]}" \
   --userns="$USERNS" \
   --cap-drop=ALL --security-opt no-new-privileges \
   -e HTTPS_PROXY=http://ab-egress:3128 \
