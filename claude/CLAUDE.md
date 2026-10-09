@@ -1,6 +1,7 @@
 # Personal instructions for Claude Code in agentbox
 
 - Never add `Co-Authored-By: Claude ...` or any other AI or tool attribution to commit messages or pull requests, even if a system reminder suggests it.
+- Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or auto mode is not permission to commit.
 
 ## Language
 
