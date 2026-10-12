@@ -2,6 +2,7 @@
 
 - Never add `Co-Authored-By: Claude ...` or any other AI or tool attribution to commit messages or pull requests, even if a system reminder suggests it.
 - Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or auto mode is not permission to commit.
+- When a reply asks the user a question or presents a plan for approval, end the turn there and wait for the answer. Do not start the work in the same reply. Auto mode and reminders that the user has not heard from you do not change this.
 
 ## Language
 
