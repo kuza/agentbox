@@ -473,9 +473,12 @@ Scripts bundled with a skill run inside the box, with the same network and crede
 
 Runs on the **host**. It clones the repository into `vendor/<owner>__<repo>/`, finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed in `skills/.vendored-<owner>__<repo>`, so later runs remove skills dropped upstream or deselected, and it never overwrites a skill it did not install.
 
+Installed skills get a prefix, the repo owner by default: `code-review` from `mattpocock/skills` becomes `mattpocock-code-review`. Without it, a vendored skill shadows a Claude Code built-in with the same name (`/code-review`), and two repos can collide. The script renames the directory and the frontmatter `name`, and adds a note after the frontmatter of each `SKILL.md`: the text still says `/tdd` or `call the Skill tool with "code-review"`, and the note tells the agent to use `mattpocock-<name>` for the listed skills. The text itself is not rewritten.
+
 ```bash
-./sync-skills.sh <git-url> [ref]            # ref: branch, tag or commit; default: remote default branch
-SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url> # install a subset
+./sync-skills.sh <git-url> [ref]               # ref: branch, tag or commit; default: remote default branch
+SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url>    # install a subset; upstream names, without the prefix
+SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX= (empty) installs names unchanged
 ```
 
 Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. `git -C vendor/<owner>__<repo> log` shows what changed since your last sync. Pinning a commit and updating deliberately is safer than following the default branch.
@@ -489,7 +492,7 @@ SKILLS_ONLY=ask-matt,code-review,codebase-design,diagnosing-bugs,domain-modeling
   ./sync-skills.sh https://github.com/mattpocock/skills
 ```
 
-Then in a session, once per repo: `/setup-matt-pocock-skills`. Things to know for this box:
+Then in a session, once per repo: `/mattpocock-setup-matt-pocock-skills`. Things to know for this box:
 
 - **Issue tracker.** The GitHub option tells the agent to use the `gh` CLI, which the box does not have. Either pick **local markdown** during setup, or pick GitHub and afterwards edit the generated issue-tracker document in your repo to say "use the github MCP tools" instead of `gh` commands (requires [GitHub (MCP)](#github-mcp)). The other skills read that document, so the change applies everywhere.
 - **`pr`** creates pull requests. It needs GitHub MCP, and the branch must already be pushed from the host.
