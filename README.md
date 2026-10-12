@@ -95,6 +95,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `migrate-from-claude-box.sh` | One-off: move a claude-box setup (`cc-*` resources) to agentbox |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
+| `check-updates.sh` | Host-side, run by `run.sh` before each session: newer sidecar images and vendored skills, with an offer to update |
 | `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories |
 
 ## First-time setup
@@ -580,15 +581,26 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 | What | Updates how | Command |
 |---|---|---|
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 ./run.sh` / `AB_UPDATE=1 ./pi.sh` to force |
-| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | Only on request: podman never re-pulls an image it already has | `AB_UPGRADE=1 ./run.sh` |
+| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked before each session**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 ./run.sh` |
 | Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 ./run.sh` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
 | uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` / edit `PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
-| Vendored skills | Only on request | `./sync-skills.sh <git-url> [ref]` |
+| Vendored skills | **Checked before each session**, updated after you confirm (see below) | Answer `y` at the prompt, or `./sync-skills.sh <git-url> [ref]` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
+
+### Update check before each session
+
+`run.sh` runs `check-updates.sh` before it starts the sidecars:
+
+- **Sidecar images.** For each agentbox sidecar container it asks the registry for the digest of the image tag (an anonymous `HEAD` request, which pulls nothing and does not count against Docker Hub's pull limit) and compares it with the local image. It also reports sidecars still running an older image than the local one. Answering `y` pulls the new images and removes the affected sidecars, and `run.sh` recreates them right away. Other open sessions lose those MCP servers until they are restarted.
+- **Vendored skills.** `sync-skills.sh` records each sync in `vendor/<owner>__<repo>.sync` (URL, installed commit, `SKILLS_ONLY`, prefix, skills directory). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings. Repositories synced before this check existed have no `.sync` file: run their `sync-skills.sh` command once.
+
+Without a terminal (`run.sh -p ...` from a script) it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it; `AB_UPGRADE=1` skips it too, since that updates the images anyway. Run `./check-updates.sh` on its own to check without starting a session.
+
+`vendor/` is writable from inside a session that has the agentbox directory mounted, so the check reads `.sync` files as data, accepts only `https://` URLs, and runs git outside `vendor/`: a hook or config planted there does not run on the host. `sync-skills.sh` itself does run git inside `vendor/<owner>__<repo>`.
 
 ### Claude Code
 
@@ -674,6 +686,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets, `squid.conf` or the nginx templates |
+| `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check-before-each-session) |
 
 Sidecars are started once and reused. After changing their configuration:
 

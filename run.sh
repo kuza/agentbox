@@ -28,6 +28,8 @@
 #   AB_RESTART=1      recreate sidecar containers (needed after config changes)
 #   AB_UPGRADE=1      upgrade everything: pull sidecar images, rebuild the base
 #                     image from scratch, update Claude Code, recreate sidecars
+#   AB_CHECK_UPDATES=0  skip the check for newer sidecar images and vendored
+#                     skills before the session (check-updates.sh)
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <script dir>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
@@ -66,7 +68,7 @@ WORK_DIR="/work/$(basename "$REPO")"
 # Parsed, not sourced, so it cannot run code, and only the keys below are
 # accepted. A variable already set in the environment wins over the file.
 # ---------------------------------------------------------------------------
-CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR)
+CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES)
 load_config() {
   local file="$1" line key val n=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -234,6 +236,15 @@ if [[ -n "${AB_SERVICES:-}" ]]; then
     fi
   done
   service_net=(--network ab-services)
+fi
+
+# ---------------------------------------------------------------------------
+# Update check: newer sidecar images and vendored skills, with an offer to
+# update them (check-updates.sh). Before the sidecars start, so recreated ones
+# come up on the new image. AB_UPGRADE updates everything anyway.
+# ---------------------------------------------------------------------------
+if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
+  "$SCRIPT_DIR/check-updates.sh"
 fi
 
 # ---------------------------------------------------------------------------

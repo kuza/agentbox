@@ -21,7 +21,9 @@
 #      or each other across repos, and adds a note to each SKILL.md telling the
 #      agent to use the prefixed names where the text uses upstream ones;
 #   4. records what it installed in skills/.vendored-<owner>__<repo>, so a later
-#      run removes skills that were dropped upstream or deselected.
+#      run removes skills that were dropped upstream or deselected, and how it
+#      synced in vendor/<owner>__<repo>.sync, so check-updates.sh can spot a
+#      newer upstream and repeat the sync.
 #
 # It never overwrites a skill it did not install itself (your own skills, or
 # skills from another vendored repo with the same name): it stops instead.
@@ -164,6 +166,16 @@ for n in $(printf '%s\n' "${!wanted[@]}" | sort); do
   echo "install  $t  (${src_of[$n]#"$VENDOR"/})"
 done
 mv "$MANIFEST.tmp" "$MANIFEST"
+
+# What check-updates.sh needs to spot a newer upstream and repeat this sync.
+# Plain KEY=VALUE lines, read as data.
+{
+  echo "URL=$URL"
+  echo "COMMIT=$(git -C "$VENDOR" rev-parse HEAD)"
+  echo "SKILLS_ONLY=${SKILLS_ONLY:-}"
+  echo "SKILLS_PREFIX=$PREFIX"
+  echo "AB_SKILLS_DIR=$SKILLS_DIR"
+} > "$SCRIPT_DIR/vendor/$slug.sync"
 
 echo "done: ${#wanted[@]} skills from $slug @ $commit -> $SKILLS_DIR"
 echo "Review before use: git -C $VENDOR log --oneline -5 ; diff the skills/ directory"
