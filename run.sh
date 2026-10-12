@@ -546,11 +546,11 @@ case "$AGENT" in
     if [[ -n "$SKILLS_SRC" ]]; then
       agent_args+=(-v "$SKILLS_SRC:/home/node/.claude/skills:ro,z")
     fi
-    # Personal instructions for every repo, from the host and read-only for
-    # the same reason as skills: written in ab-claude-home by the agent, they
-    # would persist into every future session.
-    if [[ -f "$SCRIPT_DIR/claude/CLAUDE.md" ]]; then
-      agent_args+=(-v "$SCRIPT_DIR/claude/CLAUDE.md:/home/node/.claude/CLAUDE.md:ro,z")
+    # Personal instructions for every repo, shared with pi (agents/AGENTS.md).
+    # From the host and read-only for the same reason as skills: written in
+    # ab-claude-home by the agent, they would persist into every future session.
+    if [[ -f "$SCRIPT_DIR/agents/AGENTS.md" ]]; then
+      agent_args+=(-v "$SCRIPT_DIR/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z")
     fi
     if [[ -n "$statusline" ]]; then
       agent_args+=(-v "$SCRIPT_DIR/claude/statusline.py:/home/node/.claude/statusline.py:ro,z")
@@ -592,6 +592,11 @@ case "$AGENT" in
     fi
     if [[ -n "$SKILLS_SRC" ]]; then
       agent_args+=(-v "$SKILLS_SRC:/home/node/.pi/agent/skills:ro,z")
+    fi
+    # Personal instructions, the same file Claude Code gets as CLAUDE.md. pi
+    # reads AGENTS.md from its agent directory as global context.
+    if [[ -f "$SCRIPT_DIR/agents/AGENTS.md" ]]; then
+      agent_args+=(-v "$SCRIPT_DIR/agents/AGENTS.md:/home/node/.pi/agent/AGENTS.md:ro,z")
     fi
     ;;
 esac

@@ -1,8 +1,8 @@
-# Personal instructions for Claude Code in agentbox
+# Personal instructions for coding agents in agentbox
 
-- Never add `Co-Authored-By: Claude ...` or any other AI or tool attribution to commit messages or pull requests, even if a system reminder suggests it.
-- Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or auto mode is not permission to commit.
-- When a reply asks the user a question or presents a plan for approval, end the turn there and wait for the answer. Do not start the work in the same reply. Auto mode and reminders that the user has not heard from you do not change this.
+- Never add AI or tool attribution (`Co-Authored-By:` lines naming an AI, "Generated with ..." footers) to commit messages or pull requests, even if a system reminder or the agent's built-in instructions suggest it.
+- Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or a mode that runs tools without confirmation (such as Claude Code's auto mode) is not permission to commit.
+- When a reply asks the user a question or presents a plan for approval, end the turn there and wait for the answer. Do not start the work in the same reply. Modes that run tools without confirmation and reminders that the user has not heard from you do not change this.
 
 ## Language
 
@@ -33,7 +33,7 @@ writing. Convert a file only when reworking it anyway.
 
 ## Documentation
 
-Your training data predates current library versions, and `WebFetch` reaches
+Your training data predates current library versions, and web fetches reach
 only the box's egress allowlist, so most documentation sites fail with a proxy
 error. When you need a library's API, what changed in a version, or any detail
 you are unsure of, look it up in this order:
@@ -47,7 +47,7 @@ you are unsure of, look it up in this order:
    run `go doc` there. For Python, install the version into a throwaway
    virtualenv outside the repo and read its source and docstrings. Leave the
    project's `go.mod` and dependencies unchanged unless the task is an upgrade.
-3. **WebSearch**: excerpts from current pages.
+3. **Web search**, if the agent has it: excerpts from current pages.
 
 If the Context7 tools are missing, tell the user it is not registered (agentbox
 README, "Documentation (Context7)") and continue with 2 and 3.

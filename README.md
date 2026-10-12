@@ -90,7 +90,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `graylog-mcp.conf.template` | nginx config that injects the Graylog auth header |
 | `github-mcp.conf.template` | nginx config for GitHub: caller auth, PAT injection, pinned toolsets |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent |
-| `claude/CLAUDE.md` | Optional. Personal instructions for Claude Code in every repo, mounted read-only |
+| `agents/AGENTS.md` | Optional. Personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
@@ -298,7 +298,7 @@ Leaving it off and asking the agent to read public repositories through the GitH
 
 ## Documentation (Context7)
 
-The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. `claude/CLAUDE.md` tells Claude to look there first.
+The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. `agents/AGENTS.md` tells both agents to look there first.
 
 ### Register
 
@@ -377,6 +377,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 | `pi/models.json` | `~/.pi/agent/models.json` | OpenAI API endpoint = the sidecar (API-key mode) |
 | `pi/mcp.json` | `~/.pi/agent/mcp.json` | Grafana, Graylog, GitHub MCP sidecars, with caller tokens from env |
 | `skills/` | `~/.pi/agent/skills` | Same personal skills as Claude Code |
+| `agents/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Same personal instructions as Claude Code, see [Memory and personal instructions](#memory-and-personal-instructions) |
 | `pi/extensions/` | `~/.pi/agent/extensions` | Extensions you allow (empty by default) |
 
 Read-only matters here: pi executes extensions it finds in its agent directory and reads its model endpoint and MCP servers from these files. If the agent could write them, it could redirect its own model traffic, add servers or plant code that persists across sessions. Sessions, `settings.json` and `auth.json` stay writable in `ab-pi-home`.
@@ -423,7 +424,7 @@ The repo is mounted at `/work/<repo dir name>`, which is also the working direct
 
 Claude Code's auto memory is **off by default** in the box: `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` when that key is not set yet, so an explicit choice there is kept. To use it in one project, set `"autoMemoryEnabled": true` in that repo's `.claude/settings.json`.
 
-Instructions that should apply in every repo go in `claude/CLAUDE.md` next to `run.sh`. It is mounted **read-only** as `~/.claude/CLAUDE.md`, for the same reason as personal skills (see [Skills](#skills)): written by the agent in `ab-claude-home`, it would carry over into every future session. Changes apply at the next session start.
+Instructions that should apply in every repo go in `agents/AGENTS.md` next to `run.sh`. Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.md`, pi as `~/.pi/agent/AGENTS.md` (its global context file). Read-only for the same reason as personal skills (see [Skills](#skills)): written by the agent in its home volume, it would carry over into every future session. Keep the text agent-neutral; name an agent only where a rule is specific to it. Changes apply at the next session start, also when you edit the file from inside a session: the running session keeps the version it started with.
 
 ## Status line
 
