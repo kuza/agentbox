@@ -12,7 +12,7 @@ No host credentials are mounted into the agent container, and all service tokens
 ```
                  ab-internal (podman --internal, no route to the outside)
  ┌──────────────┐     │
- │ ab-claude-*  │─────┼──► ab-egress (squid) ───► Anthropic hosts only
+ │ ab-claude-*  │─────┼──► ab-egress (squid) ───► allowlisted hosts only
  │ repo mounted │     ├──► ab-mcp-grafana ──────► Grafana (+ Prometheus datasources)
  │ no secrets*  │     ├──► ab-mcp-graylog ──────► Graylog /api/mcp
  └──────────────┘     │    (nginx, injects auth)
@@ -93,7 +93,6 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `claude/CLAUDE.md` | Optional. Personal instructions for Claude Code in every repo, mounted read-only |
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
-| `migrate-from-claude-box.sh` | One-off: move a claude-box setup (`cc-*` resources) to agentbox |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
 | `check-updates.sh` | Host-side, run by `run.sh` before each session: newer sidecar images and vendored skills, with an offer to update |
 | `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories |
@@ -388,14 +387,6 @@ pi runs with `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0`: no 
 
 pi's MCP support is built in, no extension needed. `pi install ...` does not work inside the box (no npm access) and would write to the agent directory anyway. To allow an extension, read it, then copy it into `pi/extensions/` on the host. Skills come from `skills/`, the same directory Claude Code uses, so `sync-skills.sh` covers both agents. Skills written for Claude Code may rely on Claude-specific features such as subagents and work less well in pi.
 
-#### Migrating from claude-box
-
-This project was called claude-box and used `cc-` prefixed resources. `migrate-from-claude-box.sh` moves an existing setup over, see [Migration from claude-box](#migration-from-claude-box).
-
-## Updates
-
-pi updates like Claude Code: automatically at most every 6 hours, into its own `ab-pi-tools` volume, by a short-lived container with internet access. `AB_UPDATE=1 ./pi.sh` forces it.
-
 ## Daily usage
 
 ```
@@ -482,7 +473,7 @@ SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url>    # install a subset; upstream nam
 SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX= (empty) installs names unchanged
 ```
 
-Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. `git -C vendor/<owner>__<repo> log` shows what changed since your last sync. Pinning a commit and updating deliberately is safer than following the default branch.
+Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. Before accepting an update, read the compare link the [update check](#update-check-before-each-session) prints. A `[ref]` pins the first sync only: the check always offers the remote default branch.
 
 #### Example: mattpocock/skills
 
@@ -496,8 +487,7 @@ SKILLS_ONLY=ask-matt,code-review,codebase-design,diagnosing-bugs,domain-modeling
 Then in a session, once per repo: `/mattpocock-setup-matt-pocock-skills`. Things to know for this box:
 
 - **Issue tracker.** The GitHub option tells the agent to use the `gh` CLI, which the box does not have. Either pick **local markdown** during setup, or pick GitHub and afterwards edit the generated issue-tracker document in your repo to say "use the github MCP tools" instead of `gh` commands (requires [GitHub (MCP)](#github-mcp)). The other skills read that document, so the change applies everywhere.
-- **`pr`** creates pull requests. It needs GitHub MCP, and the branch must already be pushed from the host.
-- **`research`** relies on fetching web pages. `WebFetch` to arbitrary sites is blocked by squid, so expect it to be of limited use in the box.
+- **`mattpocock-pr`** creates pull requests. It needs GitHub MCP, and the branch must already be pushed from the host.
 
 ## Python
 
@@ -596,7 +586,7 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 `run.sh` runs `check-updates.sh` before it starts the sidecars:
 
 - **Sidecar images.** For each agentbox sidecar container it asks the registry for the digest of the image tag (an anonymous `HEAD` request, which pulls nothing and does not count against Docker Hub's pull limit) and compares it with the local image. It also reports sidecars still running an older image than the local one. Answering `y` pulls the new images and removes the affected sidecars, and `run.sh` recreates them right away. Other open sessions lose those MCP servers until they are restarted.
-- **Vendored skills.** `sync-skills.sh` records each sync in `vendor/<owner>__<repo>.sync` (URL, installed commit, `SKILLS_ONLY`, prefix, skills directory). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings. Repositories synced before this check existed have no `.sync` file: run their `sync-skills.sh` command once.
+- **Vendored skills.** `sync-skills.sh` records each sync in `vendor/<owner>__<repo>.sync` (URL, installed commit, `SKILLS_ONLY`, prefix, skills directory). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings.
 
 Without a terminal (`run.sh -p ...` from a script) it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it; `AB_UPGRADE=1` skips it too, since that updates the images anyway. Run `./check-updates.sh` on its own to check without starting a session.
 
@@ -703,7 +693,7 @@ podman exec ab-egress tail -f /var/log/squid/access.log | grep DENIED   # blocke
 podman ps --filter name=ab-       # what is running
 podman logs ab-mcp-github         # 401: caller token mismatch, re-register (GitHub, step 3)
 podman logs ab-mcp-github-srv     # GitHub API errors
-podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-srv   # stop sidecars
+podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-srv ab-llm-openai   # stop sidecars
 ```
 
 | Symptom | Likely cause / fix |
@@ -722,7 +712,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | pi: MCP server `failed` in `/mcp` | Same checks as for Claude Code: sidecar logs. For `github`, the GitHub MCP sidecar is optional; remove the entry from `pi/mcp.json` if you don't use it. |
 | `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `PYTHON_VERSIONS` in `Containerfile` and `AB_UPGRADE=1 ./run.sh`. |
 | Sidecar can't resolve Grafana/Graylog | Internal DNS not visible to containers. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
-| `/mcp` shows a server as failed | Check `podman logs` of the sidecar. If logs are clean, add `ab-mcp-grafana` and `ab-mcp-graylog` to `squid.conf` in case Claude Code ignores `NO_PROXY`. |
+| `/mcp` shows a server as failed | Check `podman logs` of the sidecar. |
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is Graylog's own `HTTP 405 Method Not Allowed` API error, so nginx works but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and check the Graylog version is 7.0+. |
 | `mcp get grafana` shows `403 ... forbidden: host not allowed` | mcp-grafana validates the `Host` header against `--allowed-hosts`. It must include the name Claude uses (`ab-mcp-grafana:8000`). Recreate with `AB_RESTART=1`. |
 | nginx sidecar exits on start | nginx resolves `GRAYLOG_URL` at startup. Fix DNS, or use an IP and check TLS/SNI. |
@@ -778,35 +768,5 @@ These parts are assembled from documentation and tests against fake upstreams, b
 
 - pi through the OpenAI sidecar against the real OpenAI API. The chain pi → nginx (caller check, key injection) → upstream was tested with a fake upstream.
 - pi's *Sign in with ChatGPT* through squid with the pasted callback URL, and token refresh with `PI_OFFLINE=1` set.
-
-- Context7 through squid: Claude Code's and pi's HTTP MCP clients using `HTTPS_PROXY` for `mcp.context7.com`.
-- `github-mcp-server http` listening on all interfaces inside its container (nginx connects to it over the `ab-egress` network). If it binds to localhost only, nginx returns 502.
+- Context7 through squid from pi (it works from Claude Code).
 - github-mcp-server honouring `X-MCP-Toolsets` and `X-MCP-Lockdown` as set by nginx.
-
-## Migration from claude-box
-
-Run once, on the host, from the agentbox directory, with no agent sessions running:
-
-```bash
-./migrate-from-claude-box.sh
-```
-
-It:
-
-1. removes the old sidecar containers (`cc-egress`, `cc-mcp-*`, `cc-llm-openai`) and networks (`cc-internal`, `cc-egress`);
-2. copies the volumes: `cc-home` → `ab-claude-home`, `pi-home` → `ab-pi-home`, `cc-cache` → `ab-cache`, `cc-go` → `ab-go`. Pi state, caches and venvs that an older version left in `cc-home` are dropped from Claude's new home;
-3. rewrites the MCP URLs in Claude Code's registrations (`http://cc-mcp-…` → `http://ab-mcp-…`); pi's are in `pi/mcp.json`, already updated;
-4. copies the secret `cc_oauth` to `claude_oauth`. All other secret names are unchanged.
-
-The tools volumes are not copied: the next `run.sh` / `pi.sh` installs the agents fresh into `ab-claude-tools` and `ab-pi-tools`, and builds the image as `localhost/agentbox`.
-
-Environment variables were renamed from `CC_*` to `AB_*` (`AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE`, ...); update aliases and scripts that set them.
-
-The old volumes, image and secret are kept until you remove them. Once everything works:
-
-```bash
-podman volume rm cc-home pi-home cc-tools pi-tools cc-cache cc-go
-podman rmi localhost/claude-box
-podman secret rm cc_oauth
-```
-

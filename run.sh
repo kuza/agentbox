@@ -30,6 +30,8 @@
 #                     image from scratch, update Claude Code, recreate sidecars
 #   AB_CHECK_UPDATES=0  skip the check for newer sidecar images and vendored
 #                     skills before the session (check-updates.sh)
+#   AB_SERVICES       your dev containers the session may reach by name,
+#                     e.g. "redis rabbitmq" (README, Local services)
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <script dir>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
@@ -179,12 +181,17 @@ if (( ${#missing[@]} )); then
   exit 1
 fi
 
-# Caller auth for the Grafana MCP sidecar. Not a Grafana credential: it only
-# proves the caller may talk to the sidecar. Generated once, automatically.
-if ! podman secret inspect grafana_mcp_caller >/dev/null 2>&1; then
-  head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | podman secret create grafana_mcp_caller - >/dev/null
-  echo "agentbox: created secret grafana_mcp_caller; re-register the grafana MCP server (README, step 6)" >&2
-fi
+# Caller tokens: a random secret per sidecar that proves the caller may talk
+# to it. Not a credential for the service behind it. Generated once; the
+# optional hint says what to do after a new one was created.
+ensure_caller_secret() {  # <secret name> [hint]
+  podman secret inspect "$1" >/dev/null 2>&1 && return 0
+  head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | podman secret create "$1" - >/dev/null
+  [[ -n "${2:-}" ]] && echo "agentbox: created secret $1; $2" >&2
+  return 0
+}
+
+ensure_caller_secret grafana_mcp_caller "re-register the grafana MCP server (README, step 6)"
 
 # ---------------------------------------------------------------------------
 # Networks
@@ -407,10 +414,7 @@ start_sidecar ab-mcp-graylog \
 #   ab-mcp-github      nginx on both networks: checks the caller token, injects
 #                      the PAT and pins toolsets/lockdown (github-mcp.conf.template)
 if podman secret inspect github_pat >/dev/null 2>&1; then
-  if ! podman secret inspect github_mcp_caller >/dev/null 2>&1; then
-    head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | podman secret create github_mcp_caller - >/dev/null
-    echo "agentbox: created secret github_mcp_caller; register the github MCP server (README, GitHub)" >&2
-  fi
+  ensure_caller_secret github_mcp_caller "register the github MCP server (README, GitHub)"
   start_sidecar ab-mcp-github-srv \
     --network ab-egress \
     "$IMG_GITHUB" http
@@ -430,9 +434,7 @@ fi
 # pi points its built-in openai provider at this sidecar (pi/models.json), so
 # the API key never enters the agent container.
 if podman secret inspect openai_api_key >/dev/null 2>&1; then
-  if ! podman secret inspect llm_openai_caller >/dev/null 2>&1; then
-    head -c 32 /dev/urandom | base64 | tr -d '/+=\n' | podman secret create llm_openai_caller - >/dev/null
-  fi
+  ensure_caller_secret llm_openai_caller
   start_sidecar ab-llm-openai \
     --network ab-internal --network ab-egress \
     --secret openai_api_key,type=env,target=OPENAI_API_KEY \
