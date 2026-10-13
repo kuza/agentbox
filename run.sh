@@ -247,11 +247,12 @@ fi
 
 # ---------------------------------------------------------------------------
 # Update check: newer sidecar images and vendored skills, with an offer to
-# update them (check-updates.sh). Before the sidecars start, so recreated ones
+# update them (check-updates.sh), at most every UPDATE_EVERY seconds like the
+# agent update. Before the sidecars start, so recreated ones
 # come up on the new image. AB_UPGRADE updates everything anyway.
 # ---------------------------------------------------------------------------
 if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
-  "$SCRIPT_DIR/check-updates.sh"
+  AB_UPDATE_EVERY="$UPDATE_EVERY" "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
 # ---------------------------------------------------------------------------

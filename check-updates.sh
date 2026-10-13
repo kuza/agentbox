@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # check-updates.sh: report sidecar images and vendored skills that are behind
 # upstream, and offer to update them. Runs on the HOST; run.sh calls it before
-# every session (AB_CHECK_UPDATES=0 skips it), and it can be run by hand.
+# every session with --if-due (AB_CHECK_UPDATES=0 skips it), and it can be run
+# by hand, which always checks.
+#
+# --if-due   skip the check if the last one found nothing to do less than
+#            AB_UPDATE_EVERY seconds ago (default 6h, the agent update interval).
+#            Only a check that ends with nothing outstanding sets the stamp: an
+#            update you declined, a failed update or an unreachable registry
+#            makes the next session check again.
 #
 #   Images   for every agentbox sidecar container (ab-egress, ab-mcp-*,
 #            ab-llm-*), compares the local digest of its image tag with the
@@ -25,9 +32,16 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TIMEOUT=5
+STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.updates.checked"
+
+if [[ "${1:-}" == --if-due && -f "$STAMP" ]] \
+   && (( $(date +%s) - $(stat -c %Y "$STAMP") < ${AB_UPDATE_EVERY:-21600} )); then
+  exit 0
+fi
 
 say() { echo "agentbox: $*" >&2; }
-pending=0
+pending=0      # something to update, and no terminal to ask in
+outstanding=0  # anything that should be checked again next session
 
 interactive() { [[ -t 0 && -t 2 ]]; }
 
@@ -87,6 +101,7 @@ for img in ${images[@]+"${images[@]}"}; do
   remote="$(remote_digest "$img")"
   if [[ -z "$remote" ]]; then
     say "warning: could not check $img for updates"
+    outstanding=1
     continue
   fi
   if ! podman image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$img" \
@@ -113,7 +128,8 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
   if ask "pull new images and recreate the affected sidecars? (open sessions lose MCP until restarted)"; then
     for img in "${!stale[@]}"; do
       say "pulling $img"
-      podman pull -q "$img" >/dev/null || say "warning: pull of $img failed"
+      podman pull -q "$img" >/dev/null \
+        || { say "warning: pull of $img failed"; outstanding=1; }
     done
     for name in "${!image_of[@]}"; do
       img="${image_of[$name]}"
@@ -123,8 +139,9 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
         podman rm -f "$name" >/dev/null && say "removed $name, recreated on start"
       fi
     done
-  elif ! interactive; then
-    pending=1
+  else
+    outstanding=1
+    interactive || pending=1
   fi
 fi
 
@@ -149,6 +166,7 @@ for f in "$SCRIPT_DIR"/vendor/*.sync; do
               git ls-remote "$url" HEAD 2>/dev/null | awk '{print $1}')"
   if [[ -z "$latest" ]]; then
     say "warning: could not check $url for updates"
+    outstanding=1
     continue
   fi
   [[ "$latest" == "$commit" ]] && continue
@@ -162,11 +180,15 @@ for f in "$SCRIPT_DIR"/vendor/*.sync; do
   if ask "update skills from $slug?"; then
     SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$skills_dir" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
-      || say "warning: skills update from $slug failed"
-  elif ! interactive; then
-    pending=1
+      || { say "warning: skills update from $slug failed"; outstanding=1; }
+  else
+    outstanding=1
+    interactive || pending=1
   fi
 done
 
 (( pending )) && say "to update, run $SCRIPT_DIR/check-updates.sh in a terminal"
+if (( ! outstanding )); then
+  mkdir -p "$(dirname "$STAMP")" && touch "$STAMP"
+fi
 exit 0

@@ -94,7 +94,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
-| `check-updates.sh` | Host-side, run by `run.sh` before each session: newer sidecar images and vendored skills, with an offer to update |
+| `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
 | `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories |
 
 ## First-time setup
@@ -474,7 +474,7 @@ SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url>    # install a subset; upstream nam
 SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX= (empty) installs names unchanged
 ```
 
-Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. Before accepting an update, read the compare link the [update check](#update-check-before-each-session) prints. A `[ref]` pins the first sync only: the check always offers the remote default branch.
+Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. Before accepting an update, read the compare link the [update check](#update-check) prints. A `[ref]` pins the first sync only: the check always offers the remote default branch.
 
 #### Example: mattpocock/skills
 
@@ -572,19 +572,19 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 | What | Updates how | Command |
 |---|---|---|
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 ./run.sh` / `AB_UPDATE=1 ./pi.sh` to force |
-| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked before each session**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 ./run.sh` |
+| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 ./run.sh` |
 | Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 ./run.sh` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
 | uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` / edit `PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
-| Vendored skills | **Checked before each session**, updated after you confirm (see below) | Answer `y` at the prompt, or `./sync-skills.sh <git-url> [ref]` |
+| Vendored skills | **Checked at most every 6 hours**, updated after you confirm (see below) | Answer `y` at the prompt, or `./sync-skills.sh <git-url> [ref]` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
 
-### Update check before each session
+### Update check
 
-`run.sh` runs `check-updates.sh` before it starts the sidecars:
+`run.sh` runs `check-updates.sh` before it starts the sidecars, at most every `AB_UPDATE_EVERY` seconds (6 hours by default, the same interval as the agent update). Only a check that ends with nothing to update resets the interval: if you decline an update, an update fails or a registry is unreachable, the next session checks again. Running `./check-updates.sh` by hand always checks.
 
 - **Sidecar images.** For each agentbox sidecar container it asks the registry for the digest of the image tag (an anonymous `HEAD` request, which pulls nothing and does not count against Docker Hub's pull limit) and compares it with the local image. It also reports sidecars still running an older image than the local one. Answering `y` pulls the new images and removes the affected sidecars, and `run.sh` recreates them right away. Other open sessions lose those MCP servers until they are restarted.
 - **Vendored skills.** `sync-skills.sh` records each sync in `vendor/<owner>__<repo>.sync` (URL, installed commit, `SKILLS_ONLY`, prefix, skills directory). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings.
@@ -669,7 +669,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `GRAFANA_URL` | none, required | Grafana base URL |
 | `GRAYLOG_URL` | none, required | Graylog base URL |
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
-| `AB_UPDATE_EVERY` | `21600` | Seconds between automatic updates |
+| `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | GitHub MCP toolsets, enforced by nginx |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
@@ -677,7 +677,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets, `squid.conf` or the nginx templates |
-| `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check-before-each-session) |
+| `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
 Sidecars are started once and reused. After changing their configuration:
 
