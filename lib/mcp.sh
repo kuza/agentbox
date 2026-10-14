@@ -18,7 +18,8 @@
 #                        added to squid's allowlist
 #   MCP_IMAGES=()        images AB_UPGRADE pulls
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
-#                        it has any. MCP_DIR is the module's directory.
+#                        it has any. MCP_DIR is the module's directory. Mount
+#                        its files through sidecar_copy, never directly.
 #
 # Sourced by run.sh. Provides mcp_init, mcp_check_secrets, mcp_write_configs,
 # mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,

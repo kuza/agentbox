@@ -29,7 +29,13 @@ setup() {
   mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
   cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/skills.d" \
-        "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/"
+        "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
+  # Files the copy could not read (a sidecar's private SELinux label on the
+  # source, see README, Troubleshooting) get a placeholder.
+  local f
+  while IFS= read -r f; do
+    [[ -f "$AB/${f#"$ROOT"/}" ]] || echo "# placeholder" > "$AB/${f#"$ROOT"/}"
+  done < <(find "$ROOT/mcp" -type f -name '*.template')
   mkdir -p "$AB/claude" "$AB/pi"
   cp "$ROOT/claude/statusline.py" "$AB/claude/" 2>/dev/null || true
   cp "$ROOT/tests/stub/podman" "$T/bin/podman"
@@ -246,7 +252,35 @@ test_mcp_upgrade_pulls_module_images() {
   grep -q '^podman pull -q ghcr.io/github/github-mcp-server' "$STUB_DIR/calls" && fail "github image pulled while disabled"
 }
 
-# --- run.sh: other parts ----------------------------------------------------
+# --- run.sh: other parts ---
+
+test_sidecars_mount_copies_not_repo_files() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog github" "GRAYLOG_URL=https://graylog.example"
+  secrets graylog_basic github_pat openai_api_key
+  ab_run --
+  assert_rc 0
+  # No sidecar may mount a file of agentbox itself: ":Z" would make it
+  # private to the sidecar and unreadable for sessions and git.
+  grep '^podman run -d' "$STUB_DIR/calls" | tr ' ' '\n' | grep -E "^$AB/.*:Z$" \
+    && fail "a sidecar mounts a repo file with :Z"
+  local c
+  for c in ab-egress ab-mcp-graylog ab-mcp-github ab-llm-openai; do
+    grep "^podman run -d --replace --name $c " "$STUB_DIR/calls" | grep -q "$T/home/.cache/agentbox/sidecars/$c/" \
+      || fail "$c does not mount its copy"
+  done
+}
+
+test_egress_recreated_when_squid_conf_changes() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  ab_run --
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" && fail "recreated without a change"
+  echo "acl allowed dstdomain example.org" >> "$AB/squid.conf"
+  ab_run --
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "not recreated after squid.conf changed"
+}
+-------------------------------------------------
 
 test_session_basics() {
   setup "${FUNCNAME[0]}"

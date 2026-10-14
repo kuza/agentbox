@@ -19,6 +19,6 @@ mcp_start() {
     --network ab-internal --network ab-egress \
     -e GRAYLOG_URL="$url" \
     --secret graylog_basic,type=env,target=GRAYLOG_BASIC \
-    -v "$MCP_DIR/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z" \
+    -v "$(sidecar_copy ab-mcp-graylog "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"
 }

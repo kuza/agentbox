@@ -10,6 +10,22 @@ start_sidecar() {  # <name> <podman run arguments...>
   podman run -d --replace --name "$name" "$@" >/dev/null
 }
 
+# Config files reach sidecars as copies in the cache, never from the repo.
+# A sidecar mounts its files with ":Z", a label private to that container; on
+# the repo's own file that label would lock out agent sessions and git in
+# them (README, Troubleshooting). Each container gets its own copy, written
+# anew and renamed, so a running sidecar keeps the version it mounted.
+sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$1" dst tmp
+  dst="$dir/$(basename "$2")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "$dst.XXXXXX")"
+  cp -- "$2" "$tmp"
+  chmod 644 "$tmp"
+  mv -f -- "$tmp" "$dst"
+  printf '%s\n' "$dst"
+}
+
 # Caller tokens: a random secret per sidecar that proves the caller may talk
 # to it. Not a credential for the service behind it. Generated once.
 ensure_caller_secret() {  # <secret name>
@@ -28,18 +44,19 @@ networks_create() {
 
 # Egress proxy: the only way out for the agent. squid.conf holds the fixed
 # allowlist; the MCP modules' remote hosts come from a generated file
-# (MCP_SQUID_CONF, included by squid.conf). When that list changes, squid is
+# (MCP_SQUID_CONF, included by squid.conf). When either changes, squid is
 # recreated; open sessions lose egress for a moment.
 egress_start() {
-  local hash
-  hash="$(sha256sum < "$MCP_SQUID_CONF" | cut -c1-16)"
+  local hash conf
+  conf="$(sidecar_copy ab-egress "$SCRIPT_DIR/squid.conf")"
+  hash="$(cat "$conf" "$MCP_SQUID_CONF" | sha256sum | cut -c1-16)"
   if [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.mcp-egress"}}' ab-egress 2>/dev/null)" != "$hash" ]]; then
     podman rm -f ab-egress >/dev/null 2>&1 || true
   fi
   start_sidecar ab-egress \
     --network ab-internal --network ab-egress \
     --label "agentbox.mcp-egress=$hash" \
-    -v "$SCRIPT_DIR/squid.conf:/etc/squid/squid.conf:ro,Z" \
+    -v "$conf:/etc/squid/squid.conf:ro,Z" \
     -v "$MCP_SQUID_CONF:/etc/squid/agentbox-mcp.conf:ro,Z" \
     "$IMG_SQUID"
 }
@@ -57,6 +74,6 @@ openai_start() {
     --network ab-internal --network ab-egress \
     --secret openai_api_key,type=env,target=OPENAI_API_KEY \
     --secret llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN \
-    -v "$SCRIPT_DIR/llm-openai.conf.template:/etc/nginx/templates/default.conf.template:ro,Z" \
+    -v "$(sidecar_copy ab-llm-openai "$SCRIPT_DIR/llm-openai.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"
 }

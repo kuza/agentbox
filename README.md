@@ -230,7 +230,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | `MCP_CALLER_SECRET` | Name of a caller token secret, generated on first use. The agents send `Authorization: Bearer <token>`, the sidecar checks it; in the session it is `AB_MCP_TOKEN_<NAME>` |
 | `MCP_EGRESS=(...)` | Hosts the agent itself connects to (remote servers); they are added to squid's allowlist |
 | `MCP_IMAGES=(...)` | Images `AB_UPGRADE` pulls |
-| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use |
+| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use. Mount the module's files as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read) |
 
 A remote server needs three lines, like `mcp/context7/mcp.sh`:
 
@@ -310,7 +310,7 @@ podman secret rm github_pat github_mcp_caller
 
 ### GitHub read access (optional)
 
-The GitHub MCP sidecar covers your own repositories. For **anonymous read access to public GitHub** (cloning a library to read its source, `uv` dependencies from git, raw files, release downloads), uncomment the GitHub block in `squid.conf` and run `AB_RESTART=1 ./run.sh`.
+The GitHub MCP sidecar covers your own repositories. For **anonymous read access to public GitHub** (cloning a library to read its source, `uv` dependencies from git, raw files, release downloads), uncomment the GitHub block in `squid.conf`; the next start recreates squid.
 
 What it does and does not change:
 
@@ -713,7 +713,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
-| `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets, `squid.conf` or the nginx templates |
+| `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets or the nginx templates. Squid is recreated by itself when `squid.conf` or the modules' hosts change |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
 Sidecars are started once and reused. After changing their configuration:
@@ -749,9 +749,10 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 
 | Symptom | Likely cause / fix |
 |---|---|
+| The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars mount copies of their config files from the cache, so they do not cause this |
 | `missing podman secrets` | Step 5 not done for the agent or a service enabled in `config.env`. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
-| `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host to `squid.conf`, then `AB_RESTART=1`. |
+| `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host to `squid.conf`; the next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
 | `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |

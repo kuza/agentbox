@@ -22,6 +22,6 @@ mcp_start() {
     -e GH_TOOLSETS="${GH_TOOLSETS:-context,repos,issues,pull_requests,actions}" \
     --secret github_pat,type=env,target=GH_PAT \
     --secret github_mcp_caller,type=env,target=GH_CALLER_TOKEN \
-    -v "$MCP_DIR/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z" \
+    -v "$(sidecar_copy ab-mcp-github "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"
 }
