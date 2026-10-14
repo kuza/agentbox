@@ -69,12 +69,13 @@ RUN set -eu; \
 # used by the /graphify skill. Own venv, independent of your project's Python.
 # The PyPI package is "graphifyy" (double y).
 #   GRAPHIFY_VERSION  pinned on purpose; bump deliberately and rebuild
-#   GRAPHIFY_EXTRAS   optional extras, e.g. "[sql,terraform]"; empty = code only
+#   GRAPHIFY_EXTRAS   optional extras, e.g. "[sql,terraform]"; empty = code only.
+#                     Default "[terraform]": tree-sitter-hcl for .tf/.tfvars/.hcl
 # Exposed as /usr/local/bin/graphify: graphify writes the path it was invoked
 # with into Claude Code hooks, and this path can also exist on the host.
 # ---------------------------------------------------------------------------
 ARG GRAPHIFY_VERSION=0.9.79
-ARG GRAPHIFY_EXTRAS=""
+ARG GRAPHIFY_EXTRAS="[terraform]"
 RUN python3 -m venv /opt/graphify \
  && /opt/graphify/bin/pip install --no-cache-dir "graphifyy${GRAPHIFY_EXTRAS}==${GRAPHIFY_VERSION}" \
  && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify

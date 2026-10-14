@@ -488,6 +488,36 @@ fi
 # Project skills in <repo>/.claude/skills need nothing: the repo is mounted.
 # ---------------------------------------------------------------------------
 SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
+
+# graphify skill, taken from the image so it always matches the graphify CLI
+# there: `graphify install` into a scratch home, then
+#   <skills>/graphify               Claude Code's variant (shared skills dir)
+#   vendor/graphify/pi/graphify     pi's variant, mounted over the shared one
+# Refreshed when the image changes (its ID is recorded next to the skill), so a
+# rebuild with a new GRAPHIFY_VERSION brings the matching skill. A
+# <skills>/graphify that agentbox did not install is left alone.
+GRAPHIFY_STAMP="$SKILLS_DIR/graphify/.agentbox-image"
+GRAPHIFY_PI="$SCRIPT_DIR/vendor/graphify/pi"
+image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
+if [[ -e "$SKILLS_DIR/graphify" && ! -f "$GRAPHIFY_STAMP" ]]; then
+  echo "agentbox: warning: $SKILLS_DIR/graphify was not installed by agentbox; not updating it" >&2
+elif [[ "$(cat "$GRAPHIFY_STAMP" 2>/dev/null)" != "$image_id" || ! -d "$GRAPHIFY_PI/graphify" ]]; then
+  graphify_tmp="$(mktemp -d)"
+  if podman run --rm --network none --userns="$USERNS" -e HOME=/out \
+       -v "$graphify_tmp:/out:z" --entrypoint sh "$IMAGE" -c \
+       'cd / && graphify install --platform claude && graphify install --platform pi' >/dev/null 2>&1; then
+    mkdir -p "$SKILLS_DIR" "$GRAPHIFY_PI"
+    rm -rf -- "$SKILLS_DIR/graphify" "$GRAPHIFY_PI/graphify"
+    cp -R -- "$graphify_tmp/.claude/skills/graphify" "$SKILLS_DIR/graphify"
+    cp -R -- "$graphify_tmp/.pi/agent/skills/graphify" "$GRAPHIFY_PI/graphify"
+    echo "$image_id" > "$GRAPHIFY_STAMP"
+    echo "agentbox: installed the graphify skill $(cat "$SKILLS_DIR/graphify/.graphify_version" 2>/dev/null) from the image" >&2
+  else
+    echo "agentbox: warning: could not extract the graphify skill from the image" >&2
+  fi
+  rm -rf -- "$graphify_tmp"
+fi
+
 SKILLS_SRC=""
 if [[ -d "$SKILLS_DIR" ]]; then
   SKILLS_SRC="$(realpath -e -- "$SKILLS_DIR")"
@@ -593,6 +623,11 @@ case "$AGENT" in
     fi
     if [[ -n "$SKILLS_SRC" ]]; then
       agent_args+=(-v "$SKILLS_SRC:/home/node/.pi/agent/skills:ro,z")
+      # pi's own graphify skill over the shared (Claude Code) one; after the
+      # skills mount, which provides the mount point.
+      if [[ -d "$SKILLS_SRC/graphify" && -d "$GRAPHIFY_PI/graphify" ]]; then
+        agent_args+=(-v "$GRAPHIFY_PI/graphify:/home/node/.pi/agent/skills/graphify:ro,z")
+      fi
     fi
     # Personal instructions, the same file Claude Code gets as CLAUDE.md. pi
     # reads AGENTS.md from its agent directory as global context.

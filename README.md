@@ -95,7 +95,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
-| `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories |
+| `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories. Also holds pi's variant of the graphify skill (`vendor/graphify/pi/`), written by `run.sh` |
 
 ## First-time setup
 
@@ -532,25 +532,32 @@ Things to know:
 
 [graphify](https://github.com/Graphify-Labs/graphify) turns the repo into a queryable knowledge graph. It is a Python CLI plus a `/graphify` skill that calls it, so unlike plain skills it has to be **in the image**: the agent cannot install it from PyPI.
 
-The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras (e.g. `[sql,terraform]` for SQL schemas and Terraform) via `GRAPHIFY_EXTRAS`. To change either:
+The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras via `GRAPHIFY_EXTRAS`, by default `[terraform]` (tree-sitter-hcl, for `.tf`, `.tfvars` and `.hcl`). To change either, e.g. to add SQL schemas:
 
 ```bash
 podman rmi localhost/agentbox
-podman build -t localhost/agentbox --build-arg GRAPHIFY_EXTRAS='[terraform]' -f Containerfile .
+podman build -t localhost/agentbox --build-arg GRAPHIFY_EXTRAS='[sql,terraform]' -f Containerfile .
 ```
+
+### The skill
+
+`run.sh` installs the `/graphify` skill from the image, so it always matches the CLI there: it runs `graphify install` into a scratch home and copies the result (`SKILL.md` plus its `references/`) to `skills/graphify/` for Claude Code, and pi's own variant to `vendor/graphify/pi/graphify/`, mounted over the shared one in pi sessions. It records the image ID next to the skill and refreshes both whenever the image changes, e.g. after a rebuild with a new `GRAPHIFY_VERSION`. A `skills/graphify/` that `run.sh` did not install is left alone, with a warning.
+
+The `~/.claude/CLAUDE.md` pointer that `graphify install` writes on a normal host is not used: Claude Code finds the skill in `~/.claude/skills` on its own.
 
 ### Enable it in a repo
 
-Inside a session (or `./run.sh ~/src/myrepo` and ask the agent to run them):
+The skill needs nothing per repo: `/graphify .` builds the graph into `graphify-out/`. Add `graphify-out/` to `.gitignore`.
+
+Optionally, inside a session:
 
 ```bash
-graphify install --project      # skill into .claude/skills/graphify/, plus CLAUDE.md
-graphify claude install         # PreToolUse hooks in .claude/settings.json: nudge the agent to query the graph before grep/read
+graphify claude install         # graphify section in CLAUDE.md, plus a Claude Code PreToolUse hook in .claude/settings.json that nudges the agent to query the graph before grep/read
 ```
 
-Then `/graphify .` builds the graph into `graphify-out/`.
+These are Claude Code hooks, not git hooks; graphify's git hooks (`graphify hook install`) cannot be installed in the box, see below.
 
-Project scope is deliberate: `~/.claude/skills` is read-only in the box, and the skill should match the CLI version in the image. Add `graphify-out/` to `.gitignore`.
+A repo set up earlier with `graphify install --project` has its own copy in `.claude/skills/graphify/` and a pointer block in `.claude/CLAUDE.md`, and `/graphify` then exists twice. Delete the directory and the `# graphify` block in `.claude/CLAUDE.md` by hand. Not with `graphify uninstall`: it also removes the `graphify claude install` setup, the `AGENTS.md` sections and git hooks.
 
 ### What works in the box
 
@@ -612,7 +619,7 @@ Check the latest release and what changed before bumping:
 curl -s https://pypi.org/pypi/graphifyy/json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])'
 ```
 
-Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 ./run.sh`. The project-scoped skills in your repos (`.claude/skills/graphify/`) are refreshed by graphify itself on the next `graphify` command; a locally edited `SKILL.md` is kept as `SKILL.md.bak`. Commit the refreshed files if you track them.
+Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 ./run.sh`. The same run reinstalls the `/graphify` skill from the new image (see [The skill](#the-skill)).
 
 ### Pinning sidecar images
 
