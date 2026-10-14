@@ -50,7 +50,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 
 **What is isolated**
 
-- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), each removable, and the Context7 documentation server (`mcp.context7.com`), which the setup relies on. Everything else, GitHub included, gets a 403.
+- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), Google Cloud Storage (`storage.googleapis.com`), each removable, and the Context7 documentation server (`mcp.context7.com`), which the setup relies on. Everything else, GitHub included, gets a 403.
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
@@ -62,7 +62,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
 - MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
-- "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, and `github.com` if you enable it) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
+- "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, `storage.googleapis.com`, and `github.com` if you enable it) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
 
 ## Requirements
 
@@ -125,7 +125,7 @@ cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions
 | Host | Effect of blocking |
 |---|---|
 | `mcp-proxy.anthropic.com` | No claude.ai connectors (also disabled via env) |
-| `registry.npmjs.org`, `github.com`, `storage.googleapis.com` | No plugin installs inside the session |
+| `registry.npmjs.org`, `github.com` | No plugin installs inside the session |
 | `raw.githubusercontent.com` | `/release-notes` does not load |
 | `code.claude.com`, `claude.com` | No built-in documentation lookups |
 | `*.frame.claudeusercontent.com` | No artifact reads (also disabled via env) |
