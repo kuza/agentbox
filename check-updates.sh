@@ -16,7 +16,7 @@
 #            containers still running an older image than the local one.
 #   Skills   for every vendor/<owner>__<repo>.sync written by sync-skills.sh,
 #            compares the installed commit with the remote default branch
-#            (git ls-remote).
+#            (git ls-remote). Sources pinned to a ref are skipped.
 #
 # vendor/ and skills/ are writable from a session that has the agentbox
 # directory mounted, so .sync files are parsed as data, never sourced, and git
@@ -157,6 +157,8 @@ for f in "$SCRIPT_DIR"/vendor/*.sync; do
   slug="$(basename "$f" .sync)"
   url="$(sync_value "$f" URL)"
   commit="$(sync_value "$f" COMMIT)"
+  # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
+  [[ -n "$(sync_value "$f" REF)" ]] && continue
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     say "warning: $f: bad URL or COMMIT, skipped"
     continue
@@ -177,8 +179,9 @@ for f in "$SCRIPT_DIR"/vendor/*.sync; do
   only="$(sync_value "$f" SKILLS_ONLY)"
   prefix="$(sync_value "$f" SKILLS_PREFIX)"
   skills_dir="$(sync_value "$f" AB_SKILLS_DIR)"
+  source_name="$(sync_value "$f" SOURCE)"
   if ask "update skills from $slug?"; then
-    SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$skills_dir" \
+    SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$skills_dir" SKILLS_SOURCE="$source_name" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
       || { say "warning: skills update from $slug failed"; outstanding=1; }
   else

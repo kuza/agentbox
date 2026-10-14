@@ -4,15 +4,21 @@
 #
 # Usage:
 #   ./sync-skills.sh <git-url> [ref]
+#   ./sync-skills.sh --remove <git-url>     remove what it installed from there
 #
 # Examples:
 #   ./sync-skills.sh https://github.com/mattpocock/skills
 #   ./sync-skills.sh https://github.com/mattpocock/skills 3f2c1ab      # pin a commit
 #   SKILLS_ONLY=tdd,grill-me,code-review ./sync-skills.sh https://github.com/mattpocock/skills
 #
+# Usually run by run.sh for the sources in AB_SKILLS (skills.d/<name>.conf);
+# by hand for a one-off repository.
+#
 # What it does:
-#   1. clones/updates the repo into vendor/<owner>__<repo>/ and checks out <ref>
-#      (default: the remote's default branch);
+#   1. clones the repo afresh into a scratch directory, hooks off, and checks
+#      out <ref> (default: the remote's default branch). No clone is kept:
+#      vendor/ is writable from a session that mounts agentbox, and a hook or
+#      config planted in a kept clone would run on the host on the next sync;
 #   2. finds every directory containing a SKILL.md, at any depth, and copies it
 #      flat to skills/<skill-name>/, because Claude Code only looks one level
 #      deep (~/.claude/skills/<name>/SKILL.md);
@@ -23,7 +29,7 @@
 #   4. records what it installed in skills/.vendored-<owner>__<repo>, so a later
 #      run removes skills that were dropped upstream or deselected, and how it
 #      synced in vendor/<owner>__<repo>.sync, so check-updates.sh can spot a
-#      newer upstream and repeat the sync.
+#      newer upstream and run.sh can tell whether the source changed.
 #
 # It never overwrites a skill it did not install itself (your own skills, or
 # skills from another vendored repo with the same name): it stops instead.
@@ -35,17 +41,37 @@
 #                    lowercased); set it empty to install names unchanged
 #   AB_SKILLS_DIR    target directory (default: <script dir>/skills), same
 #                    variable run.sh uses
+#   SKILLS_SOURCE    name of the skills.d source this sync is for (set by
+#                    run.sh); recorded so run.sh can remove a disabled source
+#   SKILLS_PIN       the source's REF, recorded as a pin (set by run.sh); a
+#                    pinned source gets no update offers. A [ref] argument
+#                    alone does not pin.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-URL="${1:?usage: $0 <git-url> [ref]}"
+REMOVE=""
+if [[ "${1:-}" == --remove ]]; then REMOVE=1; shift; fi
+URL="${1:?usage: $0 [--remove] <git-url> [ref]}"
 REF="${2:-}"
 SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
 
 # owner__repo from https://github.com/owner/repo(.git) or git@github.com:owner/repo(.git)
 slug="$(printf '%s' "$URL" | sed -E 's#(\.git)?/*$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1__\2#')"
-VENDOR="$SCRIPT_DIR/vendor/$slug"
 MANIFEST="$SKILLS_DIR/.vendored-$slug"
+SYNC_FILE="$SCRIPT_DIR/vendor/$slug.sync"
+
+if [[ -n "$REMOVE" ]]; then
+  if [[ -f "$MANIFEST" ]]; then
+    while IFS= read -r n; do
+      [[ -n "$n" && "$n" != */* && "$n" != .* ]] || continue
+      rm -rf -- "${SKILLS_DIR:?}/$n"
+      echo "removed  $n"
+    done < "$MANIFEST"
+  fi
+  rm -f -- "$MANIFEST" "$SYNC_FILE"
+  echo "done: removed the skills from $slug"
+  exit 0
+fi
 
 owner="${slug%%__*}"
 PREFIX="${SKILLS_PREFIX-$(printf '%s' "$owner" | tr '[:upper:]' '[:lower:]')}"
@@ -58,15 +84,14 @@ SEP="${PREFIX:+-}"
 mkdir -p "$SCRIPT_DIR/vendor" "$SKILLS_DIR"
 
 # --- 1. fetch ---------------------------------------------------------------
-if [[ -d "$VENDOR/.git" ]]; then
-  git -C "$VENDOR" fetch --quiet --tags origin
-else
-  git clone --quiet "$URL" "$VENDOR"
-fi
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf -- "${SCRATCH:?}"' EXIT
+VENDOR="$SCRATCH/repo"
+git -c core.hooksPath=/dev/null clone --quiet "$URL" "$VENDOR"
 if [[ -z "$REF" ]]; then
   REF="origin/$(git -C "$VENDOR" symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')"
 fi
-git -C "$VENDOR" -c advice.detachedHead=false checkout --quiet --detach "$REF"
+git -C "$VENDOR" -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach "$REF"
 commit="$(git -C "$VENDOR" rev-parse --short HEAD)"
 
 # --- 2. collect skills ------------------------------------------------------
@@ -175,7 +200,9 @@ mv "$MANIFEST.tmp" "$MANIFEST"
   echo "SKILLS_ONLY=${SKILLS_ONLY:-}"
   echo "SKILLS_PREFIX=$PREFIX"
   echo "AB_SKILLS_DIR=$SKILLS_DIR"
-} > "$SCRIPT_DIR/vendor/$slug.sync"
+  echo "SOURCE=${SKILLS_SOURCE:-}"
+  echo "REF=${SKILLS_PIN:-}"
+} > "$SYNC_FILE"
 
 echo "done: ${#wanted[@]} skills from $slug @ $commit -> $SKILLS_DIR"
-echo "Review before use: git -C $VENDOR log --oneline -5 ; diff the skills/ directory"
+echo "Read what you installed before you use it: $SKILLS_DIR/${PREFIX:-<name>}${SEP}*"

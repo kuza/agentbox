@@ -93,10 +93,12 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
-| `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
+| `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
+| `skills.local.d/<name>.conf` | Your own skill sources, ignored by git |
+| `sync-skills.sh` | Host-side: installs a skills repository into `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
 | `tests/run.sh` | Tests for `run.sh`, `check-updates.sh` and `sync-skills.sh` with a podman stand-in. See [Tests](#tests) |
-| `vendor/` | Created by `sync-skills.sh`: clones of vendored skills repositories. Also holds pi's variant of the graphify skill (`vendor/graphify/pi/`), written by `run.sh` |
+| `vendor/` | Created by `sync-skills.sh`: a `.sync` record per installed repository. Also holds pi's variant of the graphify skill (`vendor/graphify/pi/`), written by `run.sh` |
 
 ## First-time setup
 
@@ -472,11 +474,33 @@ To keep skills elsewhere, set `AB_SKILLS_DIR=/path/to/skills`. Changes are picke
 
 Scripts bundled with a skill run inside the box, with the same network and credential restrictions as everything else.
 
-**Plugins and marketplaces** (`/plugin install ...`) and `npx skills add` do not work in the box: they download from `github.com` and `registry.npmjs.org`, which are blocked. Use `sync-skills.sh` on the host instead.
+**Plugins and marketplaces** (`/plugin install ...`) and `npx skills add` do not work in the box: they download from `github.com` and `registry.npmjs.org`, which are blocked. Use a skill source (below), which `run.sh` installs on the host.
 
-### Vendoring a skills repository: `sync-skills.sh`
+### Skill sources: `AB_SKILLS`
 
-Runs on the **host**. It clones the repository into `vendor/<owner>__<repo>/`, finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed in `skills/.vendored-<owner>__<repo>`, so later runs remove skills dropped upstream or deselected, and it never overwrites a skill it did not install.
+A skill source is a git repository of skills, described in a small file:
+
+| Directory | |
+|---|---|
+| `skills.d/<name>.conf` | Shared sources, in git: `mattpocock` |
+| `skills.local.d/<name>.conf` | Your own, ignored by git. A name that also exists in `skills.d/` replaces that source |
+
+`AB_SKILLS` in `config.env` lists the enabled ones (`AB_SKILLS=mattpocock`). Nobody gets skills they did not enable. The `.conf` is `KEY=VALUE` data, never run:
+
+| Key | |
+|---|---|
+| `URL` | Required. Git URL of the repository |
+| `ONLY` | Comma-separated skills to install, as named in the repository. Default: all |
+| `PREFIX` | Prefix for the installed names. Default: the repository owner; `PREFIX=` (empty) for none |
+| `REF` | Branch, tag or commit to pin to. Default: the default branch, with updates offered by the [update check](#update-check) |
+
+On every start `run.sh` compares each enabled source with what is installed and syncs on the host only when they differ: it installs a new source, re-syncs one whose `.conf` changed (at the installed commit, so a changed `ONLY` does not also upgrade it), and removes the skills of a source taken out of `AB_SKILLS`. Without a change there is no network access. A failed sync prints a warning and the session starts with what is installed.
+
+Read what you enable: skills are instructions the agent follows, and bundled scripts run in the box. Before accepting an update, read the compare link the update check prints. A team's own skills go into a repository of their own and a source in `skills.d/`, like anyone else's.
+
+#### How a source is installed: `sync-skills.sh`
+
+`run.sh` calls `sync-skills.sh`, which also works by hand for a one-off repository. It clones the repository afresh into a scratch directory (no clone is kept: `vendor/` is writable from a session that mounts agentbox, and a hook planted in a kept clone would run on the host), finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed in `skills/.vendored-<owner>__<repo>` and how in `vendor/<owner>__<repo>.sync`, removes skills dropped upstream or deselected, and never overwrites a skill it did not install.
 
 Installed skills get a prefix, the repo owner by default: `code-review` from `mattpocock/skills` becomes `mattpocock-code-review`. Without it, a vendored skill shadows a Claude Code built-in with the same name (`/code-review`), and two repos can collide. The script renames the directory and the frontmatter `name`, and adds a note after the frontmatter of each `SKILL.md`: the text still says `/tdd` or `call the Skill tool with "code-review"`, and the note tells the agent to use `mattpocock-<name>` for the listed skills. The text itself is not rewritten.
 
@@ -484,18 +508,14 @@ Installed skills get a prefix, the repo owner by default: `code-review` from `ma
 ./sync-skills.sh <git-url> [ref]               # ref: branch, tag or commit; default: remote default branch
 SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url>    # install a subset; upstream names, without the prefix
 SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX= (empty) installs names unchanged
+./sync-skills.sh --remove <git-url>             # remove what it installed from there
 ```
 
-Read what you vendor: skills are instructions the agent follows, and bundled scripts are executed. Before accepting an update, read the compare link the [update check](#update-check) prints. A `[ref]` pins the first sync only: the check always offers the remote default branch.
+Skills synced by hand are not managed by `run.sh`: it neither changes nor removes them. Older versions kept clones in `vendor/<owner>__<repo>/`; they are no longer used and can be deleted.
 
 #### Example: mattpocock/skills
 
-The repository groups skills by category (`engineering`, `productivity`, `misc`, `in-progress`). A sensible subset is engineering and productivity, without the unfinished `in-progress` ones:
-
-```bash
-SKILLS_ONLY=ask-matt,code-review,codebase-design,diagnosing-bugs,domain-modeling,grill-with-docs,implement,implement-spec,improve-codebase-architecture,pr,prototype,retro,setup-matt-pocock-skills,tdd,to-spec,to-tickets,triage,wayfinder,wizard,grill-me,grilling,handoff,teach,to-questionnaire,wait-what,writing-for-agents \
-  ./sync-skills.sh https://github.com/mattpocock/skills
-```
+`skills.d/mattpocock.conf` installs engineering and productivity skills from the repository, without the unfinished `in-progress` ones. Enable it with `AB_SKILLS=mattpocock`.
 
 Then in a session, once per repo: `/mattpocock-setup-matt-pocock-skills`. Things to know for this box:
 
@@ -591,7 +611,7 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
 | uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` / edit `PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
-| Vendored skills | **Checked at most every 6 hours**, updated after you confirm (see below) | Answer `y` at the prompt, or `./sync-skills.sh <git-url> [ref]` |
+| Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
@@ -605,7 +625,7 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 
 Without a terminal (`run.sh -p ...` from a script) it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it; `AB_UPGRADE=1` skips it too, since that updates the images anyway. Run `./check-updates.sh` on its own to check without starting a session.
 
-`vendor/` is writable from inside a session that has the agentbox directory mounted, so the check reads `.sync` files as data, accepts only `https://` URLs, and runs git outside `vendor/`: a hook or config planted there does not run on the host. `sync-skills.sh` itself does run git inside `vendor/<owner>__<repo>`.
+`vendor/` is writable from inside a session that has the agentbox directory mounted, so the check reads `.sync` files as data, accepts only `https://` URLs, and runs git outside `vendor/`: a hook or config planted there does not run on the host. `sync-skills.sh` clones afresh into a scratch directory for the same reason.
 
 ### Claude Code
 
@@ -686,6 +706,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | Setting of the `github` module: toolsets, enforced by nginx |
+| `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |

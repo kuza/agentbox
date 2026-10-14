@@ -28,7 +28,7 @@ setup() {
   REPO="$T/repo"
   mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
-  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" \
+  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/skills.d" \
         "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/"
   mkdir -p "$AB/claude" "$AB/pi"
   cp "$ROOT/claude/statusline.py" "$AB/claude/" 2>/dev/null || true
@@ -61,6 +61,7 @@ session_args() {
 }
 started() { awk '{ print $1 }' "$STUB_DIR/running" | sort | paste -sd' ' -; }
 cache() { echo "$T/home/.cache/agentbox/$1"; }
+source_value() { sed -n "s/^$2=//p" "$1" | tail -n1; }
 
 fail() { CURRENT_OK=0; echo "    FAIL: $*"; }
 assert_rc() { [[ "$RC" == "$1" ]] || fail "exit status $RC, expected $1"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
@@ -467,6 +468,124 @@ test_sync_bad_prefix() {
   ss_run SKILLS_PREFIX=Bad
   assert_rc 1
   assert_out "must be lowercase"
+}
+
+
+# --- run.sh: skill sources (AB_SKILLS) --------------------------------------
+
+src_conf() {  # <dir: skills.d|skills.local.d> <name> <lines...>
+  local dir="$AB/$1" name="$2"; shift 2
+  mkdir -p "$dir"
+  printf '%s\n' "$@" > "$dir/$name.conf"
+}
+installed() { ls "$AB/skills" 2>/dev/null | grep -v '^graphify$' | paste -sd' ' -; }
+
+test_skills_source_installed_once() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd,review"
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_out "syncing skills from 'acme'"
+  assert_eq "$(installed)" "acme-review acme-tdd"
+  assert_file_has "$AB/vendor/acme__skills.sync" '^SOURCE=acme$'
+  ab_run --
+  assert_no_out "syncing skills"
+}
+
+test_skills_source_selection_change_keeps_version() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
+  config "AB_SKILLS=acme"
+  ab_run --
+  local before; before="$(source_value "$AB/vendor/acme__skills.sync" COMMIT)"
+  printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd,notes"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(installed)" "acme-notes acme-tdd"
+  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" COMMIT)" "$before" "installed commit"
+  assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
+  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" REF)" "" "REF (must not look pinned)"
+}
+
+test_skills_source_disabled_removed_manual_kept() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
+  config "AB_SKILLS=acme"
+  ab_run --
+  # A repository synced by hand, without a source, stays.
+  local other="$T/src/other/kit"
+  mkdir -p "$other/x"
+  printf -- '---\nname: x\n---\n' > "$other/x/SKILL.md"
+  git -C "$other" init -q -b main
+  git -C "$other" -c user.name=t -c user.email=t@t add -A
+  git -C "$other" -c user.name=t -c user.email=t@t commit -qm init
+  env HOME="$T/home" bash "$AB/sync-skills.sh" "$other" > /dev/null 2>&1
+  : > "$AB/config.env"
+  ab_run --
+  assert_rc 0
+  assert_out "removing skills of disabled source 'acme'"
+  assert_eq "$(installed)" "other-x"
+  [[ -f "$AB/vendor/acme__skills.sync" ]] && fail ".sync of the disabled source kept"
+}
+
+test_skills_source_pinned() {
+  ss_setup "${FUNCNAME[0]}"
+  local first; first="$(git -C "$SRC" rev-parse HEAD)"
+  printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd" "REF=$first"
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
+  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" REF)" "$first" "REF"
+  ab_run --
+  assert_no_out "syncing skills"
+}
+
+test_skills_source_local_overrides_and_prefix() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
+  src_conf skills.local.d acme "URL=$SRC" "ONLY=review" "PREFIX="
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(installed)" "review"
+}
+
+test_skills_source_errors() {
+  ss_setup "${FUNCNAME[0]}"
+  config "AB_SKILLS=nope"
+  ab_run --
+  assert_rc 2
+  assert_out "no skill source 'nope'"
+  : > "$AB/config.env"; config "AB_SKILLS=../x"
+  ab_run --
+  assert_rc 2
+  assert_out "invalid source name"
+}
+
+test_skills_source_sync_failure_continues() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d broken "URL=$T/src/no/such-repo"
+  config "AB_SKILLS=broken"
+  ab_run --
+  assert_rc 0
+  assert_out "could not sync skills from 'broken'"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "session did not start"
+}
+
+test_updates_skips_pinned_source() {
+  cu_setup "${FUNCNAME[0]}"
+  printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
+    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" "SOURCE=acme" "REF=v1" > "$AB/vendor/acme__skills.sync"
+  printf 'b%.0s' {1..40} > "$T/remote_head"
+  cu_run
+  assert_no_out "update available: skills"
+  assert_eq "$(grep -c git "$T/net")" 0 "git calls for a pinned source"
 }
 
 # --- main -------------------------------------------------------------------
