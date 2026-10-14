@@ -3,7 +3,7 @@
 Run [Claude Code](https://code.claude.com/docs), or the [pi](https://pi.dev) coding agent with OpenAI models (ChatGPT subscription or API key), in an isolated rootless Podman container that can reach only:
 
 - the model API (Anthropic for Claude Code; OpenAI for pi),
-- MCP servers for **Grafana**, **Graylog**, **Prometheus** (via Grafana), **Context7** (library documentation) and, optionally, **GitHub**.
+- MCP servers for **Context7** (library documentation) and, each optional, **Grafana** (with **Prometheus** via Grafana), **Graylog** and **GitHub**.
 
 No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub) live only in sidecar containers that the agent cannot read. `git push` is done on the host.
 
@@ -25,8 +25,8 @@ No host credentials are mounted into the agent container, and all service tokens
 |---|---|---|---|
 | `ab-claude-<pid>` | `ab-internal` | Claude OAuth token only | Claude Code session, one per run |
 | `ab-egress` | `ab-internal`, `ab-egress` | none | Squid forward proxy with a domain allowlist |
-| `ab-mcp-grafana` | `ab-internal`, `ab-egress` | Grafana service account token | Official `grafana/mcp-grafana`, streamable HTTP on `:8000/mcp`, bearer-token caller auth, Host allowlist, `--disable-write`, usage stats off |
-| `ab-mcp-graylog` | `ab-internal`, `ab-egress` | Graylog API token | nginx reverse proxy to Graylog's built-in MCP endpoint, adds `Authorization` |
+| `ab-mcp-grafana` | `ab-internal`, `ab-egress` | Grafana service account token | Official `grafana/mcp-grafana`, streamable HTTP on `:8000/mcp`, bearer-token caller auth, Host allowlist, `--disable-write`, usage stats off. Optional (`GRAFANA_URL`) |
+| `ab-mcp-graylog` | `ab-internal`, `ab-egress` | Graylog API token | nginx reverse proxy to Graylog's built-in MCP endpoint, adds `Authorization`. Optional (`GRAYLOG_URL`) |
 | `ab-mcp-github` | `ab-internal`, `ab-egress` | GitHub PAT | nginx: checks the caller token, injects the PAT, pins toolsets and lockdown mode. Optional |
 | `ab-llm-openai` | `ab-internal`, `ab-egress` | OpenAI API key | nginx: checks the caller token, injects the API key, forwards to `api.openai.com` with certificate verification. Only for pi in API-key mode |
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Optional |
@@ -50,7 +50,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 
 **What is isolated**
 
-- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), and the Context7 documentation server (`mcp.context7.com`), each removable. Everything else, GitHub included, gets a 403.
+- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), each removable, and the Context7 documentation server (`mcp.context7.com`), which the setup relies on. Everything else, GitHub included, gets a 403.
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
@@ -71,8 +71,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
   podman --version
   podman info --format '{{.Host.NetworkBackend}}'   # must print: netavark
   ```
-- Network access from the host to Grafana and Graylog
-- **Graylog 7.0+** for the built-in MCP endpoint. It is marked experimental by Graylog.
+- For the optional Grafana and Graylog MCP servers: network access from the host to them, and **Graylog 7.0+** for its built-in MCP endpoint (marked experimental by Graylog)
 - A Claude subscription or Anthropic account for `claude setup-token`
 
 ## Files
@@ -82,7 +81,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `run.sh` | Entry point: networks, image, updates, sidecars, agent session |
 | `config.env.example` | Settings template; copy to `config.env` (ignored by git) |
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
-| `pi/models.json`, `pi/mcp.json` | pi configuration, mounted read-only: model endpoint and MCP servers |
+| `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode. pi's MCP config is generated by `run.sh` for the enabled services |
 | `pi/extensions/` | pi extensions you choose to allow, mounted read-only (empty by default) |
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
 | `Containerfile` | Base image: node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
@@ -107,7 +106,7 @@ cd ~/agentbox
 chmod +x run.sh
 ```
 
-Set your endpoints in `config.env` (base URLs only, without `/api` or `/api/mcp`; trailing parts are stripped anyway):
+Set up `config.env`. Grafana and Graylog are optional: set `GRAFANA_URL` / `GRAYLOG_URL` (base URLs only, without `/api` or `/api/mcp`; trailing parts are stripped anyway) for the ones you use, and skip their steps below otherwise.
 
 ```bash
 cp config.env.example config.env
@@ -115,7 +114,7 @@ $EDITOR config.env
 cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions for the agents, see Memory and personal instructions
 ```
 
-`config.env` is parsed, not executed, accepts only known keys, and survives updates of `run.sh`. Environment variables override it, and `AB_CONFIG=/path/to/file` points to a different file, e.g. one per environment. Without `GRAFANA_URL` and `GRAYLOG_URL` the script stops with an error.
+`config.env` is parsed, not executed, accepts only known keys, and survives updates of `run.sh`. Environment variables override it, and `AB_CONFIG=/path/to/file` points to a different file, e.g. one per environment. A service whose URL is set but whose secret (step 5) is missing stops the script with an error.
 
 `squid.conf` is the egress allowlist. It allows the minimum the agents need: the Anthropic hosts Claude Code requires (see Claude Code's [network access requirements](https://code.claude.com/docs/en/network-config#network-access-requirements)), PyPI and the Go module proxy, and for pi with a ChatGPT subscription `auth.openai.com` and `chatgpt.com`. Each block is commented; remove what you don't use. Hosts that are deliberately **not** allowed:
 
@@ -129,6 +128,8 @@ cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions
 | Datadog intake hosts | No telemetry (also disabled via `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`) |
 
 ### 2. Create read-only service accounts
+
+Only for the services you use.
 
 - **Grafana:** Administration → Users and access → Service accounts → create an account with role **Viewer** → *Add service account token*.
 - **Graylog:** create a dedicated user with a read-only role, then System → Users and Teams → *Tokens* → create an API token. Enable MCP in Graylog's settings.
@@ -170,6 +171,7 @@ Open the printed URL in a browser, sign in, and paste the code shown in the brow
 
 ```bash
 read -rsp 'Claude token: '  T && printf '%s' "$T" | tr -d '[:space:]' | podman secret create claude_oauth -; echo
+# only with GRAFANA_URL / GRAYLOG_URL:
 read -rsp 'Grafana token: ' T && printf '%s' "$T" | podman secret create grafana_sa -; echo
 read -rsp 'Graylog token: ' T && printf '%s:token' "$T" | base64 -w0 | podman secret create graylog_basic -; echo
 unset T
@@ -180,7 +182,13 @@ The Graylog secret is `base64("<token>:token")`, the literal word `token` is the
 
 ### 6. Register the MCP servers
 
-Arguments after the repo path are passed to `claude`, so this works from outside:
+Arguments after the repo path are passed to `claude`, so this works from outside. Context7 is part of every setup (see [Documentation (Context7)](#documentation-context7)):
+
+```bash
+./run.sh ~/src/myrepo mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
+```
+
+Grafana and Graylog only if you configured them.
 
 The Grafana sidecar requires a bearer token from its callers. `run.sh` generates it on the first run as the `grafana_mcp_caller` secret, so run `run.sh` once before this step. This token is not a Grafana credential: it only lets the caller talk to the sidecar, so storing it in Claude's config inside the box is fine.
 
@@ -207,10 +215,10 @@ There is no separate Prometheus server: `mcp-grafana` includes tools for queryin
 
 Inside the session:
 
-- `/mcp` shows `grafana` and `graylog` as connected.
+- `/mcp` shows the registered servers (`grafana`, `graylog`, ...) as connected.
 - Ask Claude to run `curl -sI https://example.com`. Expected: **403** from squid.
 - Ask Claude to run `env | grep -iE 'token|key|pass'`. Expected: only `CLAUDE_CODE_OAUTH_TOKEN`.
-- Ask for the latest errors from Graylog and the `up` status of Prometheus targets to confirm the MCP servers reach their backends.
+- If configured: ask for the latest errors from Graylog and the `up` status of Prometheus targets to confirm the MCP servers reach their backends.
 
 ## GitHub (MCP)
 
@@ -299,19 +307,15 @@ Leaving it off and asking the agent to read public repositories through the GitH
 
 ## Documentation (Context7)
 
-The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. `agents/AGENTS.md` tells both agents to look there first.
+The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. The `agents/AGENTS.md` template tells both agents to look there first.
 
 ### Register
 
-`mcp.context7.com` is in `squid.conf`. After pulling this change, restart squid once, then register the server:
+Context7 is always on: `mcp.context7.com` is in `squid.conf`, Claude Code registers it in [setup step 6](#6-register-the-mcp-servers), and pi always gets it in the MCP config `run.sh` generates. Check it with:
 
 ```bash
-AB_RESTART=1 ./run.sh ~/src/myrepo -p "say ok"
-./run.sh ~/src/myrepo mcp add --scope user --transport http context7 https://mcp.context7.com/mcp
 ./run.sh ~/src/myrepo mcp get context7      # expect: Connected
 ```
-
-pi gets it from `pi/mcp.json`; nothing to register.
 
 No API key is used: the anonymous tier has lower rate limits but needs no secret. If the limits get in the way, put the key in an nginx sidecar the way Graylog's token is handled, so it never enters the agent container.
 
@@ -320,14 +324,6 @@ No API key is used: the anonymous tier has lower rate limits but needs no secret
 - **Queries leave the box.** Library names and questions go to Upstash. Write them as you would a search query, without code or data from the repo.
 - **Documentation is third-party text.** Anyone can add a library to Context7, so its content is a prompt injection source, like PyPI or public GitHub.
 - **A planted key is a write path.** Context7 accepts bearer keys. As with the other allowlisted APIs (see [Security model](#security-model)), a key planted through prompt injection would send queries to someone else's account.
-
-### Disable
-
-```bash
-./run.sh ~/src/myrepo mcp remove --scope user context7
-```
-
-Remove the `context7` entry from `pi/mcp.json` and the `mcp.context7.com` line from `squid.conf`, then `AB_RESTART=1 ./run.sh`.
 
 ## pi (OpenAI)
 
@@ -354,7 +350,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 3. The browser is then redirected to `http://127.0.0.1:1455/auth/callback?...` and shows a connection error: the callback listener runs inside the container, not on your host. That is expected. **Copy the full URL from the address bar** and paste it into pi's prompt.
 4. pi stores the tokens in `~/.pi/agent/auth.json` in `ab-pi-home` and refreshes them itself; this is needed once per box, not per repo.
 5. Pick an `openai/...` model with `/model` and press `Ctrl+S` to make it the default.
-6. Check MCP with `/mcp`. If you do not use the GitHub MCP sidecar, remove the `github` entry from `pi/mcp.json`.
+6. Check MCP with `/mcp`: it lists the services enabled in `config.env` (and GitHub if its secret exists), plus Context7.
 
 **The token is readable by the agent**, as the Claude OAuth token is for Claude Code: pi has to write and refresh it, so it cannot be hidden in a sidecar. To revoke it, run `/logout` in pi and end the session in your ChatGPT account's security settings.
 
@@ -376,7 +372,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 | Host file | In the container | Purpose |
 |---|---|---|
 | `pi/models.json` | `~/.pi/agent/models.json` | OpenAI API endpoint = the sidecar (API-key mode) |
-| `pi/mcp.json` | `~/.pi/agent/mcp.json` | Grafana, Graylog, GitHub MCP sidecars, with caller tokens from env |
+| generated by `run.sh` | `~/.pi/agent/mcp.json` | MCP servers of the enabled services (Grafana, Graylog, GitHub) and Context7, with caller tokens from env |
 | `skills/` | `~/.pi/agent/skills` | Same personal skills as Claude Code |
 | `agents/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Same personal instructions as Claude Code, see [Memory and personal instructions](#memory-and-personal-instructions) |
 | `pi/extensions/` | `~/.pi/agent/extensions` | Extensions you allow (empty by default) |
@@ -675,8 +671,8 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | Variable | Default | Meaning |
 |---|---|---|
 | `AB_CONFIG` | `<script dir>/config.env` | Settings file. All variables in this table except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE` can be set there |
-| `GRAFANA_URL` | none, required | Grafana base URL |
-| `GRAYLOG_URL` | none, required | Graylog base URL |
+| `GRAFANA_URL` | unset | Grafana base URL; enables the Grafana MCP sidecar (needs the `grafana_sa` secret) |
+| `GRAYLOG_URL` | unset | Graylog base URL; enables the Graylog MCP sidecar (needs the `graylog_basic` secret) |
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | GitHub MCP toolsets, enforced by nginx |
@@ -695,6 +691,8 @@ Sidecars are started once and reused. After changing their configuration:
 AB_RESTART=1 ./run.sh .
 ```
 
+Turning a service off (removing `GRAFANA_URL` or `GRAYLOG_URL`, or the `github_pat` secret) stops starting its sidecar but leaves a running one alone. Remove it with `podman rm -f ab-mcp-grafana` (or `ab-mcp-graylog`, `ab-mcp-github ab-mcp-github-srv`), and unregister the server in Claude Code with `mcp remove --scope user <name>`.
+
 ## Troubleshooting
 
 ```bash
@@ -709,7 +707,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `missing podman secrets` | Step 5 not done. |
+| `missing podman secrets` | Step 5 not done for the agent or a service enabled in `config.env`. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host to `squid.conf`, then `AB_RESTART=1`. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
@@ -720,7 +718,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json` is mounted only when the `openai_api_key` secret exists. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
 | pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
-| pi: MCP server `failed` in `/mcp` | Same checks as for Claude Code: sidecar logs. For `github`, the GitHub MCP sidecar is optional; remove the entry from `pi/mcp.json` if you don't use it. |
+| pi: MCP server `failed` in `/mcp` | Same checks as for Claude Code: sidecar logs. pi lists only enabled services, so a failed one has a sidecar that should be running. |
 | `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `PYTHON_VERSIONS` in `Containerfile` and `AB_UPGRADE=1 ./run.sh`. |
 | Sidecar can't resolve Grafana/Graylog | Internal DNS not visible to containers. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
 | `/mcp` shows a server as failed | Check `podman logs` of the sidecar. |

@@ -20,8 +20,8 @@
 # Settings / environment overrides:
 #   AB_CONFIG         path of the config file (default: <script dir>/config.env)
 #   AB_AGENT          claude (default) or pi
-#   GRAFANA_URL       Grafana base URL used by the Grafana MCP sidecar (required)
-#   GRAYLOG_URL       Graylog base URL used by the Graylog auth sidecar (required)
+#   GRAFANA_URL       Grafana base URL; enables the Grafana MCP sidecar (optional)
+#   GRAYLOG_URL       Graylog base URL; enables the Graylog MCP sidecar (optional)
 #   GH_TOOLSETS       GitHub MCP toolsets (default: context,repos,issues,pull_requests,actions)
 #   AB_UPDATE=1       force an update of the agent before starting
 #   AB_UPDATE_EVERY   minimum seconds between automatic updates (default: 6h)
@@ -109,19 +109,19 @@ fi
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-missing_cfg=()
-[[ -n "${GRAFANA_URL:-}" ]] || missing_cfg+=(GRAFANA_URL)
-[[ -n "${GRAYLOG_URL:-}" ]] || missing_cfg+=(GRAYLOG_URL)
-if (( ${#missing_cfg[@]} )); then
-  echo "error: not configured: ${missing_cfg[*]}" >&2
-  echo "       set them in $CONFIG_FILE (see config.env.example) or in the environment" >&2
-  exit 2
-fi
+# Optional services. Grafana and Graylog are enabled by their URL, GitHub by
+# its github_pat secret; a disabled service gets no sidecar, no secrets and no
+# entry in pi's MCP config.
+GRAFANA_ON=""; [[ -n "${GRAFANA_URL:-}" ]] && GRAFANA_ON=1
+GRAYLOG_ON=""; [[ -n "${GRAYLOG_URL:-}" ]] && GRAYLOG_ON=1
+GITHUB_ON="";  podman secret inspect github_pat >/dev/null 2>&1 && GITHUB_ON=1
 GH_TOOLSETS="${GH_TOOLSETS:-context,repos,issues,pull_requests,actions}"
 
 # Normalize base URLs: GRAYLOG_URL must be the Graylog base URL, the nginx
 # sidecar appends /api/mcp itself. Accept common mistakes like a trailing
 # slash or a URL that already ends in /api or /api/mcp.
+GRAYLOG_URL="${GRAYLOG_URL:-}"
+GRAFANA_URL="${GRAFANA_URL:-}"
 GRAYLOG_URL="${GRAYLOG_URL%/}"
 GRAYLOG_URL="${GRAYLOG_URL%/api/mcp}"
 GRAYLOG_URL="${GRAYLOG_URL%/api}"
@@ -173,10 +173,14 @@ AGENT_BIN="$AGENT_PREFIX/bin/$AGENT"
 STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.$AGENT.updated"
 
 # ---------------------------------------------------------------------------
-# Preflight: required secrets must exist (see README, step 5)
+# Preflight: secrets of the agent and of every enabled service must exist
+# (see README, step 5)
 # ---------------------------------------------------------------------------
+needed=(${AGENT_SECRETS[@]+"${AGENT_SECRETS[@]}"})
+[[ -n "$GRAFANA_ON" ]] && needed+=(grafana_sa)
+[[ -n "$GRAYLOG_ON" ]] && needed+=(graylog_basic)
 missing=()
-for s in ${AGENT_SECRETS[@]+"${AGENT_SECRETS[@]}"} grafana_sa graylog_basic; do
+for s in ${needed[@]+"${needed[@]}"}; do
   podman secret inspect "$s" >/dev/null 2>&1 || missing+=("$s")
 done
 if (( ${#missing[@]} )); then
@@ -194,7 +198,8 @@ ensure_caller_secret() {  # <secret name> [hint]
   return 0
 }
 
-ensure_caller_secret grafana_mcp_caller "re-register the grafana MCP server (README, step 6)"
+[[ -n "$GRAFANA_ON" ]] \
+  && ensure_caller_secret grafana_mcp_caller "re-register the grafana MCP server (README, step 6)"
 
 # ---------------------------------------------------------------------------
 # Networks
@@ -264,7 +269,10 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   echo "agentbox: upgrading images..." >&2
-  for img in "$IMG_SQUID" "$IMG_GRAFANA" "$IMG_NGINX" "$IMG_GITHUB"; do
+  upgrade_images=("$IMG_SQUID" "$IMG_NGINX")
+  [[ -n "$GRAFANA_ON" ]] && upgrade_images+=("$IMG_GRAFANA")
+  [[ -n "$GITHUB_ON" ]] && upgrade_images+=("$IMG_GITHUB")
+  for img in "${upgrade_images[@]}"; do
     podman pull -q "$img" >/dev/null
   done
   podman build --pull --no-cache "${build_args[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
@@ -386,38 +394,44 @@ start_sidecar ab-egress \
   -v "$SCRIPT_DIR/squid.conf:/etc/squid/squid.conf:ro,Z" \
   "$IMG_SQUID"
 
-# Grafana MCP: the service account token exists only in this container.
+# Grafana MCP (optional, GRAFANA_URL): the service account token exists only
+# in this container.
 #   MCP_GRAFANA_SERVER_TOKEN   callers must send "Authorization: Bearer <token>"
 #   GRAFANA_USAGE_STATS        no anonymous usage reporting to Grafana Labs
 #   --allowed-hosts            DNS-rebinding protection: only accept the Host
 #                              header the Claude container sends
 #   --disable-write            no write operations to Grafana, on top of the
 #                              Viewer role of the service account
-start_sidecar ab-mcp-grafana \
-  --network ab-internal --network ab-egress \
-  -e GRAFANA_URL="$GRAFANA_URL" \
-  -e GRAFANA_USAGE_STATS=disabled \
-  --secret grafana_sa,type=env,target=GRAFANA_SERVICE_ACCOUNT_TOKEN \
-  --secret grafana_mcp_caller,type=env,target=MCP_GRAFANA_SERVER_TOKEN \
-  "$IMG_GRAFANA" \
-  -t streamable-http --address 0.0.0.0:8000 \
-  --allowed-hosts ab-mcp-grafana:8000,ab-mcp-grafana \
-  --disable-write
+if [[ -n "$GRAFANA_ON" ]]; then
+  start_sidecar ab-mcp-grafana \
+    --network ab-internal --network ab-egress \
+    -e GRAFANA_URL="$GRAFANA_URL" \
+    -e GRAFANA_USAGE_STATS=disabled \
+    --secret grafana_sa,type=env,target=GRAFANA_SERVICE_ACCOUNT_TOKEN \
+    --secret grafana_mcp_caller,type=env,target=MCP_GRAFANA_SERVER_TOKEN \
+    "$IMG_GRAFANA" \
+    -t streamable-http --address 0.0.0.0:8000 \
+    --allowed-hosts ab-mcp-grafana:8000,ab-mcp-grafana \
+    --disable-write
+fi
 
-# Graylog MCP: nginx injects the Authorization header, Claude never sees the token.
-start_sidecar ab-mcp-graylog \
-  --network ab-internal --network ab-egress \
-  -e GRAYLOG_URL="$GRAYLOG_URL" \
-  --secret graylog_basic,type=env,target=GRAYLOG_BASIC \
-  -v "$SCRIPT_DIR/graylog-mcp.conf.template:/etc/nginx/templates/default.conf.template:ro,Z" \
-  "$IMG_NGINX"
+# Graylog MCP (optional, GRAYLOG_URL): nginx injects the Authorization header,
+# Claude never sees the token.
+if [[ -n "$GRAYLOG_ON" ]]; then
+  start_sidecar ab-mcp-graylog \
+    --network ab-internal --network ab-egress \
+    -e GRAYLOG_URL="$GRAYLOG_URL" \
+    --secret graylog_basic,type=env,target=GRAYLOG_BASIC \
+    -v "$SCRIPT_DIR/graylog-mcp.conf.template:/etc/nginx/templates/default.conf.template:ro,Z" \
+    "$IMG_NGINX"
+fi
 
 # GitHub MCP (optional): enabled only if the github_pat secret exists.
 #   ab-mcp-github-srv  github-mcp-server, ab-egress only, so Claude can't reach
 #                      it directly; it has no token of its own
 #   ab-mcp-github      nginx on both networks: checks the caller token, injects
 #                      the PAT and pins toolsets/lockdown (github-mcp.conf.template)
-if podman secret inspect github_pat >/dev/null 2>&1; then
+if [[ -n "$GITHUB_ON" ]]; then
   ensure_caller_secret github_mcp_caller "register the github MCP server (README, GitHub)"
   start_sidecar ab-mcp-github-srv \
     --network ab-egress \
@@ -596,23 +610,61 @@ case "$AGENT" in
     # api.openai.com via squid (ChatGPT subscription, "Sign in with ChatGPT")
     # or through the ab-llm-openai sidecar (API key); tools go through the MCP
     # sidecars.
-    # models.json, mcp.json, skills/ and extensions/ come from the host,
+    # models.json, mcp.json (generated below), skills/ and extensions/ come
+    # from the host,
     # read-only: the agent cannot redirect its model, add MCP servers, or plant
     # extensions (which pi loads and executes) that would persist in ab-pi-home.
     # The caller tokens below only grant access to the sidecars.
     mkdir -p "$SCRIPT_DIR/pi/extensions"
+
+    # pi's MCP config, generated for the enabled services: a fixed file would
+    # list servers whose sidecar does not run, and pi would show them as
+    # failed. ${GRAFANA_MCP_TOKEN} and ${GITHUB_MCP_TOKEN} stay literal; pi
+    # expands them from the environment. Written to a new file and renamed,
+    # so sessions already running keep the version they mounted.
+    mcp_entries=()
+    [[ -n "$GRAFANA_ON" ]] && mcp_entries+=('    "grafana": {
+      "url": "http://ab-mcp-grafana:8000/mcp",
+      "headers": { "Authorization": "Bearer ${GRAFANA_MCP_TOKEN}" },
+      "description": "Grafana dashboards, alerts and Prometheus/Loki queries (read-only)"
+    }')
+    [[ -n "$GRAYLOG_ON" ]] && mcp_entries+=('    "graylog": {
+      "url": "http://ab-mcp-graylog:8080/mcp",
+      "description": "Search and analyse logs in Graylog (read-only)"
+    }')
+    [[ -n "$GITHUB_ON" ]] && mcp_entries+=('    "github": {
+      "url": "http://ab-mcp-github:8080/mcp",
+      "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" },
+      "description": "GitHub pull requests, issues, CI runs and repository contents"
+    }')
+    mcp_entries+=('    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "description": "Current library documentation and code examples, by library and version"
+    }')
+    pi_mcp_dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox"
+    mkdir -p "$pi_mcp_dir"
+    pi_mcp_tmp="$(mktemp "$pi_mcp_dir/pi-mcp.json.XXXXXX")"
+    {
+      printf '{\n  "mcpServers": {\n'
+      sep=""
+      for e in ${mcp_entries[@]+"${mcp_entries[@]}"}; do printf '%s%s' "$sep" "$e"; sep=$',\n'; done
+      printf '\n  }\n}\n'
+    } > "$pi_mcp_tmp"
+    chmod 644 "$pi_mcp_tmp"
+    mv -f "$pi_mcp_tmp" "$pi_mcp_dir/pi-mcp.json"
+
     agent_args+=(
       --entrypoint "$AGENT_BIN"
       -e PI_OFFLINE=1
       -e PI_SKIP_VERSION_CHECK=1
       -e PI_TELEMETRY=0
-      --secret "grafana_mcp_caller,type=env,target=GRAFANA_MCP_TOKEN"
-      -v "$SCRIPT_DIR/pi/mcp.json:/home/node/.pi/agent/mcp.json:ro,z"
+      -v "$pi_mcp_dir/pi-mcp.json:/home/node/.pi/agent/mcp.json:ro,z"
       -v "$SCRIPT_DIR/pi/extensions:/home/node/.pi/agent/extensions:ro,z"
     )
-    if podman secret inspect github_mcp_caller >/dev/null 2>&1; then
-      agent_args+=(--secret "github_mcp_caller,type=env,target=GITHUB_MCP_TOKEN")
-    fi
+    [[ -n "$GRAFANA_ON" ]] \
+      && agent_args+=(--secret "grafana_mcp_caller,type=env,target=GRAFANA_MCP_TOKEN")
+    [[ -n "$GITHUB_ON" ]] \
+      && agent_args+=(--secret "github_mcp_caller,type=env,target=GITHUB_MCP_TOKEN")
     # API-key mode only (openai_api_key secret exists): pi/models.json points
     # the openai provider at the ab-llm-openai sidecar. In subscription mode it
     # must NOT be mounted, or "Sign in with ChatGPT" requests would go to the
