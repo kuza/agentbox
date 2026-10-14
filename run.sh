@@ -32,6 +32,8 @@
 #                     skills before the session (check-updates.sh)
 #   AB_SERVICES       your dev containers the session may reach by name,
 #                     e.g. "redis rabbitmq" (README, Local services)
+#   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
+#                     (default: none); applies on the next build (AB_UPGRADE=1)
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <script dir>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
@@ -70,7 +72,7 @@ WORK_DIR="/work/$(basename "$REPO")"
 # Parsed, not sourced, so it cannot run code, and only the keys below are
 # accepted. A variable already set in the environment wins over the file.
 # ---------------------------------------------------------------------------
-CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES)
+CONFIG_KEYS=(GRAFANA_URL GRAYLOG_URL GH_TOOLSETS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES AB_GRAPHIFY_EXTRAS)
 load_config() {
   local file="$1" line key val n=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -126,6 +128,7 @@ GRAYLOG_URL="${GRAYLOG_URL%/api}"
 GRAFANA_URL="${GRAFANA_URL%/}"
 
 IMAGE="localhost/agentbox"
+build_args=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")
 IMG_SQUID="docker.io/ubuntu/squid:latest"
 IMG_GRAFANA="docker.io/grafana/mcp-grafana:latest"
 IMG_NGINX="docker.io/library/nginx:alpine"
@@ -264,7 +267,7 @@ if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   for img in "$IMG_SQUID" "$IMG_GRAFANA" "$IMG_NGINX" "$IMG_GITHUB"; do
     podman pull -q "$img" >/dev/null
   done
-  podman build --pull --no-cache -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  podman build --pull --no-cache "${build_args[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
   AB_UPDATE=1
   AB_RESTART=1
 fi
@@ -273,7 +276,7 @@ fi
 # Image: tooling only (node, git, ripgrep). Claude Code itself is NOT baked in.
 # Rebuild manually after editing the Containerfile: podman rmi localhost/agentbox
 # ---------------------------------------------------------------------------
-podman image exists "$IMAGE" || podman build -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+podman image exists "$IMAGE" || podman build "${build_args[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
 
 # ---------------------------------------------------------------------------
 # Agent update.

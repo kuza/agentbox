@@ -2,3 +2,4 @@ config.env
 env/
 skills/
 vendor/
+agents/AGENTS.md

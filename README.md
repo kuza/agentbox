@@ -90,7 +90,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `graylog-mcp.conf.template` | nginx config that injects the Graylog auth header |
 | `github-mcp.conf.template` | nginx config for GitHub: caller auth, PAT injection, pinned toolsets |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent |
-| `agents/AGENTS.md` | Optional. Personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
+| `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `sync-skills.sh` | Host-side: vendor a skills repository into `skills/` (flattened) |
@@ -112,6 +112,7 @@ Set your endpoints in `config.env` (base URLs only, without `/api` or `/api/mcp`
 ```bash
 cp config.env.example config.env
 $EDITOR config.env
+cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions for the agents, see Memory and personal instructions
 ```
 
 `config.env` is parsed, not executed, accepts only known keys, and survives updates of `run.sh`. Environment variables override it, and `AB_CONFIG=/path/to/file` points to a different file, e.g. one per environment. Without `GRAFANA_URL` and `GRAYLOG_URL` the script stops with an error.
@@ -424,7 +425,13 @@ The repo is mounted at `/work/<repo dir name>`, which is also the working direct
 
 Claude Code's auto memory is **off by default** in the box: `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` when that key is not set yet, so an explicit choice there is kept. To use it in one project, set `"autoMemoryEnabled": true` in that repo's `.claude/settings.json`.
 
-Instructions that should apply in every repo go in `agents/AGENTS.md` next to `run.sh`. Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.md`, pi as `~/.pi/agent/AGENTS.md` (its global context file). Read-only for the same reason as personal skills (see [Skills](#skills)): written by the agent in its home volume, it would carry over into every future session. Keep the text agent-neutral; name an agent only where a rule is specific to it. Changes apply at the next session start, also when you edit the file from inside a session: the running session keeps the version it started with.
+Instructions that should apply in every repo go in `agents/AGENTS.md` next to `run.sh`. It is yours and ignored by git; start from the template, which has the rules this box relies on (ask before committing, where to look up library documentation):
+
+```bash
+cp agents/AGENTS.md.example agents/AGENTS.md
+```
+
+Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.md`, pi as `~/.pi/agent/AGENTS.md` (its global context file). Read-only for the same reason as personal skills (see [Skills](#skills)): written by the agent in its home volume, it would carry over into every future session. Keep the text agent-neutral; name an agent only where a rule is specific to it. Changes apply at the next session start, also when you edit the file from inside a session: the running session keeps the version it started with.
 
 ## Status line
 
@@ -532,12 +539,7 @@ Things to know:
 
 [graphify](https://github.com/Graphify-Labs/graphify) turns the repo into a queryable knowledge graph. It is a Python CLI plus a `/graphify` skill that calls it, so unlike plain skills it has to be **in the image**: the agent cannot install it from PyPI.
 
-The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras via `GRAPHIFY_EXTRAS`, by default `[terraform]` (tree-sitter-hcl, for `.tf`, `.tfvars` and `.hcl`). To change either, e.g. to add SQL schemas:
-
-```bash
-podman rmi localhost/agentbox
-podman build -t localhost/agentbox --build-arg GRAPHIFY_EXTRAS='[sql,terraform]' -f Containerfile .
-```
+The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras with `AB_GRAPHIFY_EXTRAS` in `config.env` (none by default), e.g. `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. Both take effect on the next build: `AB_UPGRADE=1 ./run.sh`.
 
 ### The skill
 
@@ -679,6 +681,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | GitHub MCP toolsets, enforced by nginx |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
+| `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
