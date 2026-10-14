@@ -1,0 +1,483 @@
+#!/usr/bin/env bash
+# Tests for run.sh (with lib/ and mcp/), check-updates.sh and sync-skills.sh.
+# No podman, network or registry needed: podman, curl and the remote git
+# side are stand-ins (tests/stub/podman, fake curl, local repositories).
+#
+#   tests/run.sh            all tests
+#   tests/run.sh mcp_       tests whose name starts with "mcp_"
+#
+# Each test runs in its own scratch directory with a copy of agentbox's code,
+# never the real config.env, skills/ or vendor/. Needs bash 4+, git, and
+# python3 for the JSON checks (skipped without it).
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
+trap 'rm -rf -- "${WORK:?}"' EXIT
+FILTER="${1:-}"
+PASSED=0; FAILED=0; FAILURES=()
+
+# --- harness ----------------------------------------------------------------
+
+# setup <test name>: T (scratch dir), AB (agentbox copy), STUB_DIR (podman
+# state), REPO (a repo to mount). Writes a minimal config.env.
+setup() {
+  T="$WORK/$1"
+  AB="$T/ab"
+  STUB_DIR="$T/stub"
+  REPO="$T/repo"
+  mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
+  touch "$REPO/.git/config"
+  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" \
+        "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/"
+  mkdir -p "$AB/claude" "$AB/pi"
+  cp "$ROOT/claude/statusline.py" "$AB/claude/" 2>/dev/null || true
+  cp "$ROOT/tests/stub/podman" "$T/bin/podman"
+  chmod +x "$T/bin/podman"
+  printf '%s\n' claude_oauth > "$STUB_DIR/secrets"
+  : > "$AB/config.env"
+  export STUB_DIR
+}
+
+config() { printf '%s\n' "$@" >> "$AB/config.env"; }
+secrets() { printf '%s\n' "$@" >> "$STUB_DIR/secrets"; }
+
+# ab_run [env...] -- [run.sh args...]: run.sh with the stub; output in $T/out,
+# exit status in RC.
+ab_run() {
+  local envs=()
+  while (( $# )) && [[ "$1" != -- ]]; do envs+=("$1"); shift; done
+  [[ "${1:-}" == -- ]] && shift
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+      AB_CHECK_UPDATES=0 ${envs[@]+"${envs[@]}"} \
+      bash "$AB/run.sh" "$REPO" "$@" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+
+# The session's podman run command, one argument per line.
+session_args() {
+  grep -E '^podman run --rm -i' "$STUB_DIR/calls" | tail -1 | tr ' ' '\n'
+}
+started() { awk '{ print $1 }' "$STUB_DIR/running" | sort | paste -sd' ' -; }
+cache() { echo "$T/home/.cache/agentbox/$1"; }
+
+fail() { CURRENT_OK=0; echo "    FAIL: $*"; }
+assert_rc() { [[ "$RC" == "$1" ]] || fail "exit status $RC, expected $1"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
+assert_out() { grep -qE -- "$1" "$T/out" || fail "output lacks /$1/"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
+assert_no_out() { ! grep -qE -- "$1" "$T/out" || fail "output has /$1/"; }
+assert_file_has() { grep -qE -- "$2" "$1" 2>/dev/null || fail "$(basename "$1") lacks /$2/"; }
+assert_file_lacks() { ! grep -qE -- "$2" "$1" 2>/dev/null || fail "$(basename "$1") has /$2/"; }
+assert_eq() { [[ "$1" == "$2" ]] || fail "got '$1', expected '$2'${3:+ ($3)}"; }
+assert_json() {
+  command -v python3 >/dev/null || return 0
+  python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null || fail "$(basename "$1") is not valid JSON"
+}
+json_keys() {  # <file>: mcpServers keys, space-separated
+  python3 -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["mcpServers"]))' "$1"
+}
+
+run_test() {
+  local name="$1"
+  [[ -n "$FILTER" && "$name" != "$FILTER"* ]] && return
+  CURRENT_OK=1
+  echo "  $name"
+  ( "$name" ) > "$WORK/$name.log" 2>&1
+  cat "$WORK/$name.log"
+  if grep -q '^    FAIL' "$WORK/$name.log"; then
+    FAILED=$((FAILED + 1)); FAILURES+=("$name")
+  else
+    PASSED=$((PASSED + 1))
+  fi
+}
+
+# --- run.sh: MCP modules ----------------------------------------------------
+
+test_mcp_default_set() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana graylog github" "GRAFANA_URL=https://grafana.example/" "GRAYLOG_URL=https://graylog.example/api"
+  secrets grafana_sa graylog_basic github_pat
+  ab_run -- -p "fix the test"
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress ab-mcp-github ab-mcp-github-srv ab-mcp-grafana ab-mcp-graylog" "sidecars"
+  assert_out "created secret grafana_mcp_caller"
+  assert_out "created secret github_mcp_caller"
+  local args; args="$(session_args)"
+  grep -qx 'grafana_mcp_caller,type=env,target=AB_MCP_TOKEN_GRAFANA' <<<"$args" || fail "grafana token not passed"
+  grep -qx 'github_mcp_caller,type=env,target=AB_MCP_TOKEN_GITHUB' <<<"$args" || fail "github token not passed"
+  grep -qx 'NO_PROXY=ab-mcp-grafana,ab-mcp-graylog,ab-mcp-github,ab-llm-openai' <<<"$args" || fail "NO_PROXY: $(grep NO_PROXY <<<"$args")"
+  # --mcp-config= right after the image, the user's arguments untouched after it.
+  grep -qE '^podman run --rm -i .* localhost/agentbox --mcp-config=/etc/agentbox/mcp.json -p fix the test$' "$STUB_DIR/calls" \
+    || fail "session command tail: $(grep -o 'localhost/agentbox.*' "$STUB_DIR/calls" | tail -1)"
+  # Module settings reach the sidecars, normalized.
+  grep -q 'GRAFANA_URL=https://grafana.example ' "$STUB_DIR/calls" || fail "GRAFANA_URL not normalized"
+  grep -q 'GRAYLOG_URL=https://graylog.example ' "$STUB_DIR/calls" || fail "GRAYLOG_URL not normalized"
+  assert_json "$(cache mcp-claude.json)"
+  assert_json "$(cache mcp-pi.json)"
+  assert_file_has "$(cache mcp-claude.json)" '"Bearer \$\{AB_MCP_TOKEN_GRAFANA\}"'
+  assert_file_has "$(cache mcp-claude.json)" '"type": "http"'
+  assert_file_has "$(cache squid-mcp.conf)" '^acl allowed dstdomain mcp.context7.com$'
+  if command -v python3 >/dev/null; then
+    assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7 grafana graylog github" "claude servers"
+  fi
+}
+
+test_mcp_pi_gets_same_servers() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example"
+  secrets grafana_sa
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  grep -qE 'localhost/agentbox$' "$STUB_DIR/calls" || fail "pi must get no --mcp-config"
+  session_args | grep -qx -- "$(cache mcp-pi.json):/home/node/.pi/agent/mcp.json:ro,z" || fail "pi mcp.json not mounted"
+  assert_file_has "$(cache mcp-pi.json)" '"description": "Grafana'
+  if command -v python3 >/dev/null; then
+    assert_eq "$(json_keys "$(cache mcp-pi.json)")" "context7 grafana" "pi servers"
+  fi
+}
+
+test_mcp_empty_list_context7_only() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress" "sidecars"
+  session_args | grep -q '^--secret$' && session_args | grep -q 'AB_MCP_TOKEN' && fail "no caller tokens expected"
+  session_args | grep -qx 'NO_PROXY=ab-llm-openai' || fail "NO_PROXY: $(session_args | grep NO_PROXY)"
+  assert_json "$(cache mcp-claude.json)"
+  if command -v python3 >/dev/null; then
+    assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7"
+  fi
+}
+
+test_mcp_missing_secret() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example"
+  ab_run --
+  assert_rc 1
+  assert_out 'missing podman secrets for MCP modules: graylog_basic \(graylog\)'
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "session must not start"
+}
+
+test_mcp_missing_setting() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana"
+  secrets grafana_sa
+  ab_run --
+  assert_rc 2
+  assert_out "MCP module 'grafana' needs GRAFANA_URL"
+}
+
+test_mcp_unknown_module() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana jira"
+  ab_run --
+  assert_rc 2
+  assert_out "no MCP module 'jira'"
+}
+
+test_mcp_invalid_name() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=../etc"
+  ab_run --
+  assert_rc 2
+  assert_out "invalid module name"
+}
+
+test_mcp_local_module_and_override() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/mcp.local/tracker" "$AB/mcp.local/context7"
+  printf '%s\n' 'MCP_DESCRIPTION="Tracker"' 'MCP_URL="https://mcp.tracker.example/mcp"' \
+    'MCP_EGRESS=(mcp.tracker.example)' 'MCP_CONFIG=(TRACKER_SITE)' > "$AB/mcp.local/tracker/mcp.sh"
+  printf '%s\n' 'MCP_DESCRIPTION="Docs mirror"' 'MCP_URL="https://docs.internal.example/mcp"' \
+    'MCP_EGRESS=(docs.internal.example)' > "$AB/mcp.local/context7/mcp.sh"
+  config "AB_MCP=tracker" "TRACKER_SITE=acme"
+  ab_run --
+  assert_rc 0
+  assert_no_out "unknown key 'TRACKER_SITE'"
+  assert_file_has "$(cache squid-mcp.conf)" 'dstdomain mcp.tracker.example$'
+  assert_file_has "$(cache squid-mcp.conf)" 'dstdomain docs.internal.example$'
+  assert_file_lacks "$(cache squid-mcp.conf)" 'mcp.context7.com'
+  assert_file_has "$(cache mcp-claude.json)" 'https://docs.internal.example/mcp'
+}
+
+test_mcp_config_keys_of_disabled_module_warn() {
+  setup "${FUNCNAME[0]}"
+  config "GRAFANA_URL=https://grafana.example" "NO_SUCH_KEY=1"
+  ab_run --
+  assert_rc 0
+  assert_out "unknown key 'GRAFANA_URL'"
+  assert_out "unknown key 'NO_SUCH_KEY'"
+}
+
+test_mcp_egress_recreated_only_on_change() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "egress not started"
+  ab_run --
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" && fail "egress recreated without a change"
+  mkdir -p "$AB/mcp.local/extra"
+  printf '%s\n' 'MCP_URL="https://extra.example/mcp"' 'MCP_EGRESS=(extra.example)' > "$AB/mcp.local/extra/mcp.sh"
+  config "AB_MCP=extra"
+  ab_run --
+  grep -q '^podman rm -f ab-egress' "$STUB_DIR/calls" || fail "egress not recreated after the host list changed"
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "egress not started again"
+}
+
+test_mcp_old_registrations_passed_for_cleanup() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github"
+  secrets github_pat
+  ab_run --
+  assert_rc 0
+  # The managed list (name and URL per line) goes to the home preparation.
+  grep -q 'AB_MCP_MANAGED=context7 https://mcp.context7.com/mcp' "$STUB_DIR/calls" || fail "managed list missing"
+  grep -q '^github http://ab-mcp-github:8080/mcp' "$STUB_DIR/calls" || fail "github not in the managed list"
+}
+
+test_mcp_upgrade_pulls_module_images() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
+  ab_run AB_UPGRADE=1 --
+  assert_rc 0
+  grep -q '^podman pull -q docker.io/grafana/mcp-grafana:latest' "$STUB_DIR/calls" || fail "grafana image not pulled"
+  grep -q '^podman pull -q ghcr.io/github/github-mcp-server' "$STUB_DIR/calls" && fail "github image pulled while disabled"
+}
+
+# --- run.sh: other parts ----------------------------------------------------
+
+test_session_basics() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/env" "$AB/agents"
+  echo "DB=x" > "$AB/env/repo.env"
+  echo "# rules" > "$AB/agents/AGENTS.md"
+  ab_run --
+  assert_rc 0
+  local args; args="$(session_args)"
+  grep -qx -- "$REPO:/work/repo:z" <<<"$args" || fail "repo not mounted at /work/repo"
+  grep -qx -- "$REPO/.git/hooks:/work/repo/.git/hooks:ro,z" <<<"$args" || fail ".git/hooks not read-only"
+  grep -qx -- "$REPO/.git/config:/work/repo/.git/config:ro,z" <<<"$args" || fail ".git/config not read-only"
+  grep -qx -- "$AB/env/repo.env" <<<"$args" || fail "env file not passed"
+  grep -qx -- "$AB/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "AGENTS.md not mounted"
+  grep -qx -- '--cap-drop=ALL' <<<"$args" || fail "capabilities not dropped"
+}
+
+test_refuses_agentbox_dir() {
+  setup "${FUNCNAME[0]}"
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" PATH="$T/bin:$PATH" bash "$AB/run.sh" "$AB" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 2
+  assert_out "refusing to mount the agentbox directory"
+}
+
+test_missing_agent_secret() {
+  setup "${FUNCNAME[0]}"
+  : > "$STUB_DIR/secrets"
+  ab_run --
+  assert_rc 1
+  assert_out "missing podman secrets: claude_oauth"
+}
+
+test_graphify_skill_installed_and_refreshed() {
+  setup "${FUNCNAME[0]}"
+  ab_run STUB_GRAPHIFY=ok --
+  assert_rc 0
+  [[ -f "$AB/skills/graphify/SKILL.md" ]] || fail "claude variant not installed"
+  [[ -f "$AB/vendor/graphify/pi/graphify/SKILL.md" ]] || fail "pi variant not installed"
+  assert_eq "$(cat "$AB/skills/graphify/.agentbox-image" 2>/dev/null)" "img-1" "stamp"
+  ab_run STUB_GRAPHIFY=ok --
+  grep -q 'graphify install' "$STUB_DIR/calls" && fail "reinstalled for the same image"
+  ab_run STUB_GRAPHIFY=ok STUB_IMAGE_ID=img-2 --
+  grep -q 'graphify install' "$STUB_DIR/calls" || fail "not reinstalled for a new image"
+}
+
+test_graphify_failure_does_not_stop_session() {
+  setup "${FUNCNAME[0]}"
+  ab_run STUB_GRAPHIFY=fail --
+  assert_rc 0
+  assert_out "could not extract the graphify skill"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "session did not start"
+}
+
+test_graphify_foreign_skill_left_alone() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/skills/graphify"
+  echo mine > "$AB/skills/graphify/SKILL.md"
+  ab_run STUB_GRAPHIFY=ok --
+  assert_rc 0
+  assert_out "was not installed by agentbox"
+  assert_eq "$(cat "$AB/skills/graphify/SKILL.md")" "mine"
+}
+
+# --- check-updates.sh -------------------------------------------------------
+
+# Fake curl: registry answers with the digest in $T/remote_digest (or fails
+# when it is "fail"); fake git ls-remote answers with $T/remote_head.
+cu_setup() {
+  setup "$1"
+  cat > "$T/bin/curl" <<EOF
+#!/usr/bin/env bash
+echo curl >> "$T/net"
+d="\$(cat "$T/remote_digest" 2>/dev/null)"
+[[ "\$d" == fail ]] && exit 7
+printf 'HTTP/1.1 200 OK\r\nDocker-Content-Digest: sha256:%s\r\n' "\$d"
+EOF
+  cat > "$T/bin/git" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == ls-remote ]]; then
+  echo git >> "$T/net"
+  h="\$(cat "$T/remote_head" 2>/dev/null)"; [[ -n "\$h" ]] || exit 1
+  printf '%s\tHEAD\n' "\$h"; exit 0
+fi
+exec "$(command -v git)" "\$@"
+EOF
+  chmod +x "$T/bin/curl" "$T/bin/git"
+  echo "ab-mcp-grafana docker.io/grafana/mcp-grafana:latest" > "$STUB_DIR/running"
+  echo "my-redis docker.io/library/redis:7" >> "$STUB_DIR/running"
+  echo "docker.io/grafana/mcp-grafana:latest sha256:aaa" > "$STUB_DIR/digests"
+  echo aaa > "$T/remote_digest"
+  mkdir -p "$AB/vendor"
+}
+
+cu_run() {  # [args...]
+  : > "$T/net"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+      bash "$AB/check-updates.sh" "$@" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+net_calls() { wc -l < "$T/net" | tr -d ' '; }
+
+test_updates_all_current_sets_stamp() {
+  cu_setup "${FUNCNAME[0]}"
+  cu_run --if-due
+  assert_rc 0
+  assert_eq "$(cat "$T/out")" "" "output"
+  [[ -f "$T/home/.cache/agentbox.updates.checked" ]] || fail "stamp not set"
+  cu_run --if-due
+  assert_eq "$(net_calls)" 0 "network calls within the interval"
+  cu_run
+  [[ "$(net_calls)" -gt 0 ]] || fail "a manual run must check"
+}
+
+test_updates_new_image_reported() {
+  cu_setup "${FUNCNAME[0]}"
+  echo bbb > "$T/remote_digest"
+  cu_run --if-due
+  assert_out "update available: image docker.io/grafana/mcp-grafana:latest"
+  assert_no_out "redis"
+  assert_out "run .*check-updates.sh in a terminal"
+  [[ -f "$T/home/.cache/agentbox.updates.checked" ]] && fail "stamp set although an update is pending"
+}
+
+test_updates_stale_container_reported() {
+  cu_setup "${FUNCNAME[0]}"
+  echo "ab-mcp-grafana old-id" > "$STUB_DIR/container_images"
+  cu_run
+  assert_out "container ab-mcp-grafana runs an older image"
+}
+
+test_updates_registry_down_warns() {
+  cu_setup "${FUNCNAME[0]}"
+  echo fail > "$T/remote_digest"
+  cu_run --if-due
+  assert_rc 0
+  assert_out "could not check docker.io/grafana/mcp-grafana:latest"
+  [[ -f "$T/home/.cache/agentbox.updates.checked" ]] && fail "stamp set after a failed check"
+}
+
+test_updates_skills_behind() {
+  cu_setup "${FUNCNAME[0]}"
+  printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
+    "SKILLS_ONLY=tdd" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" > "$AB/vendor/acme__skills.sync"
+  printf 'b%.0s' {1..40} > "$T/remote_head"
+  cu_run
+  assert_out "update available: skills from acme__skills, aaaaaaa -> bbbbbbb"
+  assert_out "github.com/acme/skills/compare/aaaaaaa...bbbbbbb"
+}
+
+test_updates_rejects_bad_sync_file() {
+  cu_setup "${FUNCNAME[0]}"
+  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$AB/vendor/evil.sync"
+  cu_run
+  assert_out "evil.sync: bad URL or COMMIT, skipped"
+  assert_eq "$(grep -c git "$T/net")" 0 "git calls for a bad .sync"
+}
+
+# --- sync-skills.sh ---------------------------------------------------------
+
+# A local "remote" repository at $T/src/acme/skills with skills in nested
+# directories, one of them referring to another.
+ss_setup() {
+  setup "$1"
+  local src="$T/src/acme/skills"
+  mkdir -p "$src/eng/review" "$src/eng/tdd" "$src/misc/notes"
+  printf -- '---\nname: review\ndescription: Review.\n---\n\nCall the Skill tool with "tdd".\n' > "$src/eng/review/SKILL.md"
+  printf -- '---\nname: tdd\ndescription: TDD.\n---\n\nRed, green.\n' > "$src/eng/tdd/SKILL.md"
+  printf -- '---\nname: notes\ndescription: Notes.\n---\n' > "$src/misc/notes/SKILL.md"
+  git -C "$src" init -q -b main
+  git -C "$src" -c user.name=t -c user.email=t@t add -A
+  git -C "$src" -c user.name=t -c user.email=t@t commit -q -m init
+  SRC="$src"
+}
+
+ss_run() {  # [env...]
+  env HOME="$T/home" "$@" bash "$AB/sync-skills.sh" "$SRC" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+
+test_sync_prefix_and_note() {
+  ss_setup "${FUNCNAME[0]}"
+  ss_run SKILLS_ONLY=review,tdd
+  assert_rc 0
+  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "acme-review acme-tdd"
+  assert_file_has "$AB/skills/acme-review/SKILL.md" '^name: acme-review$'
+  assert_file_has "$AB/skills/acme-review/SKILL.md" 'Installed with a prefix'
+  assert_file_has "$AB/skills/acme-review/SKILL.md" '\(`review`, `tdd`\)'
+  # The skill's own text is not rewritten.
+  assert_file_has "$AB/skills/acme-review/SKILL.md" 'Skill tool with "tdd"'
+  assert_file_has "$AB/vendor/acme__skills.sync" '^SKILLS_ONLY=review,tdd$'
+  assert_file_has "$AB/vendor/acme__skills.sync" '^COMMIT=[0-9a-f]{40}$'
+}
+
+test_sync_deselect_and_prefix_change() {
+  ss_setup "${FUNCNAME[0]}"
+  ss_run SKILLS_ONLY=review,tdd
+  ss_run SKILLS_ONLY=tdd SKILLS_PREFIX=x
+  assert_rc 0
+  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "x-tdd"
+  ss_run SKILLS_ONLY=tdd SKILLS_PREFIX=
+  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "tdd"
+  assert_file_lacks "$AB/skills/tdd/SKILL.md" 'Installed with a prefix'
+}
+
+test_sync_refuses_foreign_skill() {
+  ss_setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/skills/acme-tdd"
+  echo mine > "$AB/skills/acme-tdd/SKILL.md"
+  ss_run SKILLS_ONLY=tdd
+  assert_rc 1
+  assert_out "was not installed from acme__skills; not overwriting"
+  assert_eq "$(cat "$AB/skills/acme-tdd/SKILL.md")" "mine"
+}
+
+test_sync_bad_prefix() {
+  ss_setup "${FUNCNAME[0]}"
+  ss_run SKILLS_PREFIX=Bad
+  assert_rc 1
+  assert_out "must be lowercase"
+}
+
+# --- main -------------------------------------------------------------------
+
+echo "agentbox tests ($WORK)"
+for t in $(declare -F | awk '{ print $3 }' | grep '^test_'); do
+  run_test "$t"
+done
+echo
+echo "$PASSED passed, $FAILED failed"
+if (( FAILED )); then
+  printf '  %s\n' "${FAILURES[@]}"
+  exit 1
+fi

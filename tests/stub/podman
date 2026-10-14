@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Stand-in for podman in the tests. Every call is appended to $STUB_DIR/calls,
+# one line per call. State lives in files under $STUB_DIR, which the tests
+# prepare and inspect:
+#   secrets       podman secrets that exist, one name per line
+#   running       running containers: "<name> <image>" per line
+#   labels        "<container> <key>=<value>" per line
+#   digests       "<image> <digest>" per line: local RepoDigests
+#   image_ids     "<image> <id>" per line; missing images get "id-<image>"
+#   container_images  "<container> <image id>" per line; default: image's id
+# Environment:
+#   STUB_IMAGE_ID   ID of localhost/agentbox (default: img-1)
+#   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
+set -u
+S="${STUB_DIR:?}"
+touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images"
+printf '%s\n' "podman $*" >> "$S/calls"
+
+image_id() {  # <image>
+  local id
+  [[ "$1" == localhost/agentbox ]] && { echo "${STUB_IMAGE_ID:-img-1}"; return; }
+  id="$(awk -v i="$1" '$1 == i { print $2 }' "$S/image_ids")"
+  echo "${id:-id-$1}"
+}
+
+case "$1 ${2:-}" in
+  "secret inspect") grep -qx -- "$3" "$S/secrets" ;;
+  "secret create") cat > /dev/null; echo "$3" >> "$S/secrets" ;;
+  "network exists"|"image exists"|"container exists") exit 0 ;;
+  "network create"|"network connect"|"pull -q"|"build "*|"start "*) exit 0 ;;
+  "image inspect")
+    case "$*" in
+      *RepoDigests*) awk -v i="${*: -1}" '$1 == i { print "x@" $2 }' "$S/digests" ;;
+      *) image_id "${*: -1}" ;;
+    esac ;;
+  "inspect -f"|"inspect --format")
+    name="${*: -1}"
+    case "$3" in
+      *State.Running*) grep -q "^$name " "$S/running" && echo true || echo false ;;
+      *Labels*) key="$(sed -n 's/.*"\([^"]*\)".*/\1/p' <<<"$3")"
+                awk -v n="$name" -v k="$key" '$1 == n { split($2, a, "="); if (a[1] == k) print a[2] }' "$S/labels" ;;
+      *NetworkMode*) echo bridge ;;
+      *Networks*) echo "podman ab-services" ;;
+      *'{{.Image}}'*) id="$(awk -v n="$name" '$1 == n { print $2 }' "$S/container_images")"
+                      if [[ -z "$id" ]]; then
+                        img="$(awk -v n="$name" '$1 == n { print $2 }' "$S/running")"
+                        id="$(image_id "$img")"
+                      fi
+                      echo "$id" ;;
+      *) echo x ;;
+    esac ;;
+  "ps -a") cat "$S/running" ;;
+  "rm -f")
+    shift 2
+    for n in "$@"; do
+      grep -v "^$n " "$S/running" > "$S/running.new"; mv "$S/running.new" "$S/running"
+      grep -v "^$n " "$S/labels" > "$S/labels.new"; mv "$S/labels.new" "$S/labels"
+    done ;;
+  "run -d")
+    # run -d --replace --name <name> [options] <image> [args]: the image is the
+    # first argument after the options that does not start with "-" and is not
+    # an option's value.
+    shift 2
+    name=""; image=""
+    while (( $# )); do
+      case "$1" in
+        --replace) shift ;;
+        --name) name="$2"; shift 2 ;;
+        --label) echo "$name $2" >> "$S/labels"; shift 2 ;;
+        --network|-e|-v|--secret) shift 2 ;;
+        -*) shift ;;
+        *) image="$1"; break ;;
+      esac
+    done
+    grep -v "^$name " "$S/running" > "$S/running.new"; mv "$S/running.new" "$S/running"
+    echo "$name $image" >> "$S/running" ;;
+  "run --rm")
+    if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then
+      out="$(printf '%s\n' "$@" | sed -n 's#^\(.*\):/out:z$#\1#p')"
+      for d in .claude/skills/graphify .pi/agent/skills/graphify; do
+        mkdir -p "$out/$d/references"
+        printf -- '---\nname: graphify\n---\n' > "$out/$d/SKILL.md"
+        echo 0.0.1 > "$out/$d/.graphify_version"
+      done
+    fi
+    exit 0 ;;
+  *) exit 0 ;;
+esac
