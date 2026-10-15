@@ -1,19 +1,31 @@
 # Sidecars. Started once and reused across sessions, so several sessions can
-# run in parallel. Set AB_RESTART=1 to recreate them after changing config.
+# run in parallel. A sidecar is recreated when what it is started with
+# changes: its podman run arguments (settings, labels, image tag) or the
+# content of the files it mounts. Changes nobody can see from here, such as
+# a rotated podman secret, need AB_RESTART=1.
 
 SIDECARS_WANTED=()
 
 start_sidecar() {  # <name> <podman run arguments...>
-  local name="$1"; shift
+  local name="$1" hash arg src
+  shift
   SIDECARS_WANTED+=("$name")
+  hash="$({
+    printf '%s\n' "$@"
+    for arg in "$@"; do
+      src="${arg%%:*}"
+      if [[ "$src" == /* && -f "$src" ]]; then cat -- "$src"; fi
+    done
+  } | sha256sum | cut -c1-16)"
   if [[ "${AB_RESTART:-}" != 1 ]] \
-     && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]]; then
+     && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]] \
+     && [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.config"}}' "$name" 2>/dev/null)" == "$hash" ]]; then
     return 0
   fi
   # -v: with the container's anonymous volumes (squid declares some), which
   # would otherwise stay behind on every recreation.
   podman rm -f -v "$name" >/dev/null 2>&1 || true
-  podman run -d --replace --name "$name" "$@" >/dev/null
+  podman run -d --replace --name "$name" --label "agentbox.config=$hash" "$@" >/dev/null
 }
 
 # Removes agentbox sidecars this start did not ask for: those of MCP modules

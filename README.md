@@ -26,7 +26,7 @@ No host credentials are mounted into the agent container, and all service tokens
 | `ab-claude-<pid>` | `ab-internal` | Claude OAuth token only | Claude Code session, one per run |
 | `ab-egress` | `ab-internal`, `ab-egress` | none | Squid forward proxy with a domain allowlist |
 | `ab-mcp-grafana` | `ab-internal`, `ab-egress` | Grafana service account token | Official `grafana/mcp-grafana`, streamable HTTP on `:8000/mcp`, bearer-token caller auth, Host allowlist, `--disable-write`, usage stats off. Module `grafana` |
-| `ab-mcp-graylog` | `ab-internal`, `ab-egress` | Graylog API token | nginx reverse proxy to Graylog's built-in MCP endpoint, adds `Authorization`. Module `graylog` |
+| `ab-mcp-graylog` | `ab-internal`, `ab-egress` | Graylog API token | nginx reverse proxy to Graylog's built-in MCP endpoint: checks the caller token, replaces it with Graylog's `Authorization`. Module `graylog` |
 | `ab-mcp-github` | `ab-internal`, `ab-egress` | GitHub PAT | nginx: checks the caller token, injects the PAT, pins toolsets and lockdown mode. Module `github` |
 | `ab-llm-openai` | `ab-internal`, `ab-egress` | OpenAI API key | nginx: checks the caller token, injects the API key, forwards to `api.openai.com` with certificate verification. Only for pi in API-key mode |
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Module `github` |
@@ -319,7 +319,7 @@ What the agent can **not** do: `git fetch`/`git push`, or change code on GitHub.
 
 The agent can add MCP registrations of its own in `ab-claude-home`, so server behaviour is enforced in nginx, not in the client config. **The real boundary is still the PAT's permissions.**
 
-Default toolsets: `context,repos,issues,pull_requests,actions`. Override with `GH_TOOLSETS` in `config.env` and restart with `AB_RESTART=1`.
+Default toolsets: `context,repos,issues,pull_requests,actions`. Override with `GH_TOOLSETS` in `config.env`; the next start recreates the sidecar.
 
 Lockdown mode hides content in public repositories from users without push access to them. It currently covers reading issues only, so content fetched from public repositories by other tools can still carry prompt injection.
 
@@ -800,16 +800,14 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
-| `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets or the nginx templates. Squid is recreated by itself when `squid.conf`, the egress groups or the modules' hosts change |
+| `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag or mounted files (nginx templates, `squid.conf`, egress hosts) change. Needed after recreating a Podman secret |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
-Sidecars are started once and reused. After changing their configuration:
+Sidecars are started once and reused. The next start recreates a sidecar whose settings, image tag or mounted files changed, and removes those of modules no longer in `AB_MCP`. A recreated Podman secret is not visible to `run.sh`; after one:
 
 ```bash
 AB_RESTART=1 ./run.sh .
 ```
-
-Removing a module from `AB_MCP` stops starting its sidecars and drops it from the agents' MCP config, but leaves running sidecars alone. Remove them with `podman rm -f ab-mcp-grafana` (or `ab-mcp-graylog`, `ab-mcp-github ab-mcp-github-srv`).
 
 ## Disk space
 
@@ -833,6 +831,18 @@ They need no podman, network or registry: `tests/stub/podman` stands in for podm
 
 Run them after changing `run.sh`, `lib/`, a module in `mcp/`, `check-updates.sh` or `sync-skills.sh`. A new module or setting deserves a test next to the existing ones in `tests/run.sh`.
 
+### Escape checks
+
+`tests/run.sh` checks what `run.sh` asks podman to do, not what a session can actually reach. `tests/escape.sh` does that from the inside: open any repo in a session and have the agent run it, or run it yourself in the session's shell (`! bash /path/to/agentbox/tests/escape.sh`, the agentbox repo opened in the box is simplest).
+
+```bash
+bash tests/escape.sh
+```
+
+It tries what an agent under prompt injection would: direct connections and DNS around the proxy, the host and the network gateways, disallowed hosts, IP addresses and other ports through the proxy, the sidecars through the proxy and without their caller tokens, container runtime sockets, credentials in the home directory and the environment, privileges, and writes to everything mounted read-only. PASS means the attempt failed; FAIL is a hole, and the exit status is 1. WARN lines are not holes by themselves. It changes nothing: connection attempts and reads, plus a scratch file it removes again.
+
+Run it after changes to networks, squid, sidecars or the session's mounts, and on a new host. Not covered yet: another repo's `AB_FORWARD` network, which needs a setup with forwards in two repos.
+
 ## Troubleshooting
 
 ```bash
@@ -855,7 +865,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `AB_GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
 | pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 ./pi.sh`. |
-| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
+| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`. The squid log shows the denied host. |
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json` is mounted only when the `openai_api_key` secret exists. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
 | pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |

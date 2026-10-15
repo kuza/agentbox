@@ -2,11 +2,16 @@
 # Only variables defined in the environment are substituted:
 #   GRAYLOG_URL    Graylog base URL (from run.sh)
 #   GRAYLOG_BASIC  base64("<api-token>:token"), from the podman secret
+#   GRAYLOG_CALLER_TOKEN  the caller token the agent sends, from the podman
+#                  secret graylog_mcp_caller (created by run.sh)
 # nginx's own variables (e.g. $proxy_host) are left untouched.
 server {
     listen 8080;
 
     location = /mcp {
+        if ($http_authorization != "Bearer ${GRAYLOG_CALLER_TOKEN}") {
+            return 401;
+        }
         proxy_pass ${GRAYLOG_URL}/api/mcp;
         proxy_set_header Authorization "Basic ${GRAYLOG_BASIC}";
         proxy_set_header Host $proxy_host;

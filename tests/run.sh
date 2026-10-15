@@ -437,10 +437,42 @@ test_forward_errors() {
   : > "$CFG/config.env"; config "AB_FORWARD=db=x.example:5432"
   ab_run STUB_NO_SOCAT=1 --
   assert_rc 1
-  assert_out "needs socat"
+  assert_out "rebuild the image: AB_UPGRADE=1"
 }
 
 # --- run.sh: other parts ---
+
+test_sidecar_recreated_when_its_setup_changes() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example"
+  secrets graylog_basic
+  ab_run --
+  ab_run --
+  run_line ab-mcp-graylog && fail "recreated without a change"
+  # A changed setting reaches the sidecar only through a new container.
+  : > "$CFG/config.env"; config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog2.example"
+  ab_run --
+  run_line ab-mcp-graylog | grep -q 'GRAYLOG_URL=https://graylog2.example' || fail "not recreated after its setting changed"
+  # So does a changed file it mounts, such as its nginx template.
+  ab_run --
+  run_line ab-mcp-graylog && fail "recreated without a change"
+  echo "# changed" >> "$AB/mcp/graylog/nginx.conf.template"
+  ab_run --
+  run_line ab-mcp-graylog >/dev/null || fail "not recreated after its template changed"
+  run_line ab-egress && fail "squid recreated although nothing of it changed"
+}
+
+test_mcp_graylog_checks_caller_token() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example"
+  secrets graylog_basic
+  ab_run --
+  assert_rc 0
+  assert_out "created secret graylog_mcp_caller"
+  run_line ab-mcp-graylog | grep -q -- '--secret graylog_mcp_caller,type=env,target=GRAYLOG_CALLER_TOKEN' || fail "token not given to the sidecar"
+  assert_file_has "$(cache mcp-claude.json)" '"Bearer \$\{AB_MCP_TOKEN_GRAYLOG\}"'
+  assert_file_has "$ROOT/mcp/graylog/nginx.conf.template" 'http_authorization != "Bearer \$\{GRAYLOG_CALLER_TOKEN\}"'
+}
 
 test_build_args_from_config() {
   setup "${FUNCNAME[0]}"

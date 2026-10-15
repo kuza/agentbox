@@ -12,8 +12,9 @@
 #                                     the repo's path
 #
 # A name may appear once across both lists and AB_SERVICES. A sidecar is
-# recreated when its target or the agentbox image changes, and removed once
-# it is no longer listed; a repo's sidecars only by a start in that repo.
+# recreated when its target or the agentbox image changes (start_sidecar),
+# and removed once it is no longer listed; a repo's sidecars only by a start
+# in that repo.
 #
 # Sourced by run.sh. Provides forward_init, forward_start, forward_cleanup
 # and FORWARD_NET (the session's network arguments), FORWARD_NAMES.
@@ -79,36 +80,28 @@ fwd_label() {  # <index>: which start owns the sidecar
 
 # Creates the networks and starts the sidecars. Run once the image exists.
 forward_start() {
-  local i c net hash image_id socat_checked=""
+  local i c net image_id
   (( ${#FWD_NAMES[@]} )) || return 0
   image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
   for i in "${!FWD_NAMES[@]}"; do
     c="$(fwd_container "$i")"
     if [[ "${FWD_SCOPES[$i]}" == global ]]; then net=ab-forward; else net="ab-fwd-$FWD_KEY"; fi
     podman network exists "$net" || podman network create --internal "$net" >/dev/null
-    hash="$(printf '%s\n' "${FWD_NAMES[$i]}" "${FWD_TARGETS[$i]}" "$image_id" | sha256sum | cut -c1-16)"
-    if [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.forward-config"}}' "$c" 2>/dev/null)" != "$hash" ]]; then
-      podman rm -f -v "$c" >/dev/null 2>&1 || true
-    fi
-    # socat came into the image with this feature; an older image lacks it.
-    if [[ -z "$socat_checked" && ( "${AB_RESTART:-}" == 1 \
-          || "$(podman inspect -f '{{.State.Running}}' "$c" 2>/dev/null)" != true ) ]]; then
-      if ! podman run --rm --network none --entrypoint sh "$IMAGE" -c 'command -v socat' >/dev/null; then
-        echo "error: AB_FORWARD needs socat, which the agentbox image lacks; rebuild it: AB_UPGRADE=1 ./run.sh" >&2
-        exit 1
-      fi
-      socat_checked=1
-    fi
     # Root inside the user namespace (your user on the host) only to bind
-    # ports below 1024; no other capability, read-only.
-    start_sidecar "$c" \
+    # ports below 1024; no other capability, read-only. The image ID label
+    # makes start_sidecar recreate it on a rebuilt image.
+    if ! start_sidecar "$c" \
       --network ab-egress --network "$net:alias=${FWD_NAMES[$i]}" \
       --label "agentbox.forward=$(fwd_label "$i")" \
-      --label "agentbox.forward-config=$hash" \
+      --label "agentbox.image=$image_id" \
       --user=0 --cap-drop=ALL --cap-add=NET_BIND_SERVICE \
       --security-opt=no-new-privileges --read-only \
       --entrypoint=socat "$IMAGE" \
-      "TCP-LISTEN:${FWD_TARGETS[$i]##*:},fork,reuseaddr" "TCP:${FWD_TARGETS[$i]}"
+      "TCP-LISTEN:${FWD_TARGETS[$i]##*:},fork,reuseaddr" "TCP:${FWD_TARGETS[$i]}"; then
+      # socat came into the image with this feature; an older image lacks it.
+      echo "error: could not start $c; if podman says socat is not found, rebuild the image: AB_UPGRADE=1 ./run.sh" >&2
+      exit 1
+    fi
   done
 }
 
