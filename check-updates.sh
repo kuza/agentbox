@@ -33,6 +33,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/images.sh
+source "$SCRIPT_DIR/lib/images.sh"
 TIMEOUT=5
 STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.updates.checked"
 
@@ -130,6 +132,8 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
   if ask "pull new images and recreate the affected sidecars? (open sessions lose MCP until restarted)"; then
     for img in "${!stale[@]}"; do
       say "pulling $img"
+      # The replaced image is removed by run.sh once nothing uses it.
+      image_retire "$img"
       podman pull -q "$img" >/dev/null \
         || { say "warning: pull of $img failed"; outstanding=1; }
     done
@@ -138,7 +142,7 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
       local_id="$(podman image inspect -f '{{.Id}}' "$img" 2>/dev/null)" || continue
       if [[ "$(podman inspect -f '{{.Image}}' "$name" 2>/dev/null)" != "$local_id" ]]; then
         # run.sh recreates it right after this script.
-        podman rm -f "$name" >/dev/null && say "removed $name, recreated on start"
+        podman rm -f -v "$name" >/dev/null && say "removed $name, recreated on start"
       fi
     done
   else

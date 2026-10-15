@@ -228,7 +228,7 @@ test_mcp_egress_recreated_only_on_change() {
   printf '%s\n' 'MCP_URL="https://extra.example/mcp"' 'MCP_EGRESS=(extra.example)' > "$AB/mcp.local/extra/mcp.sh"
   config "AB_MCP=extra"
   ab_run --
-  grep -q '^podman rm -f ab-egress' "$STUB_DIR/calls" || fail "egress not recreated after the host list changed"
+  grep -q '^podman rm -f -v ab-egress' "$STUB_DIR/calls" || fail "egress not recreated after the host list changed"
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "egress not started again"
 }
 
@@ -362,7 +362,7 @@ test_build_args_from_config() {
   config "AB_PYTHON_VERSIONS=3.11 3.13" "AB_GOLANGCI_LINT_VERSION=" "AB_GRAPHIFY_EXTRAS=[terraform]"
   ab_run AB_UPGRADE=1 --
   assert_rc 0
-  local b; b="$(grep '^podman build --pull' "$STUB_DIR/calls")"
+  local b; b="$(grep '^podman build .*--pull' "$STUB_DIR/calls")"
   [[ "$b" == *"--build-arg GRAPHIFY_EXTRAS=[terraform] "* ]] || fail "graphify extras: $b"
   [[ "$b" == *"--build-arg PYTHON_VERSIONS=3.11 3.13 "* ]] || fail "python versions: $b"
   [[ "$b" == *"--build-arg GOLANGCI_LINT_VERSION= "* ]] || fail "empty golangci-lint version not passed: $b"
@@ -371,6 +371,41 @@ test_build_args_from_config() {
   local ctx="${b##* }"
   [[ "$ctx" == "$AB" || "$ctx" == "$AB/" ]] && fail "build context is the agentbox directory"
   [[ -e "$ctx" ]] && fail "build context $ctx left behind"
+  [[ "$b" == *"--layers=false"* ]] || fail "intermediate layers kept: $b"
+}
+
+test_replaced_images_removed() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  grep -q '^podman rmi' "$STUB_DIR/calls" && fail "removed an image without an upgrade"
+  # An upgrade replaces the agentbox image and squid's; nginx stays the same.
+  # An open session still uses the old agentbox image: podman refuses.
+  ab_run AB_UPGRADE=1 STUB_BUILT_ID=img-2 STUB_PULL_NEW="docker.io/ubuntu/squid:latest" STUB_RMI_FAIL=img-1 --
+  assert_rc 0
+  grep -qx 'podman rmi id-docker.io/ubuntu/squid:latest' "$STUB_DIR/calls" || fail "old squid image not removed"
+  grep -q '^podman rmi id-docker.io/library/nginx' "$STUB_DIR/calls" && fail "current nginx image removed"
+  grep -qx 'podman rmi img-1' "$STUB_DIR/calls" || fail "old agentbox image not tried"
+  assert_eq "$(cat "$(cache retired-images)")" "localhost/agentbox img-1" "kept for later"
+  # The next start, with the session gone, removes it.
+  ab_run --
+  grep -qx 'podman rmi img-1' "$STUB_DIR/calls" || fail "old agentbox image not removed later"
+  assert_eq "$(cat "$(cache retired-images)")" "" "list after removal"
+}
+
+test_disabled_sidecars_removed() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana graylog" "GRAFANA_URL=https://g.example" "GRAYLOG_URL=https://l.example"
+  secrets grafana_sa graylog_basic openai_api_key
+  ab_run --
+  assert_eq "$(started)" "ab-egress ab-llm-openai ab-mcp-grafana ab-mcp-graylog" "sidecars"
+  echo "redis docker.io/library/redis:7" >> "$STUB_DIR/running"
+  : > "$AB/config.env"; config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  grep -vx openai_api_key "$STUB_DIR/secrets" > "$STUB_DIR/secrets.new"; mv "$STUB_DIR/secrets.new" "$STUB_DIR/secrets"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress ab-mcp-grafana redis" "after disabling graylog and the OpenAI key"
+  assert_out "removed ab-mcp-graylog, no longer enabled"
+  grep -qx 'podman rm -f -v ab-mcp-graylog' "$STUB_DIR/calls" || fail "anonymous volumes not removed"
 }
 
 test_sidecars_mount_copies_not_repo_files() {

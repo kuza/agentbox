@@ -111,7 +111,7 @@ egress_start() {
   conf="$(sidecar_copy ab-egress "$SCRIPT_DIR/squid.conf")"
   hash="$(cat "$conf" "$EGRESS_SQUID_CONF" | sha256sum | cut -c1-16)"
   if [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.egress"}}' ab-egress 2>/dev/null)" != "$hash" ]]; then
-    podman rm -f ab-egress >/dev/null 2>&1 || true
+    podman rm -f -v ab-egress >/dev/null 2>&1 || true
   fi
   start_sidecar ab-egress \
     --network ab-internal --network ab-egress \

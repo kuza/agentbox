@@ -19,7 +19,9 @@
 #   MCP_IMAGES=()        images AB_UPGRADE pulls
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
-#                        its files through sidecar_copy, never directly.
+#                        its files through sidecar_copy, never directly. Name
+#                        the sidecars ab-mcp-*: run.sh removes such containers
+#                        that no enabled module started.
 #
 # Sourced by run.sh. Provides mcp_init, mcp_check_secrets, mcp_write_configs,
 # mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,

@@ -1,13 +1,32 @@
 # Sidecars. Started once and reused across sessions, so several sessions can
 # run in parallel. Set AB_RESTART=1 to recreate them after changing config.
 
+SIDECARS_WANTED=()
+
 start_sidecar() {  # <name> <podman run arguments...>
   local name="$1"; shift
+  SIDECARS_WANTED+=("$name")
   if [[ "${AB_RESTART:-}" != 1 ]] \
      && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]]; then
     return 0
   fi
+  # -v: with the container's anonymous volumes (squid declares some), which
+  # would otherwise stay behind on every recreation.
+  podman rm -f -v "$name" >/dev/null 2>&1 || true
   podman run -d --replace --name "$name" "$@" >/dev/null
+}
+
+# Removes agentbox sidecars this start did not ask for: those of MCP modules
+# no longer in AB_MCP, ab-llm-openai once its key is gone. Sidecars are named
+# ab-egress, ab-mcp-* or ab-llm-*. A second agentbox setup with another
+# AB_CONFIG on the same host would remove the other's sidecars.
+sidecars_cleanup() {
+  local name wanted=" ${SIDECARS_WANTED[*]} "
+  for name in $(podman ps -a --format '{{.Names}}' | awk '{ print $1 }'); do
+    [[ "$name" == ab-egress || "$name" == ab-mcp-* || "$name" == ab-llm-* ]] || continue
+    [[ "$wanted" == *" $name "* ]] && continue
+    podman rm -f -v "$name" >/dev/null && echo "agentbox: removed $name, no longer enabled" >&2
+  done
 }
 
 # Config files reach sidecars as copies in the cache, never from the repo.

@@ -51,7 +51,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for lib in config agent sidecars mcp egress services skills session; do
+for lib in config images agent sidecars mcp egress services skills session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
@@ -113,18 +113,6 @@ if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
   AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
-# The image is built from an empty context directory: the Containerfile
-# copies nothing in, and the agentbox directory holds config.env, env/
-# (passwords) and skills/, which a build has no reason to receive. A COPY
-# added later fails instead of silently taking them along.
-build_image() {  # [podman build options...]
-  local ctx rc=0
-  ctx="$(mktemp -d)"
-  podman build "$@" "${BUILD_ARGS[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$ctx" || rc=$?
-  rmdir -- "$ctx"
-  return "$rc"
-}
-
 # ---------------------------------------------------------------------------
 # Full upgrade. podman never re-pulls an image it already has, and a cached
 # build never re-runs apt-get, so without this nothing but the agent updates.
@@ -132,8 +120,10 @@ build_image() {  # [podman build options...]
 if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   echo "agentbox: upgrading images..." >&2
   for img in $(printf '%s\n' "$IMG_SQUID" "$IMG_NGINX" ${MCP_IMAGES_ALL[@]+"${MCP_IMAGES_ALL[@]}"} | sort -u); do
+    image_retire "$img"
     podman pull -q "$img" >/dev/null
   done
+  image_retire "$IMAGE"
   build_image --pull --no-cache
   AB_UPDATE=1
   AB_RESTART=1
@@ -152,6 +142,8 @@ egress_write_conf
 egress_start
 mcp_start_all
 openai_start
+sidecars_cleanup
+images_cleanup
 
 skills_prepare
 session_git_env

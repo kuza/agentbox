@@ -10,6 +10,9 @@
 #   container_images  "<container> <image id>" per line; default: image's id
 # Environment:
 #   STUB_IMAGE_ID   ID of localhost/agentbox (default: img-1)
+#   STUB_BUILT_ID   a build gives localhost/agentbox this ID
+#   STUB_PULL_NEW   images (space-separated) a pull replaces: ID new-<image>
+#   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
@@ -18,7 +21,10 @@ printf '%s\n' "podman $*" >> "$S/calls"
 
 image_id() {  # <image>
   local id
-  [[ "$1" == localhost/agentbox ]] && { echo "${STUB_IMAGE_ID:-img-1}"; return; }
+  if [[ "$1" == localhost/agentbox ]]; then
+    [[ -f "$S/agentbox_id" ]] && { cat "$S/agentbox_id"; return; }
+    echo "${STUB_IMAGE_ID:-img-1}"; return
+  fi
   id="$(awk -v i="$1" '$1 == i { print $2 }' "$S/image_ids")"
   echo "${id:-id-$1}"
 }
@@ -27,7 +33,14 @@ case "$1 ${2:-}" in
   "secret inspect") grep -qx -- "$3" "$S/secrets" ;;
   "secret create") cat > /dev/null; echo "$3" >> "$S/secrets" ;;
   "network exists"|"image exists"|"container exists") exit 0 ;;
-  "network create"|"network connect"|"pull -q"|"build "*|"start "*) exit 0 ;;
+  "network create"|"network connect"|"start "*) exit 0 ;;
+  "build "*) [[ -n "${STUB_BUILT_ID:-}" ]] && echo "$STUB_BUILT_ID" > "$S/agentbox_id"; exit 0 ;;
+  "pull -q")
+    if [[ " ${STUB_PULL_NEW:-} " == *" $3 "* ]]; then
+      grep -v "^$3 " "$S/image_ids" > "$S/image_ids.new"; mv "$S/image_ids.new" "$S/image_ids"
+      echo "$3 new-$3" >> "$S/image_ids"
+    fi ;;
+  "rmi "*) [[ " ${STUB_RMI_FAIL:-} " != *" $2 "* ]] ;;
   "image inspect")
     case "$*" in
       *RepoDigests*) awk -v i="${*: -1}" '$1 == i { print "x@" $2 }' "$S/digests" ;;

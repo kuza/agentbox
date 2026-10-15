@@ -270,7 +270,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | `MCP_CALLER_SECRET` | Name of a caller token secret, generated on first use. The agents send `Authorization: Bearer <token>`, the sidecar checks it; in the session it is `AB_MCP_TOKEN_<NAME>` |
 | `MCP_EGRESS=(...)` | Hosts the agent itself connects to (remote servers); they are added to squid's allowlist |
 | `MCP_IMAGES=(...)` | Images `AB_UPGRADE` pulls |
-| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use. Mount the module's files as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read) |
+| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. Name them `ab-mcp-<something>`: `run.sh` removes containers with that prefix that no enabled module started. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use. Mount the module's files as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read) |
 
 A remote server needs three lines, like `mcp/context7/mcp.sh`:
 
@@ -766,6 +766,17 @@ AB_RESTART=1 ./run.sh .
 ```
 
 Removing a module from `AB_MCP` stops starting its sidecars and drops it from the agents' MCP config, but leaves running sidecars alone. Remove them with `podman rm -f ab-mcp-grafana` (or `ab-mcp-graylog`, `ab-mcp-github ab-mcp-github-srv`).
+
+## Disk space
+
+`run.sh` cleans up after itself:
+
+- **Replaced images.** An upgrade (`AB_UPGRADE=1`, or `y` in the update check) leaves the previous agentbox image and sidecar images as `<none>`. The next start removes them once no container uses them; an open session on the old agentbox image keeps it until a later start. The list of pending removals is `~/.cache/agentbox/retired-images`. Builds keep no intermediate images (`--layers=false`), so a failed build starts over.
+- **Sidecars.** Sidecars of MCP modules no longer in `AB_MCP`, and `ab-llm-openai` once its key is gone, are removed on start. Recreated sidecars go with their anonymous volumes (squid declares some).
+
+Images and volumes from before this cleanup existed, or from other projects, are not touched. `podman system df` shows the totals; `podman image prune` removes images without a name, whichever project left them. `podman volume prune` removes unused volumes, in older podman versions named ones too; check `podman volume prune --help` and `podman volume ls --filter dangling=true` first.
+
+The cache volumes grow on purpose, so that sessions do not download the same dependencies again: `ab-cache` (uv cache, Go build cache, per-repo virtualenvs) and `ab-go` (Go modules). With no session running, `podman volume rm ab-cache ab-go` empties them; the next sessions fill them again.
 
 ## Tests
 
