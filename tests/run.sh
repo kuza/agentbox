@@ -626,6 +626,74 @@ test_guard_submodule_passes() {
   assert_rc 0
 }
 
+test_guard_repo_appearing_in_plain_dir() {
+  gg_setup "${FUNCNAME[0]}"
+  mkdir -p "$T/plain"
+  printf '%s\t%s\n' "$T/plain" none >> "$CFG/mounted-repos"
+  gg "$T/plain" --version
+  assert_rc 0
+  # The agent makes the mounted directory a repository with its own config.
+  git init -q "$T/plain"
+  printf '[core]\n\tfsmonitor = "touch %s; false"\n' "$MARK" >> "$T/plain/.git/config"
+  bare_git "$T/plain" status --short
+  [[ -e "$MARK" ]] || fail "control: the attack did not work on plain git"
+  rm -f "$MARK"
+  gg "$T/plain" status --short
+  assert_rc 1
+  assert_out "had none when it was mounted"
+  [[ -e "$MARK" ]] && fail "the agent's command ran"
+}
+
+test_guard_subdirectory_of_repo() {
+  gg_setup "${FUNCNAME[0]}"
+  mkdir -p "$R/sub"
+  # Only the subdirectory was mounted.
+  printf '%s\t%s\n' "$R/sub" "$R/.git" > "$CFG/mounted-repos"
+  gg "$R/sub" status --short
+  assert_rc 0
+  git init -q "$R/sub"
+  printf '[core]\n\tfsmonitor = "touch %s; false"\n' "$MARK" >> "$R/sub/.git/config"
+  gg "$R/sub" status --short
+  assert_rc 1
+  [[ -e "$MARK" ]] && fail "the agent's command ran"
+}
+
+test_guard_worktree_config() {
+  gg_setup "${FUNCNAME[0]}"
+  git -C "$R" sparse-checkout init --cone >/dev/null 2>&1
+  [[ "$(git -C "$R" config --get extensions.worktreeConfig)" == true ]] || fail "setup: sparse-checkout did not enable worktreeConfig"
+  gg "$R" status --short
+  assert_rc 0
+  printf '[core]\n\tfsmonitor = "touch %s; false"\n' "$MARK" >> "$R/.git/config.worktree"
+  bare_git "$R" status --short
+  [[ -e "$MARK" ]] || fail "control: the attack did not work on plain git"
+  rm -f "$MARK"
+  gg "$R" status --short
+  assert_rc 1
+  assert_out "sets core.fsmonitor; only sparse-checkout settings"
+  [[ -e "$MARK" ]] && fail "the agent's command ran"
+}
+
+test_session_records_git_dir_by_kind() {
+  setup "${FUNCNAME[0]}"
+  local main="$T/main" k
+  git init -q -b main "$main"
+  git -C "$main" -c user.name=t -c user.email=t@t commit -q --allow-empty -m i
+  git -C "$main" worktree add -q "$T/wt" 2>/dev/null
+  mkdir -p "$main/sub" "$T/plain"
+  for k in "$REPO" "$T/wt" "$main/sub" "$T/plain"; do
+    REPO="$k"; ab_run --
+    assert_rc 0
+  done
+  REPO="$T/repo"; ab_run --
+  local list="$CFG/mounted-repos"
+  assert_file_has "$list" "^$T/repo	$T/repo/.git\$"
+  assert_file_has "$list" "^$T/wt	$main/.git\$"
+  assert_file_has "$list" "^$main/sub	$main/.git\$"
+  assert_file_has "$list" "^$T/plain	none\$"
+  assert_eq "$(grep -c "^$T/repo	" "$list")" 1 "recorded once"
+}
+
 test_session_protects_git_dir() {
   setup "${FUNCNAME[0]}"
   ab_run --
@@ -633,10 +701,70 @@ test_session_protects_git_dir() {
   local args; args="$(session_args)"
   grep -qx -- "$REPO/.git:/work/repo/.git:z" <<<"$args" || fail ".git not a mount of its own"
   grep -qx -- "$REPO/.git/modules:/work/repo/.git/modules:ro,z" <<<"$args" || fail "modules not read-only"
-  assert_file_has "$CFG/mounted-repos" "^$REPO\$"
+  assert_file_has "$CFG/mounted-repos" "^$REPO	$REPO/.git\$"
   assert_out "git on this host is not git-guard"
   ab_run --
   assert_eq "$(grep -c . "$CFG/mounted-repos")" 1 "repo recorded once"
+}
+
+# --- review 2: smaller fixes ---
+
+test_config_trailing_comments() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana # dashboards" "GRAFANA_URL=\"https://g.example/#frag\"  # quoted, then a comment" \
+         "AB_EGRESS=anthropic pypi	# tab before the comment"
+  secrets grafana_sa
+  ab_run --
+  assert_rc 0
+  assert_no_out "invalid"
+  run_line ab-mcp-grafana | grep -q 'GRAFANA_URL=https://g.example/#frag ' || fail "value with # inside lost: $(run_line ab-mcp-grafana)"
+  assert_file_lacks "$(cache squid-allow.conf)" 'golang'
+}
+
+test_update_every_must_be_a_number() {
+  setup "${FUNCNAME[0]}"
+  local v
+  for v in "x[\$(touch $T/pwned)]" 6h; do
+    : > "$CFG/config.env"; config "AB_UPDATE_EVERY=$v"
+    ab_run --
+    assert_rc 2
+    assert_out "AB_UPDATE_EVERY must be a number of seconds"
+  done
+  [[ -e "$T/pwned" ]] && fail "the expression ran"
+  grep -q '^podman' "$STUB_DIR/calls" && fail "podman called despite the error"
+}
+
+test_updates_every_must_be_a_number() {
+  cu_setup "${FUNCNAME[0]}"
+  touch "$T/home/.cache/agentbox.updates.checked" 2>/dev/null || { mkdir -p "$T/home/.cache"; touch "$T/home/.cache/agentbox.updates.checked"; }
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_UPDATE_EVERY="x[\$(touch $T/pwned)]" \
+      bash "$AB/check-updates.sh" --if-due > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 2
+  [[ -e "$T/pwned" ]] && fail "the expression ran"
+}
+
+test_sync_refuses_odd_skill_names() {
+  ss_setup "${FUNCNAME[0]}"
+  mkdir -p "$SRC/eng/my skill"
+  printf -- '---\nname: x\n---\n' > "$SRC/eng/my skill/SKILL.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m odd
+  ss_run
+  assert_rc 1
+  assert_out "the name must be letters, digits"
+}
+
+test_updates_read_records_like_run_sh() {
+  cu_setup "${FUNCNAME[0]}"
+  local old new
+  old="$(printf 'a%.0s' {1..40})"; new="$(printf 'b%.0s' {1..40})"
+  # A key twice, as after a manual edit: the last one counts, as in run.sh.
+  printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$old" "COMMIT=$new" \
+    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "SOURCE=acme" "REF=" > "$CFG/skills/.sources/acme__skills"
+  echo "$new" > "$T/remote_head"
+  cu_run
+  assert_no_out "update available: skills"
 }
 
 # --- run.sh: other parts ---

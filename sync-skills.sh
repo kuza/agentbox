@@ -62,15 +62,20 @@ SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 slug="$(printf '%s' "$URL" | sed -E 's#(\.git)?/*$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1__\2#')"
 STATE="$SKILLS_DIR/.sources/$slug"
 
+# Skill names become directory names here and in the box, and loop words:
+# letters, digits, ".", "_" and "-", not starting with ".".
+NAME_RE='^[A-Za-z0-9_][A-Za-z0-9._-]*$'
+
 installed_skills() {  # names this repository installed, from its state file
   [[ -f "$STATE" ]] || return 0
   sed -n 's/^SKILL=//p' "$STATE" | while IFS= read -r n; do
-    [[ -n "$n" && "$n" != */* && "$n" != .* ]] && printf '%s\n' "$n"
+    [[ "$n" =~ $NAME_RE ]] && printf '%s\n' "$n"
   done
 }
 
 if [[ -n "$REMOVE" ]]; then
-  for n in $(installed_skills); do
+  mapfile -t listed < <(installed_skills)
+  for n in ${listed[@]+"${listed[@]}"}; do
     rm -rf -- "${SKILLS_DIR:?}/$n"
     echo "removed  $n"
   done
@@ -105,6 +110,10 @@ declare -A src_of=()
 while IFS= read -r -d '' f; do
   dir="$(dirname "$f")"
   name="$(basename "$dir")"
+  if [[ ! "$name" =~ $NAME_RE ]]; then
+    echo "error: skill directory '${dir#"$VENDOR"/}' in $slug: the name must be letters, digits, '.', '_' and '-'" >&2
+    exit 1
+  fi
   if [[ -n "${src_of[$name]:-}" ]]; then
     echo "error: skill name '$name' appears twice in $slug:" >&2
     echo "  ${src_of[$name]#"$VENDOR"/}" >&2
@@ -146,7 +155,8 @@ done
 
 # --- 3. install -------------------------------------------------------------
 declare -A previously=()
-for n in $(installed_skills); do previously[$n]=1; done
+mapfile -t listed < <(installed_skills)
+for n in ${listed[@]+"${listed[@]}"}; do previously[$n]=1; done
 
 # Installed names carry the prefix; the manifest records installed names.
 declare -A target_of=()
@@ -198,7 +208,8 @@ for n in "${!previously[@]}"; do
 done
 
 installed=()
-for n in $(printf '%s\n' "${!wanted[@]}" | sort); do
+mapfile -t listed < <(printf '%s\n' "${!wanted[@]}" | sort)
+for n in "${listed[@]}"; do
   t="${target_of[$n]}"
   rm -rf -- "${SKILLS_DIR:?}/$t"
   cp -R -- "${src_of[$n]}" "$SKILLS_DIR/$t"

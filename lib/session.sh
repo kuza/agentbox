@@ -33,10 +33,15 @@ session_tz() {
 # The rest of .git stays writable for commits, branches and worktrees, and
 # that is not enough on its own: a .git/commondir file, or a worktree's .git
 # file, can point host git at a directory with the agent's config and hooks.
-# git-guard, a git wrapper on the host, refuses those; the repository is
-# recorded in <AB_HOME>/mounted-repos for it (README, Git on the host).
+# git-guard, a git wrapper on the host, refuses those, using the record
+# session_git_record writes (README, Git on the host).
 session_git_mounts() {
   GIT_MOUNTS=()
+  session_git_record
+  if ! grep -qs 'agentbox git-guard' "$(command -v git)"; then
+    echo "agentbox: warning: git on this host is not git-guard; a session can make" \
+         "your next git command in this repo run its code (README, Git on the host)" >&2
+  fi
   if [[ -d "$REPO/.git" ]]; then
     mkdir -p "$REPO/.git/hooks" "$REPO/.git/modules"
     GIT_MOUNTS+=(
@@ -45,13 +50,6 @@ session_git_mounts() {
       -v "$REPO/.git/config:$WORK_DIR/.git/config:ro,z"
       -v "$REPO/.git/modules:$WORK_DIR/.git/modules:ro,z"
     )
-    mkdir -p "$AB_HOME_DIR"
-    grep -qxF -- "$REPO" "$AB_HOME_DIR/mounted-repos" 2>/dev/null \
-      || printf '%s\n' "$REPO" >> "$AB_HOME_DIR/mounted-repos"
-    if ! grep -qs 'agentbox git-guard' "$(command -v git)"; then
-      echo "agentbox: warning: git on this host is not git-guard; a session can make" \
-           "your next git command in this repo run its code (README, Git on the host)" >&2
-    fi
   elif [[ -f "$REPO/.git" ]]; then
     # Its "gitdir:" line tells git on the host where the repository is; the
     # agent must not point it at a directory with a config of its own.
@@ -59,6 +57,45 @@ session_git_mounts() {
     echo "agentbox: warning: $REPO is a git worktree or submodule;" \
          "its git dir is outside the mount, so git will not work inside the container" >&2
   fi
+}
+
+# Records, for git-guard, the mounted directory and the git dir that git on
+# the host may use for anything inside it, worked out from the paths before
+# the session starts, without reading anything a session could have changed
+# (such as a commondir file):
+#   <repo>/.git            the repository's own .git
+#   <main>/.git            a worktree or submodule (its read-only .git file),
+#                          or a directory inside a repository: that one
+#   none                   no repository: any that appears is the agent's
+# One line per directory, "<dir><TAB><git dir>", in <AB_HOME>/mounted-repos.
+session_git_record() {
+  local expected="none" d gitdir list="$AB_HOME_DIR/mounted-repos"
+  d="$REPO"
+  while :; do
+    if [[ -d "$d/.git" ]]; then
+      expected="$d/.git"
+      break
+    elif [[ -f "$d/.git" ]]; then
+      gitdir="$(sed -n 's/^gitdir: *//p' "$d/.git" | head -n1)"
+      [[ "$gitdir" == /* ]] || gitdir="$d/$gitdir"
+      gitdir="$(realpath -m -- "$gitdir")"
+      # A worktree's git dir is <main>/.git/worktrees/<name>; a submodule's
+      # is a repository of its own under <main>/.git/modules.
+      if [[ "$(basename -- "$(dirname -- "$gitdir")")" == worktrees ]]; then
+        expected="$(dirname -- "$(dirname -- "$gitdir")")"
+      else
+        expected="$gitdir"
+      fi
+      break
+    fi
+    [[ "$d" == / ]] && break
+    d="$(dirname -- "$d")"
+  done
+  mkdir -p "$AB_HOME_DIR"
+  {
+    awk -F '\t' -v r="$REPO" '$1 != r' "$list" 2>/dev/null
+    printf '%s\t%s\n' "$REPO" "$expected"
+  } > "$list.tmp" && mv -f -- "$list.tmp" "$list"
 }
 
 # Per-project environment: <env dir>/<repo dir name>.env, if present, goes to

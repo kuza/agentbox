@@ -93,6 +93,12 @@ config_first_pass
 mcp_init
 config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"}
 UPDATE_EVERY="${AB_UPDATE_EVERY:-$((6 * 3600))}"
+# A number of seconds; anything else would be evaluated as an arithmetic
+# expression, which can run commands.
+if [[ ! "$UPDATE_EVERY" =~ ^[0-9]+$ ]]; then
+  echo "error: AB_UPDATE_EVERY must be a number of seconds, got '$UPDATE_EVERY'" >&2
+  exit 2
+fi
 # Image build settings from config.env; unset ones keep the Containerfile's
 # defaults (an empty AB_GO_VERSION or AB_GOLANGCI_LINT_VERSION means latest).
 BUILD_ARGS=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")

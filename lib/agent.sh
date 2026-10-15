@@ -101,7 +101,8 @@ agent_update() {
 #    Claude Code may ignore CLAUDE_CODE_OAUTH_TOKEN during onboarding and show
 #    the browser login picker (anthropics/claude-code#46259). Setting
 #    hasCompletedOnboarding in ~/.claude.json is the documented workaround.
-#    Merges into the existing file, other settings are preserved.
+#    Merges into the existing file, other settings are preserved. A file that
+#    cannot be parsed (damaged, or caught mid-write) is left as it is.
 #
 # 3. Claude Code only: MCP servers registered by hand before the MCP modules
 #    (`claude mcp add`, user scope) would duplicate the modules' servers.
@@ -136,8 +137,12 @@ agent_prepare_home() {
       if [ "$AGENT" = claude ]; then
         node -e "
           const fs = require(\"fs\"), f = \"/home/node/.claude.json\";
-          let c = {}, changed = false;
-          try { c = JSON.parse(fs.readFileSync(f, \"utf8\")); } catch (e) {}
+          let c = {}, changed = false, readable = true;
+          try { c = JSON.parse(fs.readFileSync(f, \"utf8\")); } catch (e) {
+            readable = e.code === \"ENOENT\";
+            if (!readable) console.error(\"agentbox: warning: ~/.claude.json cannot be read (\" + e.message + \"); left as it is\");
+          }
+          if (!readable || !c || typeof c !== \"object\") { c = {}; readable = false; }
           if (c.hasCompletedOnboarding !== true) {
             c.hasCompletedOnboarding = true;
             changed = true;
@@ -151,7 +156,7 @@ agent_prepare_home() {
               console.error(\"agentbox: removed the old \" + name + \" MCP registration, now provided by its module\");
             }
           }
-          if (changed) fs.writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
+          if (changed && readable) fs.writeFileSync(f, JSON.stringify(c, null, 2), { mode: 0o600 });
           const s = \"/home/node/.claude/settings.json\";
           let t = {}, ok = true;
           try { t = JSON.parse(fs.readFileSync(s, \"utf8\")); } catch (e) { ok = e.code === \"ENOENT\"; }

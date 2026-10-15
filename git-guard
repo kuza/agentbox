@@ -10,12 +10,18 @@
 # directory's config and hooks: core.fsmonitor alone runs a command on the
 # next `git status`, which editors run by themselves.
 #
-# For repositories run.sh recorded (<AB_HOME>/mounted-repos), it requires:
-#   - the common git dir is the repository's own .git, whose config and
-#     hooks were read-only in the box, or a submodule's dir under .git/modules
-#     (read-only in the box as well);
-#   - .git has no commondir file;
-#   - a worktree's git dir is .git/worktrees/<name>;
+# run.sh records every directory it mounts (<AB_HOME>/mounted-repos) with
+# the git dir git may use there, worked out from the paths before the
+# session: the repository's own .git, a worktree's or a subdirectory's main
+# .git, or none. Inside a recorded directory it requires:
+#   - the common git dir is the recorded one, whose config and hooks the
+#     agent could not write, or a submodule's dir under its modules/ (also
+#     read-only in the box); with none recorded, no repository at all;
+#   - that git dir has no commondir file;
+#   - a worktree's git dir is <git dir>/worktrees/<name>;
+#   - with extensions.worktreeConfig on (sparse-checkout sets it), the
+#     config.worktree files, which the agent can write, hold only
+#     sparse-checkout settings;
 #   - `git rebase --continue` has no exec lines left in the agent's todo.
 # Anything else stops git with an explanation. Other repositories go
 # straight to git. The check runs `git rev-parse`, which reads the config but
@@ -65,22 +71,34 @@ while (( i < ${#args[@]} )); do
 done
 dir="$(realpath -e -- "$dir" 2>/dev/null)" || exec "$real" "$@"
 
+# The innermost recorded directory around $dir. Lines without a git dir come
+# from an older run.sh: the repository's own .git.
 repo=""
-while IFS= read -r r; do
+expected=""
+while IFS=$'\t' read -r r e; do
   [[ -n "$r" ]] || continue
-  if [[ "$dir" == "$r" || "$dir" == "$r"/* ]]; then repo="$r"; break; fi
+  if [[ ( "$dir" == "$r" || "$dir" == "$r"/* ) && ${#r} -gt ${#repo} ]]; then
+    repo="$r"
+    expected="${e:-$r/.git}"
+  fi
 done < "$list"
 [[ -n "$repo" ]] || exec "$real" "$@"
 
 refuse() {
   say "refusing to run git in $dir: $1"
-  say "the agent may have tampered with $repo/.git; look before you trust it:"
-  say "  ls -la '$repo/.git'; cat '$repo/.git/commondir' 2>/dev/null; git config --show-origin -l"
+  say "an agentbox session had $repo mounted and may have planted this; look before you trust it:"
+  say "  ls -la '$repo/.git'; cat '$repo/.git' '$repo/.git/commondir' 2>/dev/null; git config --show-origin -l"
   say "(README, Git on the host; this check is the wrapper $self)"
   exit 1
 }
 
-expected="$(realpath -m -- "$repo/.git")"
+if [[ "$expected" == none ]]; then
+  if "$real" -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+    refuse "it has a git repository, and $repo had none when it was mounted"
+  fi
+  exec "$real" "$@"
+fi
+expected="$(realpath -m -- "$expected")"
 [[ -e "$expected/commondir" ]] && refuse "$expected/commondir exists; a repository's own .git never has one"
 
 # Not a repository (or git fails on what it finds): let git say so itself.
@@ -101,6 +119,20 @@ case "$common" in
   *)
     refuse "git would use $common for its config and hooks instead of $expected" ;;
 esac
+
+# config.worktree is read only with extensions.worktreeConfig on, which the
+# agent cannot set (config is read-only in the box) but sparse-checkout does.
+# The files themselves are writable in the box: only sparse-checkout keys may
+# be in them. git config --file parses a file and executes nothing.
+if [[ "$("$real" config --file "$common/config" --includes --type=bool --get extensions.worktreeConfig 2>/dev/null)" == true ]]; then
+  for f in "$common/config.worktree" "$common"/worktrees/*/config.worktree; do
+    [[ -f "$f" ]] || continue
+    keys="$("$real" config --file "$f" --name-only --list 2>/dev/null)" \
+      || refuse "$f cannot be parsed"
+    other="$(grep -vxE 'core\.sparsecheckout|core\.sparsecheckoutcone|index\.sparse' <<<"$keys" | sed '/^$/d')"
+    [[ -z "$other" ]] || refuse "$f sets $(paste -sd' ' <<<"$other"); only sparse-checkout settings belong there"
+  done
+fi
 
 # A rebase the agent left half done: exec lines run on --continue.
 if [[ "$sub" == rebase ]] && printf '%s\n' "$@" | grep -qx -- '--continue'; then

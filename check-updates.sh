@@ -37,11 +37,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/images.sh"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
+# shellcheck source=lib/skills.sh
+source "$SCRIPT_DIR/lib/skills.sh"   # source_value, as run.sh reads the records
 TIMEOUT=5
+EVERY="${AB_UPDATE_EVERY:-21600}"
+if [[ ! "$EVERY" =~ ^[0-9]+$ ]]; then
+  echo "error: AB_UPDATE_EVERY must be a number of seconds, got '$EVERY'" >&2
+  exit 2
+fi
 STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.updates.checked"
 
 if [[ "${1:-}" == --if-due && -f "$STAMP" ]] \
-   && (( $(date +%s) - $(stat -c %Y "$STAMP") < ${AB_UPDATE_EVERY:-21600} )); then
+   && (( $(date +%s) - $(stat -c %Y "$STAMP") < EVERY )); then
   exit 0
 fi
 
@@ -167,21 +174,17 @@ fi
 
 # --- skills -----------------------------------------------------------------
 
-# KEY=VALUE from a record, without evaluating it.
-sync_value() {  # <file> <key>
-  sed -n "s/^$2=//p" "$1" | head -n1
-}
 
 SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 shopt -s nullglob
 for f in "$SKILLS_DIR"/.sources/*; do
   slug="$(basename "$f")"
-  url="$(sync_value "$f" URL)"
-  commit="$(sync_value "$f" COMMIT)"
+  url="$(source_value "$f" URL)"
+  commit="$(source_value "$f" COMMIT)"
   # A record from before URLs were recorded: nothing to compare with.
   [[ -z "$url" ]] && continue
   # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
-  [[ -n "$(sync_value "$f" REF)" ]] && continue
+  [[ -n "$(source_value "$f" REF)" ]] && continue
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     say "warning: $f: bad URL or COMMIT, skipped"
     continue
@@ -199,9 +202,9 @@ for f in "$SKILLS_DIR"/.sources/*; do
   say "update available: skills from $slug, ${commit:0:7} -> ${latest:0:7}"
   [[ "$url" == https://github.com/* ]] \
     && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
-  only="$(sync_value "$f" SKILLS_ONLY)"
-  prefix="$(sync_value "$f" SKILLS_PREFIX)"
-  source_name="$(sync_value "$f" SOURCE)"
+  only="$(source_value "$f" SKILLS_ONLY)"
+  prefix="$(source_value "$f" SKILLS_PREFIX)"
+  source_name="$(source_value "$f" SOURCE)"
   if ask "update skills from $slug?"; then
     SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$source_name" SKILLS_PIN="" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \

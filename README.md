@@ -227,11 +227,12 @@ Inside the session:
 
 The agent commits, branches and creates worktrees in the box, so most of the repository's `.git` is writable there. Git on the host trusts what it finds in `.git`: a `.git/commondir` file, or a worktree's `.git` file, pointing at a directory the agent made, makes it use that directory's config and hooks, and `core.fsmonitor` in there runs a command on the next `git status`. Editors run `git status` by themselves whenever files change.
 
-`git-guard` closes this. It is a wrapper installed as `git` ahead of the real one: for every repository `run.sh` has mounted (recorded in `~/.config/agentbox/mounted-repos`) it checks, before git runs, that
+`git-guard` closes this. It is a wrapper installed as `git` ahead of the real one. `run.sh` records every directory it mounts in `~/.config/agentbox/mounted-repos`, with the git dir git may use there, worked out from the paths before the session starts: the repository's own `.git`, the main `.git` of a mounted worktree or subdirectory, or none for a directory that was no repository. Inside a recorded directory git-guard checks, before git runs, that
 
-- git would use the repository's own `.git` for config and hooks (read-only in the box), or a submodule's directory under `.git/modules` (read-only as well);
-- `.git` has no `commondir` file;
-- a worktree's git dir is `.git/worktrees/<name>`;
+- git would use exactly that git dir for config and hooks (read-only in the box), or a submodule's directory under its `modules/` (read-only as well); where none was recorded, any repository is the agent's and is refused;
+- that git dir has no `commondir` file;
+- a worktree's git dir is `<git dir>/worktrees/<name>`;
+- with `extensions.worktreeConfig` on (sparse-checkout turns it on), the `config.worktree` files, which the agent can write, hold only sparse-checkout settings;
 - `git rebase --continue` finds no `exec` lines in a rebase the agent left half done.
 
 Otherwise git stops with an explanation. Other repositories go straight to git. The check costs one `git rev-parse`, which reads the config but executes nothing from it. `tests/run.sh` reproduces the attacks with real git and checks that plain git falls for them and git-guard does not.
@@ -256,7 +257,15 @@ GIT_CONFIG_VALUE_0=false
 
 Check with `command -v git` (should print `~/.local/bin/git`) in a terminal and in your editor's terminal. Editors with a setting for the git executable (VS Code `git.path`, JetBrains "Path to Git executable") can point at `~/.local/bin/git` explicitly. `run.sh` warns at every start while `git` is not git-guard.
 
-Update the copy when you update agentbox (`install -m 755 git-guard ~/.local/bin/git` from the copy you run). What it does not cover: a program that calls `/usr/bin/git` directly runs unchecked (the `environment.d` setting above still keeps `core.fsmonitor` off for it), and submodules cannot be updated inside the box, since `.git/modules` is read-only there.
+Update the copy when you update agentbox (`install -m 755 git-guard ~/.local/bin/git` from the copy you run).
+
+What it does not cover, because the agent writes the files that git on the host then uses:
+
+- **Hooks that run files from the work tree.** If your repository's config points `core.hooksPath` into the work tree (husky: `.husky/_`), or a hook runs tools configured there (the pre-commit framework reads `.pre-commit-config.yaml`), the agent can change what runs on your next `git commit` on the host. Review the diff of such files before committing there, or commit from the box.
+- **A rebase the agent left half done.** git-guard looks for `exec` lines only on `git rebase --continue`; `--skip` or an abbreviation (`--cont`) runs them unchecked. Look at `.git/rebase-merge/git-rebase-todo`, or `git rebase --abort`, before going on with a rebase you did not start.
+- **Directories that are not repositories of yours.** Mounting `~/.local`, `~/.cache` or similar would let the agent change git-guard itself or files agentbox generates; `run.sh` refuses only the code, `~/.config/agentbox` and their parents. Mount repositories.
+- A program that calls `/usr/bin/git` directly runs unchecked; the `environment.d` setting above still keeps `core.fsmonitor` off for it.
+- Submodules cannot be updated inside the box, since `.git/modules` is read-only there.
 
 ## Egress
 

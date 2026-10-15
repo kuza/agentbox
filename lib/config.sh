@@ -1,4 +1,6 @@
-# Configuration file: KEY=VALUE lines, # comments, optional quotes.
+# Configuration file: KEY=VALUE lines, optional quotes. # starts a comment
+# at the start of a line or after a space (KEY=value # note); a # inside a
+# value (a URL fragment) stays.
 # Parsed, not sourced, so it cannot run code, and only known keys are
 # accepted: agentbox's own (CONFIG_KEYS) and those the enabled MCP modules
 # declare. A variable already set in the environment wins over the file.
@@ -26,8 +28,11 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
       continue
     fi
     key="${line%%=*}"; val="${line#*=}"
-    if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then
+    if [[ "$val" =~ ^\"([^\"]*)\"([[:space:]]+#.*)?$ || "$val" =~ ^\'([^\']*)\'([[:space:]]+#.*)?$ ]]; then
       val="${BASH_REMATCH[1]}"
+    else
+      val="${val%%[[:space:]]#*}"
+      val="${val%"${val##*[![:space:]]}"}"
     fi
     if [[ "$allowed" != *" $key "* ]]; then
       [[ "$warn" == 1 ]] && echo "agentbox: warning: $file:$n: unknown key '$key', ignored" >&2
