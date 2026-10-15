@@ -42,25 +42,6 @@ networks_create() {
   podman network exists ab-egress   || podman network create ab-egress >/dev/null
 }
 
-# Egress proxy: the only way out for the agent. squid.conf holds the fixed
-# allowlist; the MCP modules' remote hosts come from a generated file
-# (MCP_SQUID_CONF, included by squid.conf). When either changes, squid is
-# recreated; open sessions lose egress for a moment.
-egress_start() {
-  local hash conf
-  conf="$(sidecar_copy ab-egress "$SCRIPT_DIR/squid.conf")"
-  hash="$(cat "$conf" "$MCP_SQUID_CONF" | sha256sum | cut -c1-16)"
-  if [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.mcp-egress"}}' ab-egress 2>/dev/null)" != "$hash" ]]; then
-    podman rm -f ab-egress >/dev/null 2>&1 || true
-  fi
-  start_sidecar ab-egress \
-    --network ab-internal --network ab-egress \
-    --label "agentbox.mcp-egress=$hash" \
-    -v "$conf:/etc/squid/squid.conf:ro,Z" \
-    -v "$MCP_SQUID_CONF:/etc/squid/agentbox-mcp.conf:ro,Z" \
-    "$IMG_SQUID"
-}
-
 # OpenAI for pi (optional): enabled only if the openai_api_key secret exists.
 #   ab-llm-openai  nginx on both networks: checks the caller token, replaces it
 #                  with the real API key and forwards to api.openai.com with

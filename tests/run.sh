@@ -28,7 +28,7 @@ setup() {
   REPO="$T/repo"
   mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
-  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/skills.d" \
+  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
         "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
   # Files the copy could not read (a sidecar's private SELinux label on the
   # source, see README, Troubleshooting) get a placeholder.
@@ -123,7 +123,7 @@ test_mcp_default_set() {
   assert_json "$(cache mcp-pi.json)"
   assert_file_has "$(cache mcp-claude.json)" '"Bearer \$\{AB_MCP_TOKEN_GRAFANA\}"'
   assert_file_has "$(cache mcp-claude.json)" '"type": "http"'
-  assert_file_has "$(cache squid-mcp.conf)" '^acl allowed dstdomain mcp.context7.com$'
+  assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain mcp.context7.com$'
   if command -v python3 >/dev/null; then
     assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7 grafana graylog github" "claude servers"
   fi
@@ -201,9 +201,9 @@ test_mcp_local_module_and_override() {
   ab_run --
   assert_rc 0
   assert_no_out "unknown key 'TRACKER_SITE'"
-  assert_file_has "$(cache squid-mcp.conf)" 'dstdomain mcp.tracker.example$'
-  assert_file_has "$(cache squid-mcp.conf)" 'dstdomain docs.internal.example$'
-  assert_file_lacks "$(cache squid-mcp.conf)" 'mcp.context7.com'
+  assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
+  assert_file_has "$(cache squid-allow.conf)" 'dstdomain docs.internal.example$'
+  assert_file_lacks "$(cache squid-allow.conf)" 'mcp.context7.com'
   assert_file_has "$(cache mcp-claude.json)" 'https://docs.internal.example/mcp'
 }
 
@@ -250,6 +250,108 @@ test_mcp_upgrade_pulls_module_images() {
   assert_rc 0
   grep -q '^podman pull -q docker.io/grafana/mcp-grafana:latest' "$STUB_DIR/calls" || fail "grafana image not pulled"
   grep -q '^podman pull -q ghcr.io/github/github-mcp-server' "$STUB_DIR/calls" && fail "github image pulled while disabled"
+}
+
+# --- run.sh: egress groups ---
+
+test_egress_default_groups() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  local f; f="$(cache squid-allow.conf)"
+  assert_file_has "$f" '^acl allowed dstdomain api.anthropic.com$'
+  assert_file_has "$f" '^acl allowed dstdomain pypi.org$'
+  assert_file_has "$f" '^acl allowed dstdomain proxy.golang.org$'
+  assert_file_has "$f" '^acl allowed dstdomain auth.openai.com$'
+  assert_file_has "$f" '^acl allowed dstdomain mcp.context7.com$'
+  assert_file_lacks "$f" 'github.com|storage.googleapis.com'
+  grep -q 'squid-allow.conf:/etc/squid/agentbox-allow.conf:ro,Z' "$STUB_DIR/calls" || fail "include not mounted"
+}
+
+test_egress_listed_groups_local_override_and_ports() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/egress.local.d"
+  printf '%s\n' '# test servers' 'Data.S3.eu-central-1.amazonaws.com' 'minio.test:9000  # MinIO' \
+    '.internal.example' > "$AB/egress.local.d/test.conf"
+  printf '%s\n' 'mirror.example' > "$AB/egress.local.d/pypi.conf"
+  config "AB_EGRESS=anthropic pypi, gcs test gcs"
+  ab_run --
+  assert_rc 0
+  local f; f="$(cache squid-allow.conf)"
+  assert_file_has "$f" '^acl allowed dstdomain mirror.example$'
+  assert_file_lacks "$f" 'pypi.org|golang|openai'
+  assert_eq "$(grep -c 'storage.googleapis.com' "$f")" 1 "gcs listed twice"
+  assert_file_has "$f" '^acl allowed dstdomain data.s3.eu-central-1.amazonaws.com$'
+  assert_file_has "$f" '^acl allowed dstdomain .internal.example$'
+  assert_file_has "$f" '^acl ab_host_1 dstdomain minio.test$'
+  assert_file_has "$f" '^acl ab_port_1 port 9000$'
+  assert_file_has "$f" '^http_access allow ab_host_1 ab_port_1$'
+  assert_file_lacks "$f" 'dstdomain minio.test:9000'
+}
+
+test_egress_empty_list_mcp_hosts_only() {
+  setup "${FUNCNAME[0]}"
+  config "AB_EGRESS="
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_file_lacks "$(cache squid-allow.conf)" 'pypi.org|anthropic'
+  assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.context7.com$'
+  # squid.conf refers to "allowed": it must be defined even with no hosts.
+  mkdir -p "$AB/mcp.local/context7"
+  printf '%s\n' 'MCP_URL="http://docs-mirror:8080/mcp"' > "$AB/mcp.local/context7/mcp.sh"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_eq "$(grep -c '^acl allowed ' "$(cache squid-allow.conf)")" 1 "allowed acl lines"
+  assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain .invalid$'
+}
+
+test_egress_agent_group_required() {
+  setup "${FUNCNAME[0]}"
+  config "AB_EGRESS=pypi go"
+  ab_run --
+  assert_rc 2
+  assert_out "claude needs the egress group 'anthropic'"
+  grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+}
+
+test_egress_errors() {
+  setup "${FUNCNAME[0]}"
+  config "AB_EGRESS=nope"
+  ab_run --
+  assert_rc 2
+  assert_out "no group 'nope'"
+  : > "$AB/config.env"; config "AB_EGRESS=../x"
+  ab_run --
+  assert_rc 2
+  assert_out "invalid group name"
+  mkdir -p "$AB/egress.local.d"
+  printf '%s\n' 'ok.example' 'bad host; http_access allow all' > "$AB/egress.local.d/bad.conf"
+  : > "$AB/config.env"; config "AB_EGRESS=bad"
+  ab_run --
+  assert_rc 2
+  assert_out "bad.conf:2: one host per line"
+  grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
+  : > "$AB/config.env"
+  local h
+  for h in 'x.example:99999' 'x.example:0' 'x_y.example' '*.example' 'x.example:443/path'; do
+    printf '%s\n' "$h" > "$AB/egress.local.d/bad.conf"
+    config "AB_EGRESS=bad"
+    ab_run --
+    assert_rc 2
+    assert_out "is not a host name"
+  done
+}
+
+test_egress_recreated_when_groups_change() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  ab_run --
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" && fail "recreated without a change"
+  config "AB_EGRESS=anthropic pypi"
+  ab_run --
+  grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "not recreated after AB_EGRESS changed"
 }
 
 # --- run.sh: other parts ---

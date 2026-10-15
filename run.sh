@@ -23,6 +23,8 @@
 #   AB_MCP            MCP modules to enable, e.g. "grafana graylog github"; each
 #                     from mcp.local/<name>/ or mcp/<name>/, with its own
 #                     settings (GRAFANA_URL, ...). context7 is always on.
+#   AB_EGRESS         egress host groups to enable, e.g. "pypi go gcs"; each
+#                     from egress.local.d/ or egress.d/ (default: anthropic openai pypi go)
 #   AB_UPDATE=1       force an update of the agent before starting
 #   AB_UPDATE_EVERY   minimum seconds between automatic updates (default: 6h)
 #   AB_RESTART=1      recreate sidecar containers (needed after config changes)
@@ -40,12 +42,13 @@
 #                     <repo dir name>.env (default: <script dir>/env)
 #
 #
-# The steps live in lib/*.sh, MCP servers in mcp/*/mcp.sh (README, MCP servers).
+# The steps live in lib/*.sh, MCP servers in mcp/*/mcp.sh (README, MCP servers),
+# egress host groups in egress.d/ (README, Egress).
 # See README.md for first-time setup (networks, secrets).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for lib in config agent sidecars mcp services skills session; do
+for lib in config agent sidecars mcp egress services skills session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
@@ -87,6 +90,7 @@ skills_init
 agent_select
 agent_check_secrets
 mcp_check_secrets
+egress_init
 networks_create
 services_attach
 
@@ -123,6 +127,7 @@ agent_update
 agent_prepare_home
 
 mcp_write_configs
+egress_write_conf
 egress_start
 mcp_start_all
 openai_start

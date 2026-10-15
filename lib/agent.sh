@@ -14,6 +14,8 @@ agent_select() {
       # no longer runs dependency install scripts unless allowed.
       AGENT_INSTALL_FLAGS=(--allow-scripts=@anthropic-ai/claude-code)
       AGENT_SECRETS=(claude_oauth)
+      # Egress group the agent cannot work without (lib/egress.sh).
+      AGENT_EGRESS=(anthropic)
       ;;
     pi)
       AGENT_PKG="@earendil-works/pi-coding-agent"
@@ -25,6 +27,9 @@ agent_select() {
       # (/login, stored in ab-pi-home); with an API key, openai_api_key enables
       # the ab-llm-openai sidecar.
       AGENT_SECRETS=()
+      # Its hosts depend on the sign-in: the openai egress group for a
+      # subscription, none for an API key.
+      AGENT_EGRESS=()
       ;;
     *)
       echo "error: AB_AGENT must be 'claude' or 'pi', got '$AGENT'" >&2

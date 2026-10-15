@@ -50,7 +50,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 
 **What is isolated**
 
-- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), package sources for Python (`pypi.org`, `files.pythonhosted.org`) and Go (`proxy.golang.org`, `sum.golang.org`), Google Cloud Storage (`storage.googleapis.com`), each removable, and the Context7 documentation server (`mcp.context7.com`), which the setup relies on. Everything else, GitHub included, gets a 403.
+- **Network.** The agent sits on a `--internal` network. Its only way out is the squid proxy, which allows the Context7 documentation server (`mcp.context7.com`), which the setup relies on, and the [egress groups](#egress) you enable: by default the three Anthropic hosts Claude Code needs (`api.anthropic.com`, `platform.claude.com`, `claude.ai`), pi's OpenAI sign-in, and package sources for Python and Go. Everything else, GitHub included, gets a 403.
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
@@ -62,7 +62,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
 - MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
-- "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, `storage.googleapis.com`, and `github.com` if you enable it) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
+- "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, and `storage.googleapis.com` or `github.com` if you enable them) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
 
 ## Requirements
 
@@ -88,7 +88,9 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `pi/extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi, ignored by git |
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
-| `squid.conf` | Egress allowlist. The MCP modules' remote hosts are added from a generated file it includes |
+| `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
+| `egress.d/<name>.conf` | Egress host groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
+| `egress.local.d/<name>.conf` | Your own host groups, ignored by git |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
@@ -119,7 +121,7 @@ cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions
 
 `config.env` is parsed, not executed, accepts only known keys, and survives updates of `run.sh`. Environment variables override it, and `AB_CONFIG=/path/to/file` points to a different file, e.g. one per environment. An enabled MCP module whose settings or secrets (step 5) are missing stops the script with an error naming them.
 
-`squid.conf` is the egress allowlist. It allows the minimum the agents need: the Anthropic hosts Claude Code requires (see Claude Code's [network access requirements](https://code.claude.com/docs/en/network-config#network-access-requirements)), PyPI and the Go module proxy, and for pi with a ChatGPT subscription `auth.openai.com` and `chatgpt.com`. Each block is commented; remove what you don't use. Hosts that are deliberately **not** allowed:
+Squid is the agent's only way out. It allows the hosts of the enabled MCP modules and of the egress groups in `AB_EGRESS`, by default the Anthropic hosts Claude Code requires (see Claude Code's [network access requirements](https://code.claude.com/docs/en/network-config#network-access-requirements)), `auth.openai.com` and `api.openai.com` for pi with a ChatGPT subscription, PyPI and the Go module proxy. See [Egress](#egress). Hosts that are deliberately **not** allowed:
 
 | Host | Effect of blocking |
 |---|---|
@@ -204,6 +206,45 @@ Inside the session:
 - Ask Claude to run `env | grep -iE 'token|key|pass'`. Expected: `CLAUDE_CODE_OAUTH_TOKEN` and the caller tokens `AB_MCP_TOKEN_*`, which only open the sidecars.
 - If enabled: ask for the latest errors from Graylog and the `up` status of Prometheus targets to confirm the MCP servers reach their backends.
 
+## Egress
+
+The hosts the agent may reach, apart from the MCP modules' remote servers, come in groups:
+
+| Where | What |
+|---|---|
+| `egress.d/<name>.conf` | Shared groups, in git |
+| `egress.local.d/<name>.conf` | Your own, ignored by git. A name that also exists in `egress.d/` replaces that group |
+
+`AB_EGRESS` in `config.env` lists the enabled ones. Unset, it is `anthropic openai pypi go`; a list replaces that default entirely, and `AB_EGRESS=` (empty) enables none. Claude Code does not start without `anthropic`; pi needs `openai` only with a ChatGPT subscription (with an API key it goes through its sidecar), so someone using only pi with a key can leave out both. On every start `run.sh` writes the hosts of the enabled groups and of the enabled MCP modules into a file `squid.conf` includes, and recreates squid when it changed. Open sessions lose egress for a moment.
+
+| Group | Hosts | For |
+|---|---|---|
+| `anthropic` | `api.anthropic.com`, `platform.claude.com`, `claude.ai` | Claude Code, required by it |
+| `pypi` | `pypi.org`, `files.pythonhosted.org` | pip / uv packages (see [Python](#python)) |
+| `go` | `proxy.golang.org`, `sum.golang.org` | Go modules (see [Go](#go)) |
+| `openai` | `auth.openai.com`, `api.openai.com` | pi with a ChatGPT subscription (see [pi](#pi-openai)) |
+| `github-read` | `github.com` and its content hosts | anonymous read access to public GitHub (see [GitHub read access](#github-read-access-optional)) |
+| `gcs` | `storage.googleapis.com` | Google Cloud Storage, all buckets |
+
+A group file is data, never run: one host per line, `#` starts a comment.
+
+```
+# egress.local.d/test-data.conf
+test-data.s3.eu-central-1.amazonaws.com   # HTTPS (port 443) to this host
+.test.example                             # test.example and all its subdomains
+minio.test.example:9000                   # this host on this port only, HTTPS or plain HTTP
+```
+
+```
+AB_EGRESS=anthropic openai pypi go test-data
+```
+
+- Prefer exact hosts to domains. `.amazonaws.com` is all of AWS, and any API that accepts uploads with a token is an exfiltration path (see [Security model](#security-model)): the agent can use a token planted through prompt injection. An S3 bucket host is narrower than the regional endpoint.
+- Credentials for these services go in a [per-project environment](#per-project-environment) file. The agent sees them; use test credentials with the least rights, read-only where possible.
+- Squid sees only host names, so an allowed host is allowed for any path and any method.
+- The list is the same for all sessions: squid is shared.
+- Only HTTP(S) goes through squid. Databases and queues are [local services](#local-services).
+
 ## MCP servers
 
 Each MCP server is a module: a directory with an `mcp.sh` and whatever else it needs (an nginx template, say).
@@ -213,7 +254,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github` |
 | `mcp.local/<name>/` | Your own modules, ignored by git. A name that also exists in `mcp/` replaces that module |
 
-`AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid. Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
+`AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
 
 ### Writing a module
 
@@ -309,7 +350,7 @@ podman secret rm github_pat github_mcp_caller
 
 ### GitHub read access (optional)
 
-The GitHub MCP sidecar covers your own repositories. For **anonymous read access to public GitHub** (cloning a library to read its source, `uv` dependencies from git, raw files, release downloads), uncomment the GitHub block in `squid.conf`; the next start recreates squid.
+The GitHub MCP sidecar covers your own repositories. For **anonymous read access to public GitHub** (cloning a library to read its source, `uv` dependencies from git, raw files, release downloads), add `github-read` to `AB_EGRESS`; the next start recreates squid.
 
 What it does and does not change:
 
@@ -364,7 +405,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 
 **The token is readable by the agent**, as the Claude OAuth token is for Claude Code: pi has to write and refresh it, so it cannot be hidden in a sidecar. To revoke it, run `/logout` in pi and end the session in your ChatGPT account's security settings.
 
-`auth.openai.com` and `api.openai.com` are in `squid.conf` for this mode. Squid is shared, so Claude Code sessions can reach them too; remove the two lines if you use pi with an API key or not at all. `chatgpt.com` is only needed for the legacy provider and is commented out.
+`auth.openai.com` and `api.openai.com` come from the `openai` [egress group](#egress), enabled by default. Squid is shared, so Claude Code sessions can reach them too; leave `openai` out of `AB_EGRESS` if you use pi with an API key or not at all. The legacy provider also needs `chatgpt.com`: add it in a group of your own in `egress.local.d/`.
 
 ### Setup: OpenAI API key
 
@@ -536,7 +577,7 @@ Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their
 
 **Why the venv is outside the repo.** A `.venv` created in the container points at `/opt/uv-python/...`, which does not exist on the host, and a host `.venv` points at host paths. Sharing one directory breaks whichever side used it last. With `UV_PROJECT_ENVIRONMENT`, `uv` in the box never touches `<repo>/.venv`, so you can keep using your host venv in parallel. Projects that do not use uv (plain `python -m venv .venv`) are not covered by this; create such venvs outside the repo too, e.g. under `~/.venvs`.
 
-**PyPI is a trade-off.** It lets the agent install packages on its own, which is convenient, but it is also how a malicious or typo-squatted package would get into the box. The damage stays inside the box (no host credentials, no other egress), but the code it writes ends up in your repo. Review `pyproject.toml` / `uv.lock` changes in your diffs. To make dependency changes go through you, remove the two PyPI lines from `squid.conf` and `AB_RESTART=1 ./run.sh`; then run `uv sync` once from a container with internet access, or add packages on the host.
+**PyPI is a trade-off.** It lets the agent install packages on its own, which is convenient, but it is also how a malicious or typo-squatted package would get into the box. The damage stays inside the box (no host credentials, no other egress), but the code it writes ends up in your repo. Review `pyproject.toml` / `uv.lock` changes in your diffs. To make dependency changes go through you, leave `pypi` out of `AB_EGRESS` (see [Egress](#egress)); then run `uv sync` once from a container with internet access, or add packages on the host.
 
 ## Go
 
@@ -556,7 +597,7 @@ Things to know:
 
 - **Private modules** (`GOPRIVATE`, your organisation's repositories) are fetched directly from the git host with credentials, which the box does not have. Use `go mod vendor` on the host and build with `-mod=vendor` in the box.
 - **golangci-lint and the Go version.** golangci-lint must be built with a Go version at least as new as the one your `go.mod` targets. With both versions left on "latest" they stay in step; if you pin one, pin the other to match.
-- **Same trade-off as PyPI.** The module proxy lets the agent add dependencies on its own. `sum.golang.org` guarantees you get the same code as everyone else for a given version, not that the code is benign. Review `go.mod` / `go.sum` changes; to keep dependency changes on the host, remove the two Go lines from `squid.conf`.
+- **Same trade-off as PyPI.** The module proxy lets the agent add dependencies on its own. `sum.golang.org` guarantees you get the same code as everyone else for a given version, not that the code is benign. Review `go.mod` / `go.sum` changes; to keep dependency changes on the host, leave `go` out of `AB_EGRESS`.
 - `govulncheck` needs `vuln.go.dev`, which is not allowlisted.
 
 ## Graphify
@@ -700,6 +741,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 |---|---|---|
 | `AB_CONFIG` | `<script dir>/config.env` | Settings file. All variables in this table except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE` can be set there; a module's settings only while the module is in `AB_MCP` |
 | `AB_MCP` | unset | MCP modules to enable, space- or comma-separated, e.g. `grafana graylog github`. `context7` is always on. See [MCP servers](#mcp-servers) |
+| `AB_EGRESS` | `anthropic openai pypi go` | Egress host groups to enable, space- or comma-separated, from `egress.local.d/` or `egress.d/`; empty enables none. See [Egress](#egress) |
 | `GRAFANA_URL` | unset | Setting of the `grafana` module: Grafana base URL (needs the `grafana_sa` secret) |
 | `GRAYLOG_URL` | unset | Setting of the `graylog` module: Graylog base URL (needs the `graylog_basic` secret) |
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
@@ -712,7 +754,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
-| `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets or the nginx templates. Squid is recreated by itself when `squid.conf` or the modules' hosts change |
+| `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets or the nginx templates. Squid is recreated by itself when `squid.conf`, the egress groups or the modules' hosts change |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
 Sidecars are started once and reused. After changing their configuration:
@@ -751,12 +793,12 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars mount copies of their config files from the cache, so they do not cause this |
 | `missing podman secrets` | Step 5 not done for the agent or a service enabled in `config.env`. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
-| `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host to `squid.conf`; the next start recreates squid. |
+| `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host in a group in `egress.local.d/` (see [Egress](#egress)); the next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
 | `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
 | pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 ./pi.sh`. |
-| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `auth.openai.com` or `api.openai.com` missing in `squid.conf`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
+| pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json` is mounted only when the `openai_api_key` secret exists. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
 | pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
@@ -768,7 +810,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is Graylog's own `HTTP 405 Method Not Allowed` API error, so nginx works but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and check the Graylog version is 7.0+. |
 | grafana in `/mcp` fails with `403 ... forbidden: host not allowed` | mcp-grafana validates the `Host` header against `--allowed-hosts`. It must include the name Claude uses (`ab-mcp-grafana:8000`). Recreate with `AB_RESTART=1`. |
 | nginx sidecar exits on start | nginx resolves `GRAYLOG_URL` at startup. Fix DNS, or use an IP and check TLS/SNI. |
-| Context7 fails in `/mcp` or its tools return proxy errors | Squid did not get the modules' hosts: `podman exec ab-egress cat /etc/squid/agentbox-mcp.conf` should list `mcp.context7.com`. `AB_RESTART=1 ./run.sh` recreates squid. |
+| Context7 fails in `/mcp` or its tools return proxy errors | Squid did not get the modules' hosts: `podman exec ab-egress cat /etc/squid/agentbox-allow.conf` should list `mcp.context7.com`. `AB_RESTART=1 ./run.sh` recreates squid. |
 | Context7 tools return 429 | Anonymous rate limit. Wait, or add an API key through a sidecar (see [Documentation (Context7)](#documentation-context7)). |
 | github in `/mcp` fails with 401 | The sidecar has an older `github_mcp_caller` than the session (secret recreated while the sidecar ran): `AB_RESTART=1 ./run.sh`. |
 | github in `/mcp` fails with 502 | nginx cannot reach `ab-mcp-github-srv`: check `podman ps` and its logs. If that container was restarted on its own, restart both with `AB_RESTART=1` (nginx caches its IP). |
