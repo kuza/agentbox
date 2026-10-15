@@ -1,7 +1,7 @@
 # agentbox base image: tooling only.
 # Claude Code itself is installed into the "ab-claude-tools" volume by run.sh,
 # so frequent Claude Code releases don't require rebuilding this image.
-FROM docker.io/library/node:22-bookworm-slim
+FROM docker.io/library/node:22-trixie-slim
 
 # make runs project Makefiles; gcc and libc6-dev give Go cgo, which
 # `go test -race` needs (Go enables cgo only when it finds a C compiler).
@@ -18,7 +18,7 @@ RUN apt-get update \
 #   UV_VERSION        pinned uv release
 #   PYTHON_VERSIONS   space-separated, e.g. "3.11 3.12 3.13"
 # Interpreters land in /opt/uv-python (read-only for the agent) with
-# python3.X shims in /usr/local/bin. System python3 (3.11) stays as is.
+# python3.X shims in /usr/local/bin. System python3 (Debian 13: 3.13) stays as is.
 # ---------------------------------------------------------------------------
 ARG UV_VERSION=0.12.23
 ARG PYTHON_VERSIONS="3.12 3.13 3.14"

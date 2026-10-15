@@ -87,7 +87,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
 | `pi/extensions/` | pi extensions you choose to allow, mounted read-only (empty by default) |
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
-| `Containerfile` | Base image: node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
+| `Containerfile` | Base image (`node:22-trixie-slim`, Debian 13): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress allowlist. The MCP modules' remote hosts are added from a generated file it includes |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
@@ -527,7 +527,7 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 
 | | |
 |---|---|
-| Interpreters | `PYTHON_VERSIONS` in `Containerfile` (default `3.12 3.13 3.14`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is Debian's 3.11 |
+| Interpreters | `PYTHON_VERSIONS` in `Containerfile` (default `3.12 3.13 3.14`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is Debian 13's 3.13; graphify's own virtualenv uses it |
 | Packages | `uv add`, `uv sync`, `uv run`, `pip` inside a venv: PyPI is in the egress allowlist |
 | Virtualenv | Per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), via `UV_PROJECT_ENVIRONMENT`. Shared by both agents |
 | uv cache | `ab-cache`, persists across sessions, shared by both agents |
