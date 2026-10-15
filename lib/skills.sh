@@ -5,7 +5,7 @@
 # nothing: the repo is mounted.
 #
 # Skill sources: skills.d/<name>.conf (shared, in git) or
-# skills.local.d/<name>.conf (yours, ignored by git; wins over skills.d/).
+# <AB_HOME>/skills.local.d/<name>.conf (yours; wins over skills.d/).
 # AB_SKILLS in config.env lists the enabled ones. A source is a git
 # repository of skills, installed into the skills directory by
 # sync-skills.sh. Its .conf is KEY=VALUE data, never run:
@@ -23,12 +23,12 @@
 # sync-skills.sh keeps; skills synced by hand, without a source, are left
 # alone.
 
-SKILLS_SOURCE_DIRS=("$SCRIPT_DIR/skills.local.d" "$SCRIPT_DIR/skills.d")
+SKILLS_SOURCE_DIRS=("$USER_SKILLS_SOURCES_DIR" "$SCRIPT_DIR/skills.d")
 
 # Sets SKILLS_DIR and GRAPHIFY_PI, and moves state from where older versions
 # kept it. Runs before check-updates.sh, which reads the records.
 skills_init() {
-  SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
+  SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
   GRAPHIFY_PI="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/graphify-pi"
   skills_migrate_state
 }
@@ -98,7 +98,7 @@ skills_sources() {
       if [[ -f "$d/$name.conf" ]]; then conf="$d/$name.conf"; break; fi
     done
     if [[ -z "$conf" ]]; then
-      echo "error: AB_SKILLS: no skill source '$name' (looked for skills.local.d/$name.conf and skills.d/$name.conf)" >&2
+      echo "error: AB_SKILLS: no skill source '$name' (looked for $USER_SKILLS_SOURCES_DIR/$name.conf and skills.d/$name.conf)" >&2
       exit 2
     fi
     url="$(source_value "$conf" URL)"

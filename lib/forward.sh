@@ -25,7 +25,7 @@ forward_init() {
   FWD_NAMES=(); FWD_TARGETS=(); FWD_SCOPES=()
   FORWARD_NAMES=(); FORWARD_NET=()
   FWD_KEY="$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
-  repo_conf="${AB_ENV_DIR:-$SCRIPT_DIR/env}/$(basename "$REPO").conf"
+  repo_conf="${AB_ENV_DIR:-$USER_ENV_DIR}/$(basename "$REPO").conf"
   FWD_REPO_LIST=""
   if [[ -f "$repo_conf" ]]; then
     echo "agentbox: repo config $repo_conf" >&2

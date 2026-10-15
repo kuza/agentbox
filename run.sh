@@ -14,17 +14,20 @@
 #   run.sh ~/src/myrepo --dangerously-skip-permissions
 #   run.sh mcp list                              # current dir, any claude subcommand
 #
-# Settings come from config.env next to this script (see config.env.example),
-# or from the file named by AB_CONFIG. Environment variables override the file.
+# Settings come from config.env in AB_HOME (see config.env.example), or from
+# the file named by AB_CONFIG. Environment variables override the file. Your
+# files live in AB_HOME, apart from this code (lib/paths.sh).
 #
 # Settings / environment overrides:
-#   AB_CONFIG         path of the config file (default: <script dir>/config.env)
+#   AB_HOME           directory with your files (default: ~/.config/agentbox)
+#   AB_CONFIG         path of the config file (default: <AB_HOME>/config.env)
 #   AB_AGENT          claude (default) or pi
 #   AB_MCP            MCP modules to enable, e.g. "grafana graylog github"; each
-#                     from mcp.local/<name>/ or mcp/<name>/, with its own
+#                     from <AB_HOME>/mcp.local/<name>/ or mcp/<name>/, with its own
 #                     settings (GRAFANA_URL, ...). context7 is always on.
 #   AB_EGRESS         egress host groups to enable, e.g. "pypi go gcs"; each
-#                     from egress.local.d/ or egress.d/ (default: anthropic openai pypi go)
+#                     from <AB_HOME>/egress.local.d/ or egress.d/ (default:
+#                     anthropic openai pypi go)
 #   AB_UPDATE=1       force an update of the agent before starting
 #   AB_UPDATE_EVERY   minimum seconds between automatic updates (default: 6h)
 #   AB_RESTART=1      recreate sidecar containers (needed after config changes)
@@ -43,9 +46,9 @@
 #                     tool versions baked into the image (default: the
 #                     Containerfile's); apply on the next build (AB_UPGRADE=1)
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
-#                     into the agent's skills directory (default: <script dir>/skills)
+#                     into the agent's skills directory (default: <AB_HOME>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
-#                     <repo dir name>.env (default: <script dir>/env)
+#                     <repo dir name>.env (default: <AB_HOME>/env)
 #
 #
 # The steps live in lib/*.sh, MCP servers in mcp/*/mcp.sh (README, MCP servers),
@@ -54,6 +57,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/paths.sh
+source "$SCRIPT_DIR/lib/paths.sh"
 for lib in config images agent sidecars mcp egress forward services skills session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
@@ -70,10 +75,6 @@ if [[ $# -gt 0 && -d "$1" ]]; then
   shift
 else
   REPO="$(realpath -e -- "$PWD")"
-fi
-if [[ "$REPO" == "$SCRIPT_DIR" ]]; then
-  echo "error: refusing to mount the agentbox directory itself; run from your repo or pass its path" >&2
-  exit 2
 fi
 echo "agentbox: repo $REPO" >&2
 # Mount point inside the session, named after the repo directory. Agents key
@@ -98,6 +99,8 @@ for arg in PYTHON_VERSIONS GO_VERSION GOLANGCI_LINT_VERSION; do
 done
 
 skills_init
+user_paths_check_repo "$REPO" "${AB_ENV_DIR:-$USER_ENV_DIR}" "$SKILLS_DIR" "$CONFIG_FILE"
+user_paths_warn
 
 agent_select
 agent_check_secrets

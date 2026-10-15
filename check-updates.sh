@@ -35,6 +35,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/images.sh
 source "$SCRIPT_DIR/lib/images.sh"
+# shellcheck source=lib/paths.sh
+source "$SCRIPT_DIR/lib/paths.sh"
 TIMEOUT=5
 STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.updates.checked"
 
@@ -158,7 +160,7 @@ sync_value() {  # <file> <key>
   sed -n "s/^$2=//p" "$1" | head -n1
 }
 
-SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
+SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 shopt -s nullglob
 for f in "$SKILLS_DIR"/.sources/*; do
   slug="$(basename "$f")"

@@ -81,25 +81,38 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `run.sh` | Entry point: the steps in order (config, image, updates, sidecars, session); the steps themselves are in `lib/` |
 | `lib/*.sh` | The steps of `run.sh`: settings, agent, sidecars, MCP modules, local services, skills, session |
 | `mcp/<name>/` | MCP server modules, enabled with `AB_MCP`: `mcp.sh` plus files such as nginx templates. See [MCP servers](#mcp-servers) |
-| `mcp.local/<name>/` | Your own MCP modules, same format, ignored by git; one with the name of a module in `mcp/` replaces it |
-| `config.env.example` | Settings template; copy to `config.env` (ignored by git) |
+| `config.env.example` | Settings template; copy to `~/.config/agentbox/config.env` |
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
-| `pi/extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi, ignored by git |
 | `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
 | `egress.d/<name>.conf` | Egress host groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
-| `egress.local.d/<name>.conf` | Your own host groups, ignored by git |
-| `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
-| `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
+| `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
-| `env/` | Optional, ignored by git. Per-project environment files, `<repo dir name>.env`, and per-project settings, `<repo dir name>.conf` (`AB_FORWARD`, see [Test servers](#test-servers)) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
-| `skills.local.d/<name>.conf` | Your own skill sources, ignored by git |
-| `sync-skills.sh` | Host-side: installs a skills repository into `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
+| `sync-skills.sh` | Host-side: installs a skills repository into your `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
 | `tests/run.sh` | Tests for `run.sh`, `check-updates.sh` and `sync-skills.sh` with a podman stand-in. See [Tests](#tests) |
+
+### Your files
+
+Your settings and data live apart from the code, in `~/.config/agentbox/` (`AB_HOME` moves it). The code can then be replaced by a new version or a fresh clone without touching them, and a session that has agentbox's own code open as its repo does not see them. In this README, `config.env`, `env/` and the others below mean the ones there.
+
+| File | Purpose |
+|---|---|
+| `config.env` | Settings, from `config.env.example` |
+| `env/` | Optional. Per-project environment files, `<repo dir name>.env`, and per-project settings, `<repo dir name>.conf` (`AB_FORWARD`, see [Test servers](#test-servers)) |
+| `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
+| `AGENTS.md` | Optional. Personal instructions for both agents, from `agents/AGENTS.md.example` |
+| `mcp.local/<name>/` | Your own MCP modules; one with the name of a module in `mcp/` replaces it |
+| `skills.local.d/<name>.conf` | Your own skill sources |
+| `egress.local.d/<name>.conf` | Your own egress host groups |
+| `pi-extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi |
+
+`run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
+
+Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS.md`, `pi/extensions/` for `pi-extensions/`). Each one still found only there is used from there, and every start prints the commands that move it.
 
 ## First-time setup
 
@@ -114,9 +127,10 @@ chmod +x run.sh
 Set up `config.env`. Choose the MCP servers with `AB_MCP`, e.g. `AB_MCP=grafana graylog`, and set what those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL` (base URLs only, without `/api` or `/api/mcp`; trailing parts are stripped anyway). Context7 is always on; skip the steps below for servers you do not use. See [MCP servers](#mcp-servers).
 
 ```bash
-cp config.env.example config.env
-$EDITOR config.env
-cp agents/AGENTS.md.example agents/AGENTS.md   # optional: personal instructions for the agents, see Memory and personal instructions
+mkdir -p ~/.config/agentbox
+cp config.env.example ~/.config/agentbox/config.env
+$EDITOR ~/.config/agentbox/config.env
+cp agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md   # optional: personal instructions for the agents, see Memory and personal instructions
 ```
 
 `config.env` is parsed, not executed, accepts only known keys, and survives updates of `run.sh`. Environment variables override it, and `AB_CONFIG=/path/to/file` points to a different file, e.g. one per environment. An enabled MCP module whose settings or secrets (step 5) are missing stops the script with an error naming them.
@@ -213,7 +227,7 @@ The hosts the agent may reach, apart from the MCP modules' remote servers, come 
 | Where | What |
 |---|---|
 | `egress.d/<name>.conf` | Shared groups, in git |
-| `egress.local.d/<name>.conf` | Your own, ignored by git. A name that also exists in `egress.d/` replaces that group |
+| `egress.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `egress.d/` replaces that group |
 
 `AB_EGRESS` in `config.env` lists the enabled ones. Unset, it is `anthropic openai pypi go`; a list replaces that default entirely, and `AB_EGRESS=` (empty) enables none. Claude Code does not start without `anthropic`; pi needs `openai` only with a ChatGPT subscription (with an API key it goes through its sidecar), so someone using only pi with a key can leave out both. On every start `run.sh` writes the hosts of the enabled groups and of the enabled MCP modules into a file `squid.conf` includes, and recreates squid when it changed. Open sessions lose egress for a moment.
 
@@ -252,7 +266,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | Directory | |
 |---|---|
 | `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github` |
-| `mcp.local/<name>/` | Your own modules, ignored by git. A name that also exists in `mcp/` replaces that module |
+| `mcp.local/<name>/` | Your own modules, in [your files](#your-files). A name that also exists in `mcp/` replaces that module |
 
 `AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
 
@@ -362,7 +376,7 @@ Leaving it off and asking the agent to read public repositories through the GitH
 
 ## Documentation (Context7)
 
-The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. The `agents/AGENTS.md` template tells both agents to look there first.
+The model's knowledge stops at its training date, and `WebFetch` cannot open documentation sites because squid blocks them. [Context7](https://github.com/upstash/context7) (by Upstash) fills the gap: an MCP server with two tools, `resolve-library-id` (library name → Context7 ID) and `query-docs` (current documentation and code examples for that library, optionally for a specific version). The agent talks only to `mcp.context7.com`, never to arbitrary pages. The `agents/AGENTS.md.example` template tells both agents to look there first.
 
 ### Setup
 
@@ -425,8 +439,8 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 | `pi/models.json` | `~/.pi/agent/models.json` | OpenAI API endpoint = the sidecar (API-key mode) |
 | generated by `run.sh` | `~/.pi/agent/mcp.json` | MCP servers of the enabled modules, with caller tokens from env |
 | `skills/` | `~/.pi/agent/skills` | Same personal skills as Claude Code |
-| `agents/AGENTS.md` | `~/.pi/agent/AGENTS.md` | Same personal instructions as Claude Code, see [Memory and personal instructions](#memory-and-personal-instructions) |
-| `pi/extensions/` | `~/.pi/agent/extensions` | Extensions you allow (empty by default) |
+| `AGENTS.md` | `~/.pi/agent/AGENTS.md` | Same personal instructions as Claude Code, see [Memory and personal instructions](#memory-and-personal-instructions) |
+| `pi-extensions/` in [your files](#your-files) | `~/.pi/agent/extensions` | Extensions you allow (empty by default) |
 
 Read-only matters here: pi executes extensions it finds in its agent directory and reads its model endpoint and MCP servers from these files. If the agent could write them, it could redirect its own model traffic, add servers or plant code that persists across sessions. Sessions, `settings.json` and `auth.json` stay writable in `ab-pi-home`.
 
@@ -434,7 +448,7 @@ pi runs with `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0`: no 
 
 ### Extensions and skills
 
-pi's MCP support is built in, no extension needed. `pi install ...` does not work inside the box (no npm access) and would write to the agent directory anyway. To allow an extension, read it, then copy it into `pi/extensions/` on the host. Skills come from `skills/`, the same directory Claude Code uses, so `sync-skills.sh` covers both agents. Skills written for Claude Code may rely on Claude-specific features such as subagents and work less well in pi.
+pi's MCP support is built in, no extension needed. `pi install ...` does not work inside the box (no npm access) and would write to the agent directory anyway. To allow an extension, read it, then copy it into `~/.config/agentbox/pi-extensions/` on the host. Skills come from `skills/`, the same directory Claude Code uses, so `sync-skills.sh` covers both agents. Skills written for Claude Code may rely on Claude-specific features such as subagents and work less well in pi.
 
 ## Daily usage
 
@@ -472,10 +486,10 @@ The repo is mounted at `/work/<repo dir name>`, which is also the working direct
 
 Claude Code's auto memory is **off by default** in the box: `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` when that key is not set yet, so an explicit choice there is kept. To use it in one project, set `"autoMemoryEnabled": true` in that repo's `.claude/settings.json`.
 
-Instructions that should apply in every repo go in `agents/AGENTS.md` next to `run.sh`. It is yours and ignored by git; start from the template, which has the rules this box relies on (ask before committing, where to look up library documentation):
+Instructions that should apply in every repo go in `~/.config/agentbox/AGENTS.md`. Start from the template, which has the rules this box relies on (ask before committing, where to look up library documentation):
 
 ```bash
-cp agents/AGENTS.md.example agents/AGENTS.md
+cp agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md
 ```
 
 Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.md`, pi as `~/.pi/agent/AGENTS.md` (its global context file). Read-only for the same reason as personal skills (see [Skills](#skills)): written by the agent in its home volume, it would carry over into every future session. Keep the text agent-neutral; name an agent only where a rule is specific to it. Changes apply at the next session start, also when you edit the file from inside a session: the running session keeps the version it started with.
@@ -495,7 +509,7 @@ Claude Code picks up skills from two places, and both work in the box without ne
 | Kind | Location | How it gets into the box |
 |---|---|---|
 | Project skills | `<repo>/.claude/skills/<name>/SKILL.md` | Nothing to do: the repo is mounted |
-| Personal skills | `~/.claude/skills/<name>/SKILL.md` | Put them in `skills/` next to `run.sh`; it is mounted **read-only** over `~/.claude/skills` |
+| Personal skills | `~/.claude/skills/<name>/SKILL.md` | Put them in `~/.config/agentbox/skills/`; it is mounted **read-only** over `~/.claude/skills` |
 
 ```
 agentbox/
@@ -523,7 +537,7 @@ A skill source is a git repository of skills, described in a small file:
 | Directory | |
 |---|---|
 | `skills.d/<name>.conf` | Shared sources, in git: `mattpocock` |
-| `skills.local.d/<name>.conf` | Your own, ignored by git. A name that also exists in `skills.d/` replaces that source |
+| `skills.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `skills.d/` replaces that source |
 
 `AB_SKILLS` in `config.env` lists the enabled ones (`AB_SKILLS=mattpocock`). Nobody gets skills they did not enable. The `.conf` is `KEY=VALUE` data, never run:
 
@@ -746,7 +760,7 @@ The agent connects by name and the target's port: `db:5432`, `mq:5672`. For each
 
 ## Per-project environment
 
-Environment variables for one project, seen only by sessions in the box, go in `env/<repo dir name>.env` next to `run.sh`:
+Environment variables for one project, seen only by sessions in the box, go in `~/.config/agentbox/env/<repo dir name>.env`:
 
 ```
 # env/myapp.env
@@ -759,7 +773,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 - Different projects can use the same variable names with different values, and the agent on the host never sees them.
 - Podman format: `KEY=VALUE` per line, `#` comments, the value is taken literally (quotes become part of it). A line with only `KEY` copies that variable from the host environment.
 - The file is keyed by the directory name: two repos with the same name share one file.
-- The directory is on the host and not mounted, so the agent cannot change what its next session starts with, and the passwords never reach the project's git. `env/` is ignored by git here.
+- The directory is on the host and not mounted, so the agent cannot change what its next session starts with, and the passwords never reach the project's git.
 - The variables `run.sh` sets itself (proxy, agent settings) take precedence and cannot be overridden from the file.
 - `AB_ENV_DIR` points to a different directory.
 
@@ -767,7 +781,8 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AB_CONFIG` | `<script dir>/config.env` | Settings file. All variables in this table except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE` can be set there; a module's settings only while the module is in `AB_MCP` |
+| `AB_HOME` | `~/.config/agentbox` | Directory with your files. See [Your files](#your-files) |
+| `AB_CONFIG` | `<AB_HOME>/config.env` | Settings file. All variables in this table except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE` can be set there; a module's settings only while the module is in `AB_MCP` |
 | `AB_MCP` | unset | MCP modules to enable, space- or comma-separated, e.g. `grafana graylog github`. `context7` is always on. See [MCP servers](#mcp-servers) |
 | `AB_EGRESS` | `anthropic openai pypi go` | Egress host groups to enable, space- or comma-separated, from `egress.local.d/` or `egress.d/`; empty enables none. See [Egress](#egress) |
 | `GRAFANA_URL` | unset | Setting of the `grafana` module: Grafana base URL (needs the `grafana_sa` secret) |
@@ -776,13 +791,13 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | Setting of the `github` module: toolsets, enforced by nginx |
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
-| `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
+| `AB_SKILLS_DIR` | `<AB_HOME>/skills` | Personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
 | `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. Applies on the next build (`AB_UPGRADE=1`). See [Python](#python) |
 | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. Applies on the next build (`AB_UPGRADE=1`). See [Go](#go) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated; the session reaches them by name. Also per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
-| `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
+| `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates sidecars, needed after changing URLs, toolsets or the nginx templates. Squid is recreated by itself when `squid.conf`, the egress groups or the modules' hosts change |

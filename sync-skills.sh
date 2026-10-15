@@ -40,7 +40,7 @@
 #                    (without the prefix; default: all)
 #   SKILLS_PREFIX    prefix for installed skill names (default: the repo owner,
 #                    lowercased); set it empty to install names unchanged
-#   AB_SKILLS_DIR    target directory (default: <script dir>/skills), same
+#   AB_SKILLS_DIR    target directory (default: ~/.config/agentbox/skills), same
 #                    variable run.sh uses
 #   SKILLS_SOURCE    name of the skills.d source this sync is for (set by
 #                    run.sh); recorded so run.sh can remove a disabled source
@@ -54,7 +54,9 @@ REMOVE=""
 if [[ "${1:-}" == --remove ]]; then REMOVE=1; shift; fi
 URL="${1:?usage: $0 [--remove] <git-url> [ref]}"
 REF="${2:-}"
-SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
+# shellcheck source=lib/paths.sh
+source "$SCRIPT_DIR/lib/paths.sh"
+SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 
 # owner__repo from https://github.com/owner/repo(.git) or git@github.com:owner/repo(.git)
 slug="$(printf '%s' "$URL" | sed -E 's#(\.git)?/*$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1__\2#')"

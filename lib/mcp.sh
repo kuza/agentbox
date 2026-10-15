@@ -1,5 +1,5 @@
 # MCP servers as modules: mcp/<name>/mcp.sh (shared, in git) or
-# mcp.local/<name>/mcp.sh (yours, ignored by git; wins over mcp/). AB_MCP in
+# <AB_HOME>/mcp.local/<name>/mcp.sh (yours; wins over mcp/). AB_MCP in
 # config.env lists the enabled ones; context7 is always enabled.
 #
 # A module is a bash file, sourced by run.sh on the host, so it is code with
@@ -29,7 +29,7 @@
 # ("host module" per entry, for lib/egress.sh), MCP_MANAGED (name and URL per
 # line, for cleaning up old registrations).
 
-MCP_DIRS=("$SCRIPT_DIR/mcp.local" "$SCRIPT_DIR/mcp")
+MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 
 mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
   local d
@@ -41,7 +41,7 @@ mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
     if [[ -f "$d/$1/mcp.sh" ]]; then MCP_DIR="$d/$1"; break; fi
   done
   if [[ -z "$MCP_DIR" ]]; then
-    echo "error: AB_MCP: no MCP module '$1' (looked for mcp.local/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
+    echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
     exit 2
   fi
   # shellcheck source=/dev/null

@@ -26,7 +26,8 @@ setup() {
   AB="$T/ab"
   STUB_DIR="$T/stub"
   REPO="$T/repo"
-  mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
+  CFG="$T/home/.config/agentbox"
+  mkdir -p "$AB" "$CFG" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
   cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
         "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
@@ -42,11 +43,11 @@ setup() {
   cp "$ROOT/tests/stub/podman" "$T/bin/podman"
   chmod +x "$T/bin/podman"
   printf '%s\n' claude_oauth > "$STUB_DIR/secrets"
-  : > "$AB/config.env"
+  : > "$CFG/config.env"
   export STUB_DIR
 }
 
-config() { printf '%s\n' "$@" >> "$AB/config.env"; }
+config() { printf '%s\n' "$@" >> "$CFG/config.env"; }
 secrets() { printf '%s\n' "$@" >> "$STUB_DIR/secrets"; }
 
 # ab_run [env...] -- [run.sh args...]: run.sh with the stub; output in $T/out,
@@ -138,6 +139,8 @@ test_mcp_pi_gets_same_servers() {
   assert_rc 0
   grep -qE 'localhost/agentbox$' "$STUB_DIR/calls" || fail "pi must get no --mcp-config"
   session_args | grep -qx -- "$(cache mcp-pi.json):/home/node/.pi/agent/mcp.json:ro,z" || fail "pi mcp.json not mounted"
+  session_args | grep -qx -- "$CFG/pi-extensions:/home/node/.pi/agent/extensions:ro,z" || fail "pi extensions not mounted from your files"
+  [[ -d "$CFG/pi-extensions" ]] || fail "pi-extensions not created"
   assert_file_has "$(cache mcp-pi.json)" '"description": "Grafana'
   if command -v python3 >/dev/null; then
     assert_eq "$(json_keys "$(cache mcp-pi.json)")" "context7 grafana" "pi servers"
@@ -193,11 +196,11 @@ test_mcp_invalid_name() {
 
 test_mcp_local_module_and_override() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/mcp.local/tracker" "$AB/mcp.local/context7"
+  mkdir -p "$CFG/mcp.local/tracker" "$CFG/mcp.local/context7"
   printf '%s\n' 'MCP_DESCRIPTION="Tracker"' 'MCP_URL="https://mcp.tracker.example/mcp"' \
-    'MCP_EGRESS=(mcp.tracker.example)' 'MCP_CONFIG=(TRACKER_SITE)' > "$AB/mcp.local/tracker/mcp.sh"
+    'MCP_EGRESS=(mcp.tracker.example)' 'MCP_CONFIG=(TRACKER_SITE)' > "$CFG/mcp.local/tracker/mcp.sh"
   printf '%s\n' 'MCP_DESCRIPTION="Docs mirror"' 'MCP_URL="https://docs.internal.example/mcp"' \
-    'MCP_EGRESS=(docs.internal.example)' > "$AB/mcp.local/context7/mcp.sh"
+    'MCP_EGRESS=(docs.internal.example)' > "$CFG/mcp.local/context7/mcp.sh"
   config "AB_MCP=tracker" "TRACKER_SITE=acme"
   ab_run --
   assert_rc 0
@@ -224,8 +227,8 @@ test_mcp_egress_recreated_only_on_change() {
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "egress not started"
   ab_run --
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" && fail "egress recreated without a change"
-  mkdir -p "$AB/mcp.local/extra"
-  printf '%s\n' 'MCP_URL="https://extra.example/mcp"' 'MCP_EGRESS=(extra.example)' > "$AB/mcp.local/extra/mcp.sh"
+  mkdir -p "$CFG/mcp.local/extra"
+  printf '%s\n' 'MCP_URL="https://extra.example/mcp"' 'MCP_EGRESS=(extra.example)' > "$CFG/mcp.local/extra/mcp.sh"
   config "AB_MCP=extra"
   ab_run --
   grep -q '^podman rm -f -v ab-egress' "$STUB_DIR/calls" || fail "egress not recreated after the host list changed"
@@ -271,10 +274,10 @@ test_egress_default_groups() {
 
 test_egress_listed_groups_local_override_and_ports() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/egress.local.d"
+  mkdir -p "$CFG/egress.local.d"
   printf '%s\n' '# test servers' 'Data.S3.eu-central-1.amazonaws.com' 'minio.test:9000  # MinIO' \
-    '.internal.example' > "$AB/egress.local.d/test.conf"
-  printf '%s\n' 'mirror.example' > "$AB/egress.local.d/pypi.conf"
+    '.internal.example' > "$CFG/egress.local.d/test.conf"
+  printf '%s\n' 'mirror.example' > "$CFG/egress.local.d/pypi.conf"
   config "AB_EGRESS=anthropic pypi, gcs test gcs"
   ab_run --
   assert_rc 0
@@ -298,8 +301,8 @@ test_egress_empty_list_mcp_hosts_only() {
   assert_file_lacks "$(cache squid-allow.conf)" 'pypi.org|anthropic'
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.context7.com$'
   # squid.conf refers to "allowed": it must be defined even with no hosts.
-  mkdir -p "$AB/mcp.local/context7"
-  printf '%s\n' 'MCP_URL="http://docs-mirror:8080/mcp"' > "$AB/mcp.local/context7/mcp.sh"
+  mkdir -p "$CFG/mcp.local/context7"
+  printf '%s\n' 'MCP_URL="http://docs-mirror:8080/mcp"' > "$CFG/mcp.local/context7/mcp.sh"
   ab_run AB_AGENT=pi --
   assert_rc 0
   assert_eq "$(grep -c '^acl allowed ' "$(cache squid-allow.conf)")" 1 "allowed acl lines"
@@ -323,21 +326,21 @@ test_egress_errors() {
   ab_run --
   assert_rc 2
   assert_out "no group 'nope'"
-  : > "$AB/config.env"; config "AB_EGRESS=../x"
+  : > "$CFG/config.env"; config "AB_EGRESS=../x"
   ab_run --
   assert_rc 2
   assert_out "invalid group name"
-  mkdir -p "$AB/egress.local.d"
-  printf '%s\n' 'ok.example' 'bad host; http_access allow all' > "$AB/egress.local.d/bad.conf"
-  : > "$AB/config.env"; config "AB_EGRESS=bad"
+  mkdir -p "$CFG/egress.local.d"
+  printf '%s\n' 'ok.example' 'bad host; http_access allow all' > "$CFG/egress.local.d/bad.conf"
+  : > "$CFG/config.env"; config "AB_EGRESS=bad"
   ab_run --
   assert_rc 2
   assert_out "bad.conf:2: one host per line"
   grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
-  : > "$AB/config.env"
+  : > "$CFG/config.env"
   local h
   for h in 'x.example:99999' 'x.example:0' 'x_y.example' '*.example' 'x.example:443/path'; do
-    printf '%s\n' "$h" > "$AB/egress.local.d/bad.conf"
+    printf '%s\n' "$h" > "$CFG/egress.local.d/bad.conf"
     config "AB_EGRESS=bad"
     ab_run --
     assert_rc 2
@@ -363,12 +366,12 @@ run_line() { grep "^podman run -d --replace --name $1 " "$STUB_DIR/calls"; }
 test_forward_global_and_repo() {
   setup "${FUNCNAME[0]}"
   config "AB_FORWARD=db=DB.test.example:5432"
-  mkdir -p "$AB/env"
-  printf '%s\n' '# test servers of this repo' 'AB_FORWARD=mq=mq.test.example:5672, web=web.test.example:80' > "$AB/env/repo.conf"
+  mkdir -p "$CFG/env"
+  printf '%s\n' '# test servers of this repo' 'AB_FORWARD=mq=mq.test.example:5672, web=web.test.example:80' > "$CFG/env/repo.conf"
   ab_run --
   assert_rc 0
   local k; k="$(fwd_key)"
-  assert_out "repo config $AB/env/repo.conf"
+  assert_out "repo config $CFG/env/repo.conf"
   assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" "ab-fwd-$k-mq ab-fwd-$k-web ab-fwd-db" "forward sidecars"
   local l; l="$(run_line ab-fwd-db)"
   [[ "$l" == *"--network ab-egress --network ab-forward:alias=db "* ]] || fail "global networks: $l"
@@ -388,20 +391,20 @@ test_forward_global_and_repo() {
 test_forward_recreated_and_removed() {
   setup "${FUNCNAME[0]}"
   config "AB_FORWARD=db=db.test.example:5432"
-  mkdir -p "$AB/env"
-  echo "AB_FORWARD=mq=mq.test.example:5672" > "$AB/env/repo.conf"
+  mkdir -p "$CFG/env"
+  echo "AB_FORWARD=mq=mq.test.example:5672" > "$CFG/env/repo.conf"
   ab_run --
   ab_run --
   run_line ab-fwd-db && fail "recreated without a change"
   # Another repo's sidecar: not this start's business.
   echo "ab-fwd-ffffffff-x localhost/agentbox" >> "$STUB_DIR/running"
   echo "ab-fwd-ffffffff-x agentbox.forward=repo-ffffffff" >> "$STUB_DIR/labels"
-  : > "$AB/config.env"; config "AB_FORWARD=db=db2.test.example:5432"
+  : > "$CFG/config.env"; config "AB_FORWARD=db=db2.test.example:5432"
   ab_run --
   run_line ab-fwd-db | grep -q 'TCP:db2.test.example:5432' || fail "not recreated after the target changed"
   ab_run STUB_IMAGE_ID=img-2 --
   run_line ab-fwd-db >/dev/null || fail "not recreated on a new agentbox image"
-  rm "$AB/env/repo.conf"; : > "$AB/config.env"
+  rm "$CFG/env/repo.conf"; : > "$CFG/config.env"
   ab_run --
   assert_rc 0
   assert_out "removed ab-fwd-db, no longer in AB_FORWARD"
@@ -415,22 +418,22 @@ test_forward_errors() {
   setup "${FUNCNAME[0]}"
   local e
   for e in 'db' 'Db=x.example:5432' 'ab-x=x.example:5432' 'db=x.example' 'db=.example:5432' 'db=x.example:70000' 'db=x;y:1' 'db=*:5432'; do
-    : > "$AB/config.env"; config "AB_FORWARD=$e"
+    : > "$CFG/config.env"; config "AB_FORWARD=$e"
     ab_run --
     assert_rc 2
   done
-  : > "$AB/config.env"; config "AB_FORWARD=db=x.example:5432"
-  mkdir -p "$AB/env"; echo "AB_FORWARD=db=y.example:5432" > "$AB/env/repo.conf"
+  : > "$CFG/config.env"; config "AB_FORWARD=db=x.example:5432"
+  mkdir -p "$CFG/env"; echo "AB_FORWARD=db=y.example:5432" > "$CFG/env/repo.conf"
   ab_run --
   assert_rc 2
   assert_out "the name 'db' appears more than once"
-  rm "$AB/env/repo.conf"
-  : > "$AB/config.env"; config "AB_FORWARD=redis=x.example:6379" "AB_SERVICES=redis"
+  rm "$CFG/env/repo.conf"
+  : > "$CFG/config.env"; config "AB_FORWARD=redis=x.example:6379" "AB_SERVICES=redis"
   ab_run --
   assert_rc 2
   assert_out "'redis' is also in AB_SERVICES"
   grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
-  : > "$AB/config.env"; config "AB_FORWARD=db=x.example:5432"
+  : > "$CFG/config.env"; config "AB_FORWARD=db=x.example:5432"
   ab_run STUB_NO_SOCAT=1 --
   assert_rc 1
   assert_out "needs socat"
@@ -480,7 +483,7 @@ test_disabled_sidecars_removed() {
   ab_run --
   assert_eq "$(started)" "ab-egress ab-llm-openai ab-mcp-grafana ab-mcp-graylog" "sidecars"
   echo "redis docker.io/library/redis:7" >> "$STUB_DIR/running"
-  : > "$AB/config.env"; config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  : > "$CFG/config.env"; config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
   grep -vx openai_api_key "$STUB_DIR/secrets" > "$STUB_DIR/secrets.new"; mv "$STUB_DIR/secrets.new" "$STUB_DIR/secrets"
   ab_run --
   assert_rc 0
@@ -520,27 +523,63 @@ test_egress_recreated_when_squid_conf_changes() {
 
 test_session_basics() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/env" "$AB/agents"
-  echo "DB=x" > "$AB/env/repo.env"
-  echo "# rules" > "$AB/agents/AGENTS.md"
+  mkdir -p "$CFG/env" "$AB/agents"
+  echo "DB=x" > "$CFG/env/repo.env"
+  echo "# rules" > "$CFG/AGENTS.md"
   ab_run --
   assert_rc 0
   local args; args="$(session_args)"
   grep -qx -- "$REPO:/work/repo:z" <<<"$args" || fail "repo not mounted at /work/repo"
   grep -qx -- "$REPO/.git/hooks:/work/repo/.git/hooks:ro,z" <<<"$args" || fail ".git/hooks not read-only"
   grep -qx -- "$REPO/.git/config:/work/repo/.git/config:ro,z" <<<"$args" || fail ".git/config not read-only"
-  grep -qx -- "$AB/env/repo.env" <<<"$args" || fail "env file not passed"
-  grep -qx -- "$AB/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "AGENTS.md not mounted"
+  grep -qx -- "$CFG/env/repo.env" <<<"$args" || fail "env file not passed"
+  grep -qx -- "$CFG/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "AGENTS.md not mounted"
   grep -qx -- '--cap-drop=ALL' <<<"$args" || fail "capabilities not dropped"
 }
 
-test_refuses_agentbox_dir() {
+test_refuses_agentbox_code_and_user_files() {
   setup "${FUNCNAME[0]}"
-  : > "$STUB_DIR/calls"
-  env HOME="$T/home" PATH="$T/bin:$PATH" bash "$AB/run.sh" "$AB" > "$T/out" 2>&1 < /dev/null
-  RC=$?
-  assert_rc 2
-  assert_out "refusing to mount the agentbox directory"
+  mkdir -p "$T/elsewhere/env"
+  local r
+  # The code, a directory containing it, your files, the env dir set
+  # elsewhere and a directory inside it, a directory containing them all.
+  for r in "$AB" "$T" "$CFG" "$T/elsewhere" "$T/elsewhere/env" "$T/home"; do
+    : > "$STUB_DIR/calls"
+    env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_UPDATES=0 \
+        AB_ENV_DIR="$T/elsewhere/env" bash "$AB/run.sh" "$r" > "$T/out" 2>&1 < /dev/null
+    RC=$?
+    assert_rc 2
+    assert_out "refusing to mount $r: it overlaps"
+    grep -q '^podman run' "$STUB_DIR/calls" && fail "$r: something started"
+  done
+  # A separate clone of agentbox is an ordinary repo.
+  cp -R "$AB" "$T/clone"
+  REPO="$T/clone"
+  ab_run --
+  assert_rc 0
+}
+
+test_user_files_in_old_place_used_with_warning() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/env" "$AB/agents"
+  echo "DB=x" > "$AB/env/repo.env"
+  echo "# rules" > "$AB/agents/AGENTS.md"
+  rm "$CFG/config.env"
+  echo "AB_SERVICES=" > "$AB/config.env"
+  ab_run --
+  assert_rc 0
+  assert_out "your files belong in $CFG now"
+  assert_out "mv '$AB/env' '$CFG/env'"
+  assert_out "mv '$AB/agents/AGENTS.md' '$CFG/AGENTS.md'"
+  assert_out "mv '$AB/config.env' '$CFG/config.env'"
+  local args; args="$(session_args)"
+  grep -qx -- "$AB/env/repo.env" <<<"$args" || fail "old env file not used"
+  grep -qx -- "$AB/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "old AGENTS.md not used"
+  # Once moved, the new place wins and the warning goes.
+  mv "$AB/env" "$CFG/env"; mv "$AB/agents/AGENTS.md" "$CFG/AGENTS.md"; mv "$AB/config.env" "$CFG/config.env"
+  ab_run --
+  assert_no_out "belong in"
+  session_args | grep -qx -- "$CFG/env/repo.env" || fail "new env file not used"
 }
 
 test_missing_agent_secret() {
@@ -555,9 +594,9 @@ test_graphify_skill_installed_and_refreshed() {
   setup "${FUNCNAME[0]}"
   ab_run STUB_GRAPHIFY=ok --
   assert_rc 0
-  [[ -f "$AB/skills/graphify/SKILL.md" ]] || fail "claude variant not installed"
+  [[ -f "$CFG/skills/graphify/SKILL.md" ]] || fail "claude variant not installed"
   [[ -f "$T/home/.cache/agentbox/graphify-pi/graphify/SKILL.md" ]] || fail "pi variant not installed"
-  assert_eq "$(cat "$AB/skills/graphify/.agentbox-image" 2>/dev/null)" "img-1" "stamp"
+  assert_eq "$(cat "$CFG/skills/graphify/.agentbox-image" 2>/dev/null)" "img-1" "stamp"
   ab_run STUB_GRAPHIFY=ok --
   grep -q 'graphify install' "$STUB_DIR/calls" && fail "reinstalled for the same image"
   ab_run STUB_GRAPHIFY=ok STUB_IMAGE_ID=img-2 --
@@ -574,31 +613,31 @@ test_graphify_failure_does_not_stop_session() {
 
 test_graphify_foreign_skill_left_alone() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/skills/graphify"
-  echo mine > "$AB/skills/graphify/SKILL.md"
+  mkdir -p "$CFG/skills/graphify"
+  echo mine > "$CFG/skills/graphify/SKILL.md"
   ab_run STUB_GRAPHIFY=ok --
   assert_rc 0
   assert_out "was not installed by agentbox"
-  assert_eq "$(cat "$AB/skills/graphify/SKILL.md")" "mine"
+  assert_eq "$(cat "$CFG/skills/graphify/SKILL.md")" "mine"
 }
 
 
 test_skills_state_migrated_from_vendor() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/vendor/graphify/pi/graphify" "$AB/skills/acme-tdd"
+  mkdir -p "$AB/vendor/graphify/pi/graphify" "$CFG/skills/acme-tdd"
   printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" "SKILLS_ONLY=tdd" \
-    "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=$AB/skills" > "$AB/vendor/acme__skills.sync"
-  printf 'acme-tdd\n' > "$AB/skills/.vendored-acme__skills"
+    "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=$CFG/skills" > "$AB/vendor/acme__skills.sync"
+  printf 'acme-tdd\n' > "$CFG/skills/.vendored-acme__skills"
   ab_run --
   assert_rc 0
   assert_out "moved the record of acme__skills"
-  local st="$AB/skills/.sources/acme__skills"
+  local st="$CFG/skills/.sources/acme__skills"
   assert_file_has "$st" '^URL=https://github.com/acme/skills$'
   assert_file_has "$st" '^SKILL=acme-tdd$'
   assert_file_lacks "$st" 'AB_SKILLS_DIR'
   [[ -e "$AB/vendor" ]] && fail "vendor/ left behind"
-  [[ -e "$AB/skills/.vendored-acme__skills" ]] && fail "old manifest left behind"
-  [[ -d "$AB/skills/acme-tdd" ]] || fail "installed skill touched"
+  [[ -e "$CFG/skills/.vendored-acme__skills" ]] && fail "old manifest left behind"
+  [[ -d "$CFG/skills/acme-tdd" ]] || fail "installed skill touched"
 }
 
 # --- check-updates.sh -------------------------------------------------------
@@ -628,7 +667,7 @@ EOF
   echo "my-redis docker.io/library/redis:7" >> "$STUB_DIR/running"
   echo "docker.io/grafana/mcp-grafana:latest sha256:aaa" > "$STUB_DIR/digests"
   echo aaa > "$T/remote_digest"
-  mkdir -p "$AB/skills/.sources"
+  mkdir -p "$CFG/skills/.sources"
 }
 
 cu_run() {  # [args...]
@@ -680,7 +719,7 @@ test_updates_registry_down_warns() {
 test_updates_skills_behind() {
   cu_setup "${FUNCNAME[0]}"
   printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
-    "SKILLS_ONLY=tdd" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" > "$AB/skills/.sources/acme__skills"
+    "SKILLS_ONLY=tdd" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" > "$CFG/skills/.sources/acme__skills"
   printf 'b%.0s' {1..40} > "$T/remote_head"
   cu_run
   assert_out "update available: skills from acme__skills, aaaaaaa -> bbbbbbb"
@@ -689,7 +728,7 @@ test_updates_skills_behind() {
 
 test_updates_rejects_bad_sync_file() {
   cu_setup "${FUNCNAME[0]}"
-  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$AB/skills/.sources/evil"
+  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$CFG/skills/.sources/evil"
   cu_run
   assert_out "evil: bad URL or COMMIT, skipped"
   assert_eq "$(grep -c git "$T/net")" 0 "git calls for a bad record"
@@ -721,14 +760,14 @@ test_sync_prefix_and_note() {
   ss_setup "${FUNCNAME[0]}"
   ss_run SKILLS_ONLY=review,tdd
   assert_rc 0
-  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "acme-review acme-tdd"
-  assert_file_has "$AB/skills/acme-review/SKILL.md" '^name: acme-review$'
-  assert_file_has "$AB/skills/acme-review/SKILL.md" 'Installed with a prefix'
-  assert_file_has "$AB/skills/acme-review/SKILL.md" '\(`review`, `tdd`\)'
+  assert_eq "$(ls "$CFG/skills" | paste -sd' ' -)" "acme-review acme-tdd"
+  assert_file_has "$CFG/skills/acme-review/SKILL.md" '^name: acme-review$'
+  assert_file_has "$CFG/skills/acme-review/SKILL.md" 'Installed with a prefix'
+  assert_file_has "$CFG/skills/acme-review/SKILL.md" '\(`review`, `tdd`\)'
   # The skill's own text is not rewritten.
-  assert_file_has "$AB/skills/acme-review/SKILL.md" 'Skill tool with "tdd"'
-  assert_file_has "$AB/skills/.sources/acme__skills" '^SKILLS_ONLY=review,tdd$'
-  assert_file_has "$AB/skills/.sources/acme__skills" '^COMMIT=[0-9a-f]{40}$'
+  assert_file_has "$CFG/skills/acme-review/SKILL.md" 'Skill tool with "tdd"'
+  assert_file_has "$CFG/skills/.sources/acme__skills" '^SKILLS_ONLY=review,tdd$'
+  assert_file_has "$CFG/skills/.sources/acme__skills" '^COMMIT=[0-9a-f]{40}$'
 }
 
 test_sync_deselect_and_prefix_change() {
@@ -736,20 +775,20 @@ test_sync_deselect_and_prefix_change() {
   ss_run SKILLS_ONLY=review,tdd
   ss_run SKILLS_ONLY=tdd SKILLS_PREFIX=x
   assert_rc 0
-  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "x-tdd"
+  assert_eq "$(ls "$CFG/skills" | paste -sd' ' -)" "x-tdd"
   ss_run SKILLS_ONLY=tdd SKILLS_PREFIX=
-  assert_eq "$(ls "$AB/skills" | paste -sd' ' -)" "tdd"
-  assert_file_lacks "$AB/skills/tdd/SKILL.md" 'Installed with a prefix'
+  assert_eq "$(ls "$CFG/skills" | paste -sd' ' -)" "tdd"
+  assert_file_lacks "$CFG/skills/tdd/SKILL.md" 'Installed with a prefix'
 }
 
 test_sync_refuses_foreign_skill() {
   ss_setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/skills/acme-tdd"
-  echo mine > "$AB/skills/acme-tdd/SKILL.md"
+  mkdir -p "$CFG/skills/acme-tdd"
+  echo mine > "$CFG/skills/acme-tdd/SKILL.md"
   ss_run SKILLS_ONLY=tdd
   assert_rc 1
   assert_out "was not installed from acme__skills; not overwriting"
-  assert_eq "$(cat "$AB/skills/acme-tdd/SKILL.md")" "mine"
+  assert_eq "$(cat "$CFG/skills/acme-tdd/SKILL.md")" "mine"
 }
 
 test_sync_bad_prefix() {
@@ -763,11 +802,13 @@ test_sync_bad_prefix() {
 # --- run.sh: skill sources (AB_SKILLS) --------------------------------------
 
 src_conf() {  # <dir: skills.d|skills.local.d> <name> <lines...>
-  local dir="$AB/$1" name="$2"; shift 2
+  local dir name="$2"
+  if [[ "$1" == skills.d ]]; then dir="$AB/$1"; else dir="$CFG/$1"; fi
+  shift 2
   mkdir -p "$dir"
   printf '%s\n' "$@" > "$dir/$name.conf"
 }
-installed() { ls "$AB/skills" 2>/dev/null | grep -v '^graphify$' | paste -sd' ' -; }
+installed() { ls "$CFG/skills" 2>/dev/null | grep -v '^graphify$' | paste -sd' ' -; }
 
 test_skills_source_installed_once() {
   ss_setup "${FUNCNAME[0]}"
@@ -777,7 +818,7 @@ test_skills_source_installed_once() {
   assert_rc 0
   assert_out "syncing skills from 'acme'"
   assert_eq "$(installed)" "acme-review acme-tdd"
-  assert_file_has "$AB/skills/.sources/acme__skills" '^SOURCE=acme$'
+  assert_file_has "$CFG/skills/.sources/acme__skills" '^SOURCE=acme$'
   ab_run --
   assert_no_out "syncing skills"
 }
@@ -787,16 +828,16 @@ test_skills_source_selection_change_keeps_version() {
   src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
   config "AB_SKILLS=acme"
   ab_run --
-  local before; before="$(source_value "$AB/skills/.sources/acme__skills" COMMIT)"
+  local before; before="$(source_value "$CFG/skills/.sources/acme__skills" COMMIT)"
   printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
   git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
   src_conf skills.d acme "URL=$SRC" "ONLY=tdd,notes"
   ab_run --
   assert_rc 0
   assert_eq "$(installed)" "acme-notes acme-tdd"
-  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" COMMIT)" "$before" "installed commit"
-  assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
-  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" REF)" "" "REF (must not look pinned)"
+  assert_eq "$(source_value "$CFG/skills/.sources/acme__skills" COMMIT)" "$before" "installed commit"
+  assert_file_lacks "$CFG/skills/acme-tdd/SKILL.md" 'Newer'
+  assert_eq "$(source_value "$CFG/skills/.sources/acme__skills" REF)" "" "REF (must not look pinned)"
 }
 
 test_skills_source_disabled_removed_manual_kept() {
@@ -812,12 +853,12 @@ test_skills_source_disabled_removed_manual_kept() {
   git -C "$other" -c user.name=t -c user.email=t@t add -A
   git -C "$other" -c user.name=t -c user.email=t@t commit -qm init
   env HOME="$T/home" bash "$AB/sync-skills.sh" "$other" > /dev/null 2>&1
-  : > "$AB/config.env"
+  : > "$CFG/config.env"
   ab_run --
   assert_rc 0
   assert_out "removing skills of disabled source 'acme'"
   assert_eq "$(installed)" "other-x"
-  [[ -f "$AB/skills/.sources/acme__skills" ]] && fail "record of the disabled source kept"
+  [[ -f "$CFG/skills/.sources/acme__skills" ]] && fail "record of the disabled source kept"
 }
 
 test_skills_source_pinned() {
@@ -829,8 +870,8 @@ test_skills_source_pinned() {
   config "AB_SKILLS=acme"
   ab_run --
   assert_rc 0
-  assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
-  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" REF)" "$first" "REF"
+  assert_file_lacks "$CFG/skills/acme-tdd/SKILL.md" 'Newer'
+  assert_eq "$(source_value "$CFG/skills/.sources/acme__skills" REF)" "$first" "REF"
   ab_run --
   assert_no_out "syncing skills"
 }
@@ -851,7 +892,7 @@ test_skills_source_errors() {
   ab_run --
   assert_rc 2
   assert_out "no skill source 'nope'"
-  : > "$AB/config.env"; config "AB_SKILLS=../x"
+  : > "$CFG/config.env"; config "AB_SKILLS=../x"
   ab_run --
   assert_rc 2
   assert_out "invalid source name"
@@ -870,7 +911,7 @@ test_skills_source_sync_failure_continues() {
 test_updates_skips_pinned_source() {
   cu_setup "${FUNCNAME[0]}"
   printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
-    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" "SOURCE=acme" "REF=v1" > "$AB/skills/.sources/acme__skills"
+    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" "SOURCE=acme" "REF=v1" > "$CFG/skills/.sources/acme__skills"
   printf 'b%.0s' {1..40} > "$T/remote_head"
   cu_run
   assert_no_out "update available: skills"

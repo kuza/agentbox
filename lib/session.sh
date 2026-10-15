@@ -54,7 +54,7 @@ session_git_mounts() {
 session_env_file() {
   local file
   ENV_FILE_ARGS=()
-  file="${AB_ENV_DIR:-$SCRIPT_DIR/env}/$(basename "$REPO").env"
+  file="${AB_ENV_DIR:-$USER_ENV_DIR}/$(basename "$REPO").env"
   if [[ -f "$file" ]]; then
     ENV_FILE_ARGS=(--env-file "$file")
     echo "agentbox: env $file" >&2
@@ -91,8 +91,8 @@ session_agent_args() {
       # Personal instructions for every repo, shared with pi (agents/AGENTS.md).
       # From the host and read-only for the same reason as skills: written in
       # ab-claude-home by the agent, they would persist into every future session.
-      if [[ -f "$SCRIPT_DIR/agents/AGENTS.md" ]]; then
-        AGENT_ARGS+=(-v "$SCRIPT_DIR/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z")
+      if [[ -f "$USER_AGENTS_MD" ]]; then
+        AGENT_ARGS+=(-v "$USER_AGENTS_MD:/home/node/.claude/CLAUDE.md:ro,z")
       fi
       if [[ -n "$STATUSLINE" ]]; then
         AGENT_ARGS+=(-v "$SCRIPT_DIR/claude/statusline.py:/home/node/.claude/statusline.py:ro,z")
@@ -107,14 +107,14 @@ session_agent_args() {
       # models.json, mcp.json, skills/ and extensions/ come from the host,
       # read-only: the agent cannot redirect its model, add MCP servers, or plant
       # extensions (which pi loads and executes) that would persist in ab-pi-home.
-      mkdir -p "$SCRIPT_DIR/pi/extensions"
+      mkdir -p "$USER_PI_EXTENSIONS"
       AGENT_ARGS+=(
         --entrypoint "$AGENT_BIN"
         -e PI_OFFLINE=1
         -e PI_SKIP_VERSION_CHECK=1
         -e PI_TELEMETRY=0
         -v "$MCP_PI_JSON:/home/node/.pi/agent/mcp.json:ro,z"
-        -v "$SCRIPT_DIR/pi/extensions:/home/node/.pi/agent/extensions:ro,z"
+        -v "$USER_PI_EXTENSIONS:/home/node/.pi/agent/extensions:ro,z"
       )
       # API-key mode only (openai_api_key secret exists): pi/models.json points
       # the openai provider at the ab-llm-openai sidecar. In subscription mode it
@@ -137,8 +137,8 @@ session_agent_args() {
       fi
       # Personal instructions, the same file Claude Code gets as CLAUDE.md. pi
       # reads AGENTS.md from its agent directory as global context.
-      if [[ -f "$SCRIPT_DIR/agents/AGENTS.md" ]]; then
-        AGENT_ARGS+=(-v "$SCRIPT_DIR/agents/AGENTS.md:/home/node/.pi/agent/AGENTS.md:ro,z")
+      if [[ -f "$USER_AGENTS_MD" ]]; then
+        AGENT_ARGS+=(-v "$USER_AGENTS_MD:/home/node/.pi/agent/AGENTS.md:ro,z")
       fi
       ;;
   esac

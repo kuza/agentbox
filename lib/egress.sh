@@ -2,7 +2,8 @@
 #
 #   squid.conf                   squid settings and access rules, no hosts
 #   egress.d/<name>.conf         host groups, shared (in git)
-#   egress.local.d/<name>.conf   yours, ignored by git; wins over egress.d/
+#   <AB_HOME>/egress.local.d/<name>.conf
+#                                yours; wins over egress.d/
 #
 # AB_EGRESS in config.env lists the enabled groups; unset means
 # EGRESS_DEFAULT, empty means none. An agent's own group (AGENT_EGRESS, set
@@ -18,7 +19,7 @@
 # Sourced by run.sh. Provides egress_init, egress_write_conf, egress_start
 # and EGRESS_SQUID_CONF.
 
-EGRESS_DIRS=("$SCRIPT_DIR/egress.local.d" "$SCRIPT_DIR/egress.d")
+EGRESS_DIRS=("$USER_EGRESS_DIR" "$SCRIPT_DIR/egress.d")
 EGRESS_DEFAULT="anthropic openai pypi go"
 
 # Enabled groups, read and checked. Run after mcp_check_secrets, which
@@ -39,7 +40,7 @@ egress_init() {
       if [[ -f "$d/$name.conf" ]]; then file="$d/$name.conf"; break; fi
     done
     if [[ -z "$file" ]]; then
-      echo "error: AB_EGRESS: no group '$name' (looked for egress.local.d/$name.conf and egress.d/$name.conf)" >&2
+      echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.conf and egress.d/$name.conf)" >&2
       exit 2
     fi
     n=0
