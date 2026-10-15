@@ -45,7 +45,7 @@ networks_create() {
 # OpenAI for pi (optional): enabled only if the openai_api_key secret exists.
 #   ab-llm-openai  nginx on both networks: checks the caller token, replaces it
 #                  with the real API key and forwards to api.openai.com with
-#                  certificate verification (llm-openai.conf.template).
+#                  certificate verification (pi/llm-openai.conf.template).
 # pi points its built-in openai provider at this sidecar (pi/models.json), so
 # the API key never enters the agent container.
 openai_start() {
@@ -55,6 +55,6 @@ openai_start() {
     --network ab-internal --network ab-egress \
     --secret openai_api_key,type=env,target=OPENAI_API_KEY \
     --secret llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN \
-    -v "$(sidecar_copy ab-llm-openai "$SCRIPT_DIR/llm-openai.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
+    -v "$(sidecar_copy ab-llm-openai "$SCRIPT_DIR/pi/llm-openai.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"
 }

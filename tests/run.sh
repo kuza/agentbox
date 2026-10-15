@@ -29,7 +29,7 @@ setup() {
   mkdir -p "$AB" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
   cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
-        "$ROOT/llm-openai.conf.template" "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
+        "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
   # Files the copy could not read (a sidecar's private SELinux label on the
   # source, see README, Troubleshooting) get a placeholder.
   local f
@@ -37,6 +37,7 @@ setup() {
     [[ -f "$AB/${f#"$ROOT"/}" ]] || echo "# placeholder" > "$AB/${f#"$ROOT"/}"
   done < <(find "$ROOT/mcp" -type f -name '*.template')
   mkdir -p "$AB/claude" "$AB/pi"
+  cp "$ROOT/pi/llm-openai.conf.template" "$ROOT/pi/models.json" "$AB/pi/" 2>/dev/null || true
   cp "$ROOT/claude/statusline.py" "$AB/claude/" 2>/dev/null || true
   cp "$ROOT/tests/stub/podman" "$T/bin/podman"
   chmod +x "$T/bin/podman"

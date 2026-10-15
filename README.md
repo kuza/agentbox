@@ -86,7 +86,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
 | `pi/extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi, ignored by git |
-| `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
+| `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
 | `egress.d/<name>.conf` | Egress host groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
