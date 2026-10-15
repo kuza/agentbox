@@ -7,7 +7,7 @@
 #   tests/run.sh mcp_       tests whose name starts with "mcp_"
 #
 # Each test runs in its own scratch directory with a copy of agentbox's code,
-# never the real config.env, skills/ or vendor/. Needs bash 4+, git, and
+# never the real config.env or skills/. Needs bash 4+, git, and
 # python3 for the JSON checks (skipped without it).
 set -uo pipefail
 
@@ -320,7 +320,7 @@ test_graphify_skill_installed_and_refreshed() {
   ab_run STUB_GRAPHIFY=ok --
   assert_rc 0
   [[ -f "$AB/skills/graphify/SKILL.md" ]] || fail "claude variant not installed"
-  [[ -f "$AB/vendor/graphify/pi/graphify/SKILL.md" ]] || fail "pi variant not installed"
+  [[ -f "$T/home/.cache/agentbox/graphify-pi/graphify/SKILL.md" ]] || fail "pi variant not installed"
   assert_eq "$(cat "$AB/skills/graphify/.agentbox-image" 2>/dev/null)" "img-1" "stamp"
   ab_run STUB_GRAPHIFY=ok --
   grep -q 'graphify install' "$STUB_DIR/calls" && fail "reinstalled for the same image"
@@ -344,6 +344,25 @@ test_graphify_foreign_skill_left_alone() {
   assert_rc 0
   assert_out "was not installed by agentbox"
   assert_eq "$(cat "$AB/skills/graphify/SKILL.md")" "mine"
+}
+
+
+test_skills_state_migrated_from_vendor() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$AB/vendor/graphify/pi/graphify" "$AB/skills/acme-tdd"
+  printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" "SKILLS_ONLY=tdd" \
+    "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=$AB/skills" > "$AB/vendor/acme__skills.sync"
+  printf 'acme-tdd\n' > "$AB/skills/.vendored-acme__skills"
+  ab_run --
+  assert_rc 0
+  assert_out "moved the record of acme__skills"
+  local st="$AB/skills/.sources/acme__skills"
+  assert_file_has "$st" '^URL=https://github.com/acme/skills$'
+  assert_file_has "$st" '^SKILL=acme-tdd$'
+  assert_file_lacks "$st" 'AB_SKILLS_DIR'
+  [[ -e "$AB/vendor" ]] && fail "vendor/ left behind"
+  [[ -e "$AB/skills/.vendored-acme__skills" ]] && fail "old manifest left behind"
+  [[ -d "$AB/skills/acme-tdd" ]] || fail "installed skill touched"
 }
 
 # --- check-updates.sh -------------------------------------------------------
@@ -373,7 +392,7 @@ EOF
   echo "my-redis docker.io/library/redis:7" >> "$STUB_DIR/running"
   echo "docker.io/grafana/mcp-grafana:latest sha256:aaa" > "$STUB_DIR/digests"
   echo aaa > "$T/remote_digest"
-  mkdir -p "$AB/vendor"
+  mkdir -p "$AB/skills/.sources"
 }
 
 cu_run() {  # [args...]
@@ -425,7 +444,7 @@ test_updates_registry_down_warns() {
 test_updates_skills_behind() {
   cu_setup "${FUNCNAME[0]}"
   printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
-    "SKILLS_ONLY=tdd" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" > "$AB/vendor/acme__skills.sync"
+    "SKILLS_ONLY=tdd" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" > "$AB/skills/.sources/acme__skills"
   printf 'b%.0s' {1..40} > "$T/remote_head"
   cu_run
   assert_out "update available: skills from acme__skills, aaaaaaa -> bbbbbbb"
@@ -434,10 +453,10 @@ test_updates_skills_behind() {
 
 test_updates_rejects_bad_sync_file() {
   cu_setup "${FUNCNAME[0]}"
-  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$AB/vendor/evil.sync"
+  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$AB/skills/.sources/evil"
   cu_run
-  assert_out "evil.sync: bad URL or COMMIT, skipped"
-  assert_eq "$(grep -c git "$T/net")" 0 "git calls for a bad .sync"
+  assert_out "evil: bad URL or COMMIT, skipped"
+  assert_eq "$(grep -c git "$T/net")" 0 "git calls for a bad record"
 }
 
 # --- sync-skills.sh ---------------------------------------------------------
@@ -472,8 +491,8 @@ test_sync_prefix_and_note() {
   assert_file_has "$AB/skills/acme-review/SKILL.md" '\(`review`, `tdd`\)'
   # The skill's own text is not rewritten.
   assert_file_has "$AB/skills/acme-review/SKILL.md" 'Skill tool with "tdd"'
-  assert_file_has "$AB/vendor/acme__skills.sync" '^SKILLS_ONLY=review,tdd$'
-  assert_file_has "$AB/vendor/acme__skills.sync" '^COMMIT=[0-9a-f]{40}$'
+  assert_file_has "$AB/skills/.sources/acme__skills" '^SKILLS_ONLY=review,tdd$'
+  assert_file_has "$AB/skills/.sources/acme__skills" '^COMMIT=[0-9a-f]{40}$'
 }
 
 test_sync_deselect_and_prefix_change() {
@@ -522,7 +541,7 @@ test_skills_source_installed_once() {
   assert_rc 0
   assert_out "syncing skills from 'acme'"
   assert_eq "$(installed)" "acme-review acme-tdd"
-  assert_file_has "$AB/vendor/acme__skills.sync" '^SOURCE=acme$'
+  assert_file_has "$AB/skills/.sources/acme__skills" '^SOURCE=acme$'
   ab_run --
   assert_no_out "syncing skills"
 }
@@ -532,16 +551,16 @@ test_skills_source_selection_change_keeps_version() {
   src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
   config "AB_SKILLS=acme"
   ab_run --
-  local before; before="$(source_value "$AB/vendor/acme__skills.sync" COMMIT)"
+  local before; before="$(source_value "$AB/skills/.sources/acme__skills" COMMIT)"
   printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
   git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
   src_conf skills.d acme "URL=$SRC" "ONLY=tdd,notes"
   ab_run --
   assert_rc 0
   assert_eq "$(installed)" "acme-notes acme-tdd"
-  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" COMMIT)" "$before" "installed commit"
+  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" COMMIT)" "$before" "installed commit"
   assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
-  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" REF)" "" "REF (must not look pinned)"
+  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" REF)" "" "REF (must not look pinned)"
 }
 
 test_skills_source_disabled_removed_manual_kept() {
@@ -562,7 +581,7 @@ test_skills_source_disabled_removed_manual_kept() {
   assert_rc 0
   assert_out "removing skills of disabled source 'acme'"
   assert_eq "$(installed)" "other-x"
-  [[ -f "$AB/vendor/acme__skills.sync" ]] && fail ".sync of the disabled source kept"
+  [[ -f "$AB/skills/.sources/acme__skills" ]] && fail "record of the disabled source kept"
 }
 
 test_skills_source_pinned() {
@@ -575,7 +594,7 @@ test_skills_source_pinned() {
   ab_run --
   assert_rc 0
   assert_file_lacks "$AB/skills/acme-tdd/SKILL.md" 'Newer'
-  assert_eq "$(source_value "$AB/vendor/acme__skills.sync" REF)" "$first" "REF"
+  assert_eq "$(source_value "$AB/skills/.sources/acme__skills" REF)" "$first" "REF"
   ab_run --
   assert_no_out "syncing skills"
 }
@@ -615,7 +634,7 @@ test_skills_source_sync_failure_continues() {
 test_updates_skips_pinned_source() {
   cu_setup "${FUNCNAME[0]}"
   printf '%s\n' "URL=https://github.com/acme/skills" "COMMIT=$(printf 'a%.0s' {1..40})" \
-    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" "SOURCE=acme" "REF=v1" > "$AB/vendor/acme__skills.sync"
+    "SKILLS_ONLY=" "SKILLS_PREFIX=acme" "AB_SKILLS_DIR=" "SOURCE=acme" "REF=v1" > "$AB/skills/.sources/acme__skills"
   printf 'b%.0s' {1..40} > "$T/remote_head"
   cu_run
   assert_no_out "update available: skills"

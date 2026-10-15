@@ -89,7 +89,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
 | `Containerfile` | Base image: node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress allowlist. The MCP modules' remote hosts are added from a generated file it includes |
-| `skills/` | Optional. Personal skills, mounted read-only into the agent |
+| `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
 | `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
@@ -98,7 +98,6 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `sync-skills.sh` | Host-side: installs a skills repository into `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
 | `tests/run.sh` | Tests for `run.sh`, `check-updates.sh` and `sync-skills.sh` with a podman stand-in. See [Tests](#tests) |
-| `vendor/` | Created by `sync-skills.sh`: a `.sync` record per installed repository. Also holds pi's variant of the graphify skill (`vendor/graphify/pi/`), written by `run.sh` |
 
 ## First-time setup
 
@@ -500,7 +499,7 @@ Read what you enable: skills are instructions the agent follows, and bundled scr
 
 #### How a source is installed: `sync-skills.sh`
 
-`run.sh` calls `sync-skills.sh`, which also works by hand for a one-off repository. It clones the repository afresh into a scratch directory (no clone is kept: `vendor/` is writable from a session that mounts agentbox, and a hook planted in a kept clone would run on the host), finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed in `skills/.vendored-<owner>__<repo>` and how in `vendor/<owner>__<repo>.sync`, removes skills dropped upstream or deselected, and never overwrites a skill it did not install.
+`run.sh` calls `sync-skills.sh`, which also works by hand for a one-off repository. It clones the repository afresh into a scratch directory (no clone is kept: it would live where a session that mounts agentbox can write, and a hook planted in it would run on the host), finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed, from where and at which commit in `skills/.sources/<owner>__<repo>`, removes skills dropped upstream or deselected, and never overwrites a skill it did not install.
 
 Installed skills get a prefix, the repo owner by default: `code-review` from `mattpocock/skills` becomes `mattpocock-code-review`. Without it, a vendored skill shadows a Claude Code built-in with the same name (`/code-review`), and two repos can collide. The script renames the directory and the frontmatter `name`, and adds a note after the frontmatter of each `SKILL.md`: the text still says `/tdd` or `call the Skill tool with "code-review"`, and the note tells the agent to use `mattpocock-<name>` for the listed skills. The text itself is not rewritten.
 
@@ -511,7 +510,7 @@ SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX=
 ./sync-skills.sh --remove <git-url>             # remove what it installed from there
 ```
 
-Skills synced by hand are not managed by `run.sh`: it neither changes nor removes them. Older versions kept clones in `vendor/<owner>__<repo>/`; they are no longer used and can be deleted.
+Skills synced by hand are not managed by `run.sh`: it neither changes nor removes them. Older versions kept clones and records in `vendor/`; `run.sh` moves the records to `skills/.sources/` on its next start, and the clones (`vendor/<owner>__<repo>/`) are no longer used and can be deleted.
 
 #### Example: mattpocock/skills
 
@@ -568,7 +567,7 @@ The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/loc
 
 ### The skill
 
-`run.sh` installs the `/graphify` skill from the image, so it always matches the CLI there: it runs `graphify install` into a scratch home and copies the result (`SKILL.md` plus its `references/`) to `skills/graphify/` for Claude Code, and pi's own variant to `vendor/graphify/pi/graphify/`, mounted over the shared one in pi sessions. It records the image ID next to the skill and refreshes both whenever the image changes, e.g. after a rebuild with a new `GRAPHIFY_VERSION`. A `skills/graphify/` that `run.sh` did not install is left alone, with a warning.
+`run.sh` installs the `/graphify` skill from the image, so it always matches the CLI there: it runs `graphify install` into a scratch home and copies the result (`SKILL.md` plus its `references/`) to `skills/graphify/` for Claude Code, and pi's own variant to `~/.cache/agentbox/graphify-pi/graphify/`, mounted over the shared one in pi sessions. It records the image ID next to the skill and refreshes both whenever the image changes, e.g. after a rebuild with a new `GRAPHIFY_VERSION`. A `skills/graphify/` that `run.sh` did not install is left alone, with a warning.
 
 The `~/.claude/CLAUDE.md` pointer that `graphify install` writes on a normal host is not used: Claude Code finds the skill in `~/.claude/skills` on its own.
 
@@ -621,11 +620,11 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 `run.sh` runs `check-updates.sh` before it starts the sidecars, at most every `AB_UPDATE_EVERY` seconds (6 hours by default, the same interval as the agent update). Only a check that ends with nothing to update resets the interval: if you decline an update, an update fails or a registry is unreachable, the next session checks again. Running `./check-updates.sh` by hand always checks.
 
 - **Sidecar images.** For each agentbox sidecar container it asks the registry for the digest of the image tag (an anonymous `HEAD` request, which pulls nothing and does not count against Docker Hub's pull limit) and compares it with the local image. It also reports sidecars still running an older image than the local one. Answering `y` pulls the new images and removes the affected sidecars, and `run.sh` recreates them right away. Other open sessions lose those MCP servers until they are restarted.
-- **Vendored skills.** `sync-skills.sh` records each sync in `vendor/<owner>__<repo>.sync` (URL, installed commit, `SKILLS_ONLY`, prefix, skills directory). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings.
+- **Vendored skills.** `sync-skills.sh` records each sync in `skills/.sources/<owner>__<repo>` (URL, installed commit, `SKILLS_ONLY`, prefix, source, pin, installed names). The check compares that commit with the remote default branch (`git ls-remote`), prints a GitHub compare link to read before updating, and on `y` repeats the sync with the same settings.
 
 Without a terminal (`run.sh -p ...` from a script) it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it; `AB_UPGRADE=1` skips it too, since that updates the images anyway. Run `./check-updates.sh` on its own to check without starting a session.
 
-`vendor/` is writable from inside a session that has the agentbox directory mounted, so the check reads `.sync` files as data, accepts only `https://` URLs, and runs git outside `vendor/`: a hook or config planted there does not run on the host. `sync-skills.sh` clones afresh into a scratch directory for the same reason.
+The skills directory is writable from inside a session that has the agentbox directory mounted, so the check reads the records as data, accepts only `https://` URLs, and runs git outside any repository: a hook or config planted in the box does not run on the host. `sync-skills.sh` clones afresh into a scratch directory for the same reason.
 
 ### Claude Code
 
@@ -731,7 +730,7 @@ Removing a module from `AB_MCP` stops starting its sidecars and drops it from th
 ./tests/run.sh test_mcp_  # tests whose name starts with test_mcp_
 ```
 
-They need no podman, network or registry: `tests/stub/podman` stands in for podman and records every call, fake `curl` and `git ls-remote` stand in for registries and GitHub, and `sync-skills.sh` clones a local repository. Each test works on a copy of agentbox's code in a scratch directory, never on your `config.env`, `skills/` or `vendor/`. They check what `run.sh` asks podman to do (sidecars, secrets, the session's mounts and arguments), the generated MCP configs, and the error paths. Requires bash 4+ and git; python3 for the JSON checks, skipped without it.
+They need no podman, network or registry: `tests/stub/podman` stands in for podman and records every call, fake `curl` and `git ls-remote` stand in for registries and GitHub, and `sync-skills.sh` clones a local repository. Each test works on a copy of agentbox's code in a scratch directory, never on your `config.env` or `skills/`. They check what `run.sh` asks podman to do (sidecars, secrets, the session's mounts and arguments), the generated MCP configs, and the error paths. Requires bash 4+ and git; python3 for the JSON checks, skipped without it.
 
 Run them after changing `run.sh`, `lib/`, a module in `mcp/`, `check-updates.sh` or `sync-skills.sh`. A new module or setting deserves a test next to the existing ones in `tests/run.sh`.
 

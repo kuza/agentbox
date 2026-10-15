@@ -16,9 +16,9 @@
 #
 # What it does:
 #   1. clones the repo afresh into a scratch directory, hooks off, and checks
-#      out <ref> (default: the remote's default branch). No clone is kept:
-#      vendor/ is writable from a session that mounts agentbox, and a hook or
-#      config planted in a kept clone would run on the host on the next sync;
+#      out <ref> (default: the remote's default branch). No clone is kept: a
+#      kept clone lives where a session that mounts agentbox can write, and a
+#      hook or config planted in it would run on the host on the next sync;
 #   2. finds every directory containing a SKILL.md, at any depth, and copies it
 #      flat to skills/<skill-name>/, because Claude Code only looks one level
 #      deep (~/.claude/skills/<name>/SKILL.md);
@@ -26,10 +26,11 @@
 #      so vendored skills never shadow Claude Code's built-in ones (/code-review)
 #      or each other across repos, and adds a note to each SKILL.md telling the
 #      agent to use the prefixed names where the text uses upstream ones;
-#   4. records what it installed in skills/.vendored-<owner>__<repo>, so a later
-#      run removes skills that were dropped upstream or deselected, and how it
-#      synced in vendor/<owner>__<repo>.sync, so check-updates.sh can spot a
-#      newer upstream and run.sh can tell whether the source changed.
+#   4. records the sync in skills/.sources/<owner>__<repo>: how it synced
+#      (URL, commit, selection, prefix, source, pin) and one SKILL= line per
+#      installed skill. A later run removes skills that were dropped upstream
+#      or deselected; check-updates.sh spots a newer upstream; run.sh tells
+#      whether a source changed. Plain KEY=VALUE lines, read as data.
 #
 # It never overwrites a skill it did not install itself (your own skills, or
 # skills from another vendored repo with the same name): it stops instead.
@@ -57,18 +58,21 @@ SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
 
 # owner__repo from https://github.com/owner/repo(.git) or git@github.com:owner/repo(.git)
 slug="$(printf '%s' "$URL" | sed -E 's#(\.git)?/*$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1__\2#')"
-MANIFEST="$SKILLS_DIR/.vendored-$slug"
-SYNC_FILE="$SCRIPT_DIR/vendor/$slug.sync"
+STATE="$SKILLS_DIR/.sources/$slug"
+
+installed_skills() {  # names this repository installed, from its state file
+  [[ -f "$STATE" ]] || return 0
+  sed -n 's/^SKILL=//p' "$STATE" | while IFS= read -r n; do
+    [[ -n "$n" && "$n" != */* && "$n" != .* ]] && printf '%s\n' "$n"
+  done
+}
 
 if [[ -n "$REMOVE" ]]; then
-  if [[ -f "$MANIFEST" ]]; then
-    while IFS= read -r n; do
-      [[ -n "$n" && "$n" != */* && "$n" != .* ]] || continue
-      rm -rf -- "${SKILLS_DIR:?}/$n"
-      echo "removed  $n"
-    done < "$MANIFEST"
-  fi
-  rm -f -- "$MANIFEST" "$SYNC_FILE"
+  for n in $(installed_skills); do
+    rm -rf -- "${SKILLS_DIR:?}/$n"
+    echo "removed  $n"
+  done
+  rm -f -- "$STATE"
   echo "done: removed the skills from $slug"
   exit 0
 fi
@@ -81,7 +85,7 @@ if [[ -n "$PREFIX" && ! "$PREFIX" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
 fi
 SEP="${PREFIX:+-}"
 
-mkdir -p "$SCRIPT_DIR/vendor" "$SKILLS_DIR"
+mkdir -p "$SKILLS_DIR/.sources"
 
 # --- 1. fetch ---------------------------------------------------------------
 SCRATCH="$(mktemp -d)"
@@ -128,9 +132,7 @@ fi
 
 # --- 3. install -------------------------------------------------------------
 declare -A previously=()
-if [[ -f "$MANIFEST" ]]; then
-  while IFS= read -r n; do [[ -n "$n" ]] && previously[$n]=1; done < "$MANIFEST"
-fi
+for n in $(installed_skills); do previously[$n]=1; done
 
 # Installed names carry the prefix; the manifest records installed names.
 declare -A target_of=()
@@ -181,28 +183,26 @@ for n in "${!previously[@]}"; do
   fi
 done
 
-: > "$MANIFEST.tmp"
+installed=()
 for n in $(printf '%s\n' "${!wanted[@]}" | sort); do
   t="${target_of[$n]}"
   rm -rf -- "${SKILLS_DIR:?}/$t"
   cp -R -- "${src_of[$n]}" "$SKILLS_DIR/$t"
   [[ -n "$PREFIX" ]] && prefix_skill "$SKILLS_DIR/$t" "$t"
-  echo "$t" >> "$MANIFEST.tmp"
+  installed+=("$t")
   echo "install  $t  (${src_of[$n]#"$VENDOR"/})"
 done
-mv "$MANIFEST.tmp" "$MANIFEST"
 
-# What check-updates.sh needs to spot a newer upstream and repeat this sync.
-# Plain KEY=VALUE lines, read as data.
 {
   echo "URL=$URL"
   echo "COMMIT=$(git -C "$VENDOR" rev-parse HEAD)"
   echo "SKILLS_ONLY=${SKILLS_ONLY:-}"
   echo "SKILLS_PREFIX=$PREFIX"
-  echo "AB_SKILLS_DIR=$SKILLS_DIR"
   echo "SOURCE=${SKILLS_SOURCE:-}"
   echo "REF=${SKILLS_PIN:-}"
-} > "$SYNC_FILE"
+  printf 'SKILL=%s\n' "${installed[@]}"
+} > "$STATE.tmp"
+mv -f "$STATE.tmp" "$STATE"
 
 echo "done: ${#wanted[@]} skills from $slug @ $commit -> $SKILLS_DIR"
 echo "Read what you installed before you use it: $SKILLS_DIR/${PREFIX:-<name>}${SEP}*"

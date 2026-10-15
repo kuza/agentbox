@@ -14,13 +14,15 @@
 #            ab-llm-*), compares the local digest of its image tag with the
 #            registry's (an anonymous HEAD request, no pull), and flags
 #            containers still running an older image than the local one.
-#   Skills   for every vendor/<owner>__<repo>.sync written by sync-skills.sh,
-#            compares the installed commit with the remote default branch
-#            (git ls-remote). Sources pinned to a ref are skipped.
+#   Skills   for every record sync-skills.sh keeps in
+#            <skills>/.sources/<owner>__<repo> (skills directory: AB_SKILLS_DIR,
+#            default <script dir>/skills), compares the installed commit with
+#            the remote default branch (git ls-remote). Sources pinned to a ref
+#            are skipped.
 #
-# vendor/ and skills/ are writable from a session that has the agentbox
-# directory mounted, so .sync files are parsed as data, never sourced, and git
-# never runs inside vendor/ here: a planted hook or config there would run on
+# The skills directory is writable from a session that has the agentbox
+# directory mounted, so the records are parsed as data, never sourced, and
+# git runs outside any repository here: a planted hook or config would run on
 # the host.
 #
 # Interactive (stdin and stderr are a terminal): asks before each update.
@@ -147,16 +149,19 @@ fi
 
 # --- skills -----------------------------------------------------------------
 
-# KEY=VALUE from a .sync file, without evaluating it.
+# KEY=VALUE from a record, without evaluating it.
 sync_value() {  # <file> <key>
   sed -n "s/^$2=//p" "$1" | head -n1
 }
 
+SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
 shopt -s nullglob
-for f in "$SCRIPT_DIR"/vendor/*.sync; do
-  slug="$(basename "$f" .sync)"
+for f in "$SKILLS_DIR"/.sources/*; do
+  slug="$(basename "$f")"
   url="$(sync_value "$f" URL)"
   commit="$(sync_value "$f" COMMIT)"
+  # A record from before URLs were recorded: nothing to compare with.
+  [[ -z "$url" ]] && continue
   # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
   [[ -n "$(sync_value "$f" REF)" ]] && continue
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
@@ -178,10 +183,9 @@ for f in "$SCRIPT_DIR"/vendor/*.sync; do
     && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
   only="$(sync_value "$f" SKILLS_ONLY)"
   prefix="$(sync_value "$f" SKILLS_PREFIX)"
-  skills_dir="$(sync_value "$f" AB_SKILLS_DIR)"
   source_name="$(sync_value "$f" SOURCE)"
   if ask "update skills from $slug?"; then
-    SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$skills_dir" SKILLS_SOURCE="$source_name" \
+    SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$source_name" SKILLS_PIN="" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
       || { say "warning: skills update from $slug failed"; outstanding=1; }
   else

@@ -82,6 +82,8 @@ config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"}
 UPDATE_EVERY="${AB_UPDATE_EVERY:-$((6 * 3600))}"
 BUILD_ARGS=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")
 
+skills_init
+
 agent_select
 agent_check_secrets
 mcp_check_secrets
@@ -95,7 +97,7 @@ services_attach
 # new image. AB_UPGRADE updates everything anyway.
 # ---------------------------------------------------------------------------
 if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
-  AB_UPDATE_EVERY="$UPDATE_EVERY" "$SCRIPT_DIR/check-updates.sh" --if-due
+  AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
 # ---------------------------------------------------------------------------

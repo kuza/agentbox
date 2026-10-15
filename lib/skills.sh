@@ -19,10 +19,55 @@
 # skills_sources installs an enabled source that is missing, re-syncs one
 # whose .conf changed (at the installed commit, so a changed ONLY does not
 # also upgrade it), and removes the skills of a source that was disabled.
-# It compares with vendor/<owner>__<repo>.sync, written by sync-skills.sh;
-# skills synced by hand, without a source, are left alone.
+# It compares with <skills>/.sources/<owner>__<repo>, the record
+# sync-skills.sh keeps; skills synced by hand, without a source, are left
+# alone.
 
 SKILLS_SOURCE_DIRS=("$SCRIPT_DIR/skills.local.d" "$SCRIPT_DIR/skills.d")
+
+# Sets SKILLS_DIR and GRAPHIFY_PI, and moves state from where older versions
+# kept it. Runs before check-updates.sh, which reads the records.
+skills_init() {
+  SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
+  GRAPHIFY_PI="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/graphify-pi"
+  skills_migrate_state
+}
+
+# Older versions kept a record per repository in vendor/<owner>__<repo>.sync
+# and the installed names in <skills>/.vendored-<owner>__<repo>; now both are
+# one file, <skills>/.sources/<owner>__<repo>. pi's graphify variant moved
+# from vendor/graphify to the cache. No network, nothing is re-synced.
+skills_migrate_state() {
+  local f slug dir manifest state
+  for f in "$SCRIPT_DIR"/vendor/*.sync "$SKILLS_DIR"/.vendored-*; do
+    [[ -f "$f" ]] || continue
+    if [[ "$f" == *.sync ]]; then
+      slug="$(basename "$f" .sync)"
+      dir="$(source_value "$f" AB_SKILLS_DIR)"
+      dir="${dir:-$SKILLS_DIR}"
+    else
+      slug="$(basename "$f")"; slug="${slug#.vendored-}"
+      dir="$SKILLS_DIR"
+    fi
+    manifest="$dir/.vendored-$slug"
+    state="$dir/.sources/$slug"
+    mkdir -p "$dir/.sources"
+    {
+      if [[ "$f" == *.sync ]]; then
+        grep -E '^(URL|COMMIT|SKILLS_ONLY|SKILLS_PREFIX|SOURCE|REF)=' "$f" || true
+      fi
+      if [[ -f "$manifest" ]]; then sed '/^$/d; s/^/SKILL=/' "$manifest"; fi
+    } > "$state.tmp"
+    mv -f "$state.tmp" "$state"
+    rm -f -- "$manifest"
+    if [[ "$f" == *.sync ]]; then rm -f -- "$f"; fi
+    echo "agentbox: moved the record of $slug to $state" >&2
+  done
+  if [[ -d "$SCRIPT_DIR/vendor/graphify" ]]; then
+    rm -rf -- "${SCRIPT_DIR:?}/vendor/graphify"
+  fi
+  rmdir "$SCRIPT_DIR/vendor" 2>/dev/null || true
+}
 
 source_value() {  # <file> <key>: value of KEY=VALUE, empty if missing
   sed -n "s/^$2=//p" "$1" | tail -n1
@@ -71,11 +116,11 @@ skills_sources() {
     ref="$(source_value "$conf" REF)"
     enabled_url[$name]="$url"
 
-    sync="$SCRIPT_DIR/vendor/$slug.sync"
-    want="$url|$only|$prefix|$SKILLS_DIR|$name|$ref"
+    sync="$SKILLS_DIR/.sources/$slug"
+    want="$url|$only|$prefix|$name|$ref"
     have=""
     if [[ -f "$sync" ]]; then
-      have="$(source_value "$sync" URL)|$(sorted_list "$(source_value "$sync" SKILLS_ONLY)")|$(source_value "$sync" SKILLS_PREFIX)|$(source_value "$sync" AB_SKILLS_DIR)|$(source_value "$sync" SOURCE)|$(source_value "$sync" REF)"
+      have="$(source_value "$sync" URL)|$(sorted_list "$(source_value "$sync" SKILLS_ONLY)")|$(source_value "$sync" SKILLS_PREFIX)|$(source_value "$sync" SOURCE)|$(source_value "$sync" REF)"
     fi
     [[ "$want" == "$have" ]] && continue
 
@@ -94,32 +139,30 @@ skills_sources() {
   done
 
   # Sources installed by run.sh that are disabled now, or whose URL changed.
-  for f in "$SCRIPT_DIR"/vendor/*.sync; do
+  for f in "$SKILLS_DIR"/.sources/*; do
     [[ -f "$f" ]] || continue
     src="$(source_value "$f" SOURCE)"
     [[ -n "$src" ]] || continue
     url="$(source_value "$f" URL)"
     [[ "${enabled_url[$src]:-}" == "$url" ]] && continue
     echo "agentbox: removing skills of disabled source '$src' ($url)" >&2
-    AB_SKILLS_DIR="$(source_value "$f" AB_SKILLS_DIR)" "$SCRIPT_DIR/sync-skills.sh" --remove "$url" >&2 \
+    AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/sync-skills.sh" --remove "$url" >&2 \
       || echo "agentbox: warning: could not remove skills from '$src'" >&2
   done
 }
 
 skills_prepare() {
   local image_id graphify_tmp
-  SKILLS_DIR="${AB_SKILLS_DIR:-$SCRIPT_DIR/skills}"
   skills_sources
 
   # graphify skill, taken from the image so it always matches the graphify CLI
   # there: `graphify install` into a scratch home, then
   #   <skills>/graphify               Claude Code's variant (shared skills dir)
-  #   vendor/graphify/pi/graphify     pi's variant, mounted over the shared one
+  #   <cache>/agentbox/graphify-pi/graphify  pi's variant, mounted over the shared one
   # Refreshed when the image changes (its ID is recorded next to the skill), so a
   # rebuild with a new GRAPHIFY_VERSION brings the matching skill. A
   # <skills>/graphify that agentbox did not install is left alone.
   GRAPHIFY_STAMP="$SKILLS_DIR/graphify/.agentbox-image"
-  GRAPHIFY_PI="$SCRIPT_DIR/vendor/graphify/pi"
   image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
   if [[ -e "$SKILLS_DIR/graphify" && ! -f "$GRAPHIFY_STAMP" ]]; then
     echo "agentbox: warning: $SKILLS_DIR/graphify was not installed by agentbox; not updating it" >&2
