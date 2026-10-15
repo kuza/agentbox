@@ -10,7 +10,9 @@ agent_select() {
       AGENT_PKG="@anthropic-ai/claude-code"
       AGENT_VOL="ab-claude-tools"; AGENT_PREFIX="/opt/claude"
       AGENT_HOME="ab-claude-home"
-      AGENT_INSTALL_FLAGS=()
+      # Its postinstall copies the native binary over a placeholder; npm 12
+      # no longer runs dependency install scripts unless allowed.
+      AGENT_INSTALL_FLAGS=(--allow-scripts=@anthropic-ai/claude-code)
       AGENT_SECRETS=(claude_oauth)
       ;;
     pi)
