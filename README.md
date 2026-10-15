@@ -94,7 +94,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
-| `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
+| `env/` | Optional, ignored by git. Per-project environment files, `<repo dir name>.env`, and per-project settings, `<repo dir name>.conf` (`AB_FORWARD`, see [Test servers](#test-servers)) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
 | `skills.local.d/<name>.conf` | Your own skill sources, ignored by git |
 | `sync-skills.sh` | Host-side: installs a skills repository into `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
@@ -243,7 +243,7 @@ AB_EGRESS=anthropic openai pypi go test-data
 - Credentials for these services go in a [per-project environment](#per-project-environment) file. The agent sees them; use test credentials with the least rights, read-only where possible.
 - Squid sees only host names, so an allowed host is allowed for any path and any method.
 - The list is the same for all sessions: squid is shared.
-- Only HTTP(S) goes through squid. Databases and queues are [local services](#local-services).
+- Only HTTP(S) goes through squid. Databases and queues are [local services](#local-services) or [test servers](#test-servers).
 
 ## MCP servers
 
@@ -716,6 +716,34 @@ On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` n
 - **The agent gets full access to that data** with whatever credentials you give it. Use dev data and dev passwords. Put connection settings in a [per-project environment](#per-project-environment) file.
 - Clients: the image has Python and Go, so `uv run --with redis`/`psycopg`/`pika` works. `psql` and `redis-cli` are not installed.
 
+## Test servers
+
+To let the agent use databases, queues and other TCP services outside the box, such as those on test servers, give each a name and a target:
+
+```
+# config.env: for every session
+AB_FORWARD=db=db.test.example:5432
+
+# env/<repo dir name>.conf: only for sessions in that repo
+AB_FORWARD=mq=mq.test.example:5672 cache=redis.test.example:6379
+```
+
+The agent connects by name and the target's port: `db:5432`, `mq:5672`. For each target `run.sh` starts a sidecar running `socat` on the agentbox image. It sits on `ab-egress`, the way out, and on an `--internal` network the session joins, where it answers to the name:
+
+| List | Network | Sidecars |
+|---|---|---|
+| `config.env` | `ab-forward` | `ab-fwd-<name>` |
+| `env/<repo dir name>.conf` | `ab-fwd-<key>`, joined only by sessions in that repo | `ab-fwd-<key>-<name>` |
+
+`<key>` comes from the repo's path, so another repo's sessions cannot reach these targets. The repo file uses the same `KEY=VALUE` format as `config.env`, accepts only `AB_FORWARD`, and lives with the [per-project environment](#per-project-environment) files, outside the repo: the agent cannot add targets for its next session.
+
+- **Needs socat in the image.** Rebuild once with `AB_UPGRADE=1 ./run.sh`; until then a start with forwards stops with an error saying so.
+- **Plain TCP.** The target sees connections from your host, through your network and VPN, like any other client there. TLS (`sslmode=require`, `amqps`) goes end to end; certificates name the real host, so clients that verify host names need it set explicitly (e.g. `sslrootcert` with `sslmode=verify-ca` instead of `verify-full`).
+- **Names** are lowercase letters, digits and hyphens, not starting with `ab-`, and unique across both lists and `AB_SERVICES`. The session's `NO_PROXY` includes them, so HTTP clients connect directly.
+- **Changes** apply at the next start: changed targets get new sidecars, removed ones are removed. A repo's sidecars change only with a start in that repo. Sidecars keep running between sessions; `socat` opens a connection to the target only when the agent opens one.
+- **HTTP(S) services** with a public or internal host name are simpler as an [egress group](#egress): the certificate then matches.
+- **The agent gets full access to that data** with whatever credentials you give it. Use test accounts with the least rights; put them in the [per-project environment](#per-project-environment) file.
+
 ## Per-project environment
 
 Environment variables for one project, seen only by sessions in the box, go in `env/<repo dir name>.env` next to `run.sh`:
@@ -753,6 +781,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. Applies on the next build (`AB_UPGRADE=1`). See [Python](#python) |
 | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. Applies on the next build (`AB_UPGRADE=1`). See [Go](#go) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
+| `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated; the session reaches them by name. Also per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
 | `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |

@@ -165,7 +165,7 @@ session_agent_args() {
 session_exec() {  # <agent arguments...>
   local venv_key no_proxy tty_flags
   venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
-  no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}ab-llm-openai")"
+  no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}${FORWARD_NAMES[*]+${FORWARD_NAMES[*]},}ab-llm-openai")"
   # Allocate a TTY only when attached to a terminal (keeps piping/scripts working).
   tty_flags=(-i)
   [[ -t 0 && -t 1 ]] && tty_flags+=(-t)
@@ -173,6 +173,7 @@ session_exec() {  # <agent arguments...>
     --name "ab-$AGENT-$$" \
     --network ab-internal \
     ${SERVICE_NET[@]+"${SERVICE_NET[@]}"} \
+    ${FORWARD_NET[@]+"${FORWARD_NET[@]}"} \
     --userns="$USERNS" \
     --cap-drop=ALL --security-opt no-new-privileges \
     ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \

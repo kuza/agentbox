@@ -34,6 +34,9 @@
 #                     skills before the session (check-updates.sh)
 #   AB_SERVICES       your dev containers the session may reach by name,
 #                     e.g. "redis rabbitmq" (README, Local services)
+#   AB_FORWARD        services outside the box the session may reach by name,
+#                     e.g. "db=db.test.example:5432"; also per repo in
+#                     <env dir>/<repo dir name>.conf (README, Test servers)
 #   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
 #                     (default: none); applies on the next build (AB_UPGRADE=1)
 #   AB_PYTHON_VERSIONS, AB_GO_VERSION, AB_GOLANGCI_LINT_VERSION
@@ -51,7 +54,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-for lib in config images agent sidecars mcp egress services skills session; do
+for lib in config images agent sidecars mcp egress forward services skills session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
@@ -100,6 +103,7 @@ agent_select
 agent_check_secrets
 mcp_check_secrets
 egress_init
+forward_init
 networks_create
 services_attach
 
@@ -142,7 +146,9 @@ egress_write_conf
 egress_start
 mcp_start_all
 openai_start
+forward_start
 sidecars_cleanup
+forward_cleanup
 images_cleanup
 
 skills_prepare

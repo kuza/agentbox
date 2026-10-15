@@ -355,6 +355,87 @@ test_egress_recreated_when_groups_change() {
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "not recreated after AB_EGRESS changed"
 }
 
+# --- run.sh: forwards ---
+
+fwd_key() { printf '%s' "$REPO" | sha256sum | cut -c1-8; }
+run_line() { grep "^podman run -d --replace --name $1 " "$STUB_DIR/calls"; }
+
+test_forward_global_and_repo() {
+  setup "${FUNCNAME[0]}"
+  config "AB_FORWARD=db=DB.test.example:5432"
+  mkdir -p "$AB/env"
+  printf '%s\n' '# test servers of this repo' 'AB_FORWARD=mq=mq.test.example:5672, web=web.test.example:80' > "$AB/env/repo.conf"
+  ab_run --
+  assert_rc 0
+  local k; k="$(fwd_key)"
+  assert_out "repo config $AB/env/repo.conf"
+  assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" "ab-fwd-$k-mq ab-fwd-$k-web ab-fwd-db" "forward sidecars"
+  local l; l="$(run_line ab-fwd-db)"
+  [[ "$l" == *"--network ab-egress --network ab-forward:alias=db "* ]] || fail "global networks: $l"
+  [[ "$l" == *"--entrypoint=socat localhost/agentbox TCP-LISTEN:5432,fork,reuseaddr TCP:db.test.example:5432" ]] || fail "socat command: $l"
+  [[ "$l" == *"--label agentbox.forward=global "* ]] || fail "global label: $l"
+  l="$(run_line "ab-fwd-$k-mq")"
+  [[ "$l" == *"--network ab-fwd-$k:alias=mq "* ]] || fail "repo network: $l"
+  [[ "$l" == *"--label agentbox.forward=repo-$k "* ]] || fail "repo label: $l"
+  grep -qx "podman network exists ab-fwd-$k" "$STUB_DIR/calls" || fail "repo network not checked"
+  local args; args="$(session_args)"
+  grep -qx 'ab-forward' <<<"$args" || fail "session not on ab-forward"
+  grep -qx "ab-fwd-$k" <<<"$args" || fail "session not on the repo network"
+  grep -qx 'NO_PROXY=ab-mcp-context7,db,mq,web,ab-llm-openai\|NO_PROXY=db,mq,web,ab-llm-openai' <<<"$args" \
+    || fail "NO_PROXY: $(grep NO_PROXY <<<"$args")"
+}
+
+test_forward_recreated_and_removed() {
+  setup "${FUNCNAME[0]}"
+  config "AB_FORWARD=db=db.test.example:5432"
+  mkdir -p "$AB/env"
+  echo "AB_FORWARD=mq=mq.test.example:5672" > "$AB/env/repo.conf"
+  ab_run --
+  ab_run --
+  run_line ab-fwd-db && fail "recreated without a change"
+  # Another repo's sidecar: not this start's business.
+  echo "ab-fwd-ffffffff-x localhost/agentbox" >> "$STUB_DIR/running"
+  echo "ab-fwd-ffffffff-x agentbox.forward=repo-ffffffff" >> "$STUB_DIR/labels"
+  : > "$AB/config.env"; config "AB_FORWARD=db=db2.test.example:5432"
+  ab_run --
+  run_line ab-fwd-db | grep -q 'TCP:db2.test.example:5432' || fail "not recreated after the target changed"
+  ab_run STUB_IMAGE_ID=img-2 --
+  run_line ab-fwd-db >/dev/null || fail "not recreated on a new agentbox image"
+  rm "$AB/env/repo.conf"; : > "$AB/config.env"
+  ab_run --
+  assert_rc 0
+  assert_out "removed ab-fwd-db, no longer in AB_FORWARD"
+  assert_out "removed ab-fwd-$(fwd_key)-mq, no longer in AB_FORWARD"
+  assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" "ab-fwd-ffffffff-x" "left"
+  session_args | grep -q 'ab-forward\|ab-fwd-' && fail "session still on a forward network"
+  grep -qx "podman network rm ab-fwd-$(fwd_key)" "$STUB_DIR/calls" || fail "repo network not removed"
+}
+
+test_forward_errors() {
+  setup "${FUNCNAME[0]}"
+  local e
+  for e in 'db' 'Db=x.example:5432' 'ab-x=x.example:5432' 'db=x.example' 'db=.example:5432' 'db=x.example:70000' 'db=x;y:1' 'db=*:5432'; do
+    : > "$AB/config.env"; config "AB_FORWARD=$e"
+    ab_run --
+    assert_rc 2
+  done
+  : > "$AB/config.env"; config "AB_FORWARD=db=x.example:5432"
+  mkdir -p "$AB/env"; echo "AB_FORWARD=db=y.example:5432" > "$AB/env/repo.conf"
+  ab_run --
+  assert_rc 2
+  assert_out "the name 'db' appears more than once"
+  rm "$AB/env/repo.conf"
+  : > "$AB/config.env"; config "AB_FORWARD=redis=x.example:6379" "AB_SERVICES=redis"
+  ab_run --
+  assert_rc 2
+  assert_out "'redis' is also in AB_SERVICES"
+  grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
+  : > "$AB/config.env"; config "AB_FORWARD=db=x.example:5432"
+  ab_run STUB_NO_SOCAT=1 --
+  assert_rc 1
+  assert_out "needs socat"
+}
+
 # --- run.sh: other parts ---
 
 test_build_args_from_config() {

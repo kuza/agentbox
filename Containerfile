@@ -5,10 +5,11 @@ FROM docker.io/library/node:24-trixie-slim
 
 # make runs project Makefiles; gcc and libc6-dev give Go cgo, which
 # `go test -race` needs (Go enables cgo only when it finds a C compiler).
+# socat runs the AB_FORWARD sidecars (lib/forward.sh).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git ca-certificates curl ripgrep less openssh-client python3 python3-venv \
-      make gcc libc6-dev \
+      make gcc libc6-dev socat \
  && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------

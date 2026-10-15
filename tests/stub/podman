@@ -13,6 +13,7 @@
 #   STUB_BUILT_ID   a build gives localhost/agentbox this ID
 #   STUB_PULL_NEW   images (space-separated) a pull replaces: ID new-<image>
 #   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
+#   STUB_NO_SOCAT   the agentbox image has no socat
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
@@ -62,7 +63,15 @@ case "$1 ${2:-}" in
                       echo "$id" ;;
       *) echo x ;;
     esac ;;
-  "ps -a") cat "$S/running" ;;
+  "ps -a")
+    # --filter label=<key>=<value>: only containers with that label.
+    filter=""
+    while (( $# )); do [[ "$1" == --filter ]] && filter="${2#label=}"; shift; done
+    if [[ -n "$filter" ]]; then
+      awk -v f="$filter" '$2 == f { print $1 }' "$S/labels" | sort -u
+    else
+      cat "$S/running"
+    fi ;;
   "rm -f")
     shift 2
     for n in "$@"; do
@@ -88,6 +97,7 @@ case "$1 ${2:-}" in
     grep -v "^$name " "$S/running" > "$S/running.new"; mv "$S/running.new" "$S/running"
     echo "$name $image" >> "$S/running" ;;
   "run --rm")
+    [[ "$*" == *"command -v socat"* && -n "${STUB_NO_SOCAT:-}" ]] && exit 1
     if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then
       out="$(printf '%s\n' "$@" | sed -n 's#^\(.*\):/out:z$#\1#p')"
       for d in .claude/skills/graphify .pi/agent/skills/graphify; do
