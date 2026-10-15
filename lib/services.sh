@@ -7,11 +7,14 @@
 # them. Attachment is persistent;
 # undo with: podman network disconnect ab-services <name>.
 # Only rootless Podman containers of the same user can be attached.
-# Sets SERVICE_NET, the session's extra network arguments.
+# Sets SERVICE_NET, the session's extra network arguments, and SERVICE_NAMES,
+# the attached containers (they join NO_PROXY: reached directly, not through
+# squid).
 
 services_attach() {
   local services svc mode
   SERVICE_NET=()
+  SERVICE_NAMES=()
   if [[ -n "${AB_SERVICES:-}" ]]; then
     podman network exists ab-services || podman network create --internal ab-services >/dev/null
     read -ra services <<< "${AB_SERVICES//,/ }"
@@ -30,7 +33,7 @@ services_attach() {
         continue
       fi
       if ! podman inspect --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$svc" \
-           | grep -qw ab-services; then
+           | tr ' ' '\n' | grep -qx ab-services; then
         podman network connect ab-services "$svc" \
           || echo "agentbox: warning: could not attach '$svc' to ab-services" >&2
       fi
@@ -40,6 +43,7 @@ services_attach() {
         podman start "$svc" >/dev/null \
           || echo "agentbox: warning: could not start '$svc'" >&2
       fi
+      SERVICE_NAMES+=("$svc")
     done
     SERVICE_NET=(--network ab-services)
   fi

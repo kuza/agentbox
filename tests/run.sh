@@ -445,6 +445,86 @@ test_forward_errors() {
   assert_out "rebuild the image: AB_UPGRADE=1"
 }
 
+# --- review fixes (cr/2026-10-15) ---
+
+test_worktree_git_file_read_only() {
+  setup "${FUNCNAME[0]}"
+  rm -rf "$REPO/.git"
+  echo "gitdir: /somewhere/main/.git/worktrees/repo" > "$REPO/.git"
+  ab_run --
+  assert_rc 0
+  assert_out "is a git worktree or submodule"
+  session_args | grep -qx -- "$REPO/.git:/work/repo/.git:ro,z" || fail ".git file not read-only"
+}
+
+test_services_bypass_proxy() {
+  setup "${FUNCNAME[0]}"
+  config "AB_SERVICES=redis minio"
+  ab_run --
+  assert_rc 0
+  session_args | grep -qx 'NO_PROXY=ab-mcp-context7,redis,minio,ab-llm-openai\|NO_PROXY=redis,minio,ab-llm-openai' \
+    || fail "NO_PROXY: $(session_args | grep NO_PROXY)"
+}
+
+test_services_network_name_exact() {
+  setup "${FUNCNAME[0]}"
+  config "AB_SERVICES=redis"
+  ab_run STUB_NETWORKS="podman ab-services-old" --
+  assert_rc 0
+  grep -qx 'podman network connect ab-services redis' "$STUB_DIR/calls" || fail "not attached: ab-services-old taken for ab-services"
+  ab_run --
+  grep -q '^podman network connect' "$STUB_DIR/calls" && fail "attached again although already on ab-services"
+}
+
+test_github_nginx_follows_its_server() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github"
+  secrets github_pat
+  ab_run --
+  ab_run --
+  run_line ab-mcp-github && fail "nginx recreated without a change"
+  # check-updates.sh removes the server for a new image; nginx must follow.
+  grep -v '^ab-mcp-github-srv ' "$STUB_DIR/running" > "$STUB_DIR/r"; mv "$STUB_DIR/r" "$STUB_DIR/running"
+  ab_run --
+  run_line ab-mcp-github-srv >/dev/null || fail "server not recreated"
+  run_line ab-mcp-github >/dev/null || fail "nginx kept the old server's address"
+}
+
+test_skill_sources_same_repository() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d a "URL=$SRC" "ONLY=tdd"
+  src_conf skills.d b "URL=$SRC" "ONLY=review"
+  config "AB_SKILLS=a b"
+  ab_run --
+  assert_rc 2
+  assert_out "sources 'a' and 'b' both use"
+}
+
+test_sync_refuses_symlinks() {
+  ss_setup "${FUNCNAME[0]}"
+  echo "HOST-SECRET" > "$T/secret.txt"
+  ln -s ../../../../secret.txt "$SRC/eng/tdd/notes.md"
+  git -C "$SRC" add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m link
+  ss_run
+  assert_rc 1
+  assert_out "skill 'tdd' in .* contains symlinks"
+  grep -rqs HOST-SECRET "$CFG/skills" && fail "a host file reached the skills"
+  [[ -e "$CFG/skills/acme-tdd" ]] && fail "skill installed anyway"
+}
+
+test_updates_image_references() {
+  cu_setup "${FUNCNAME[0]}"
+  printf '%s\n' "ab-mcp-a ghcr.io/org/mcp" "ab-mcp-b localhost:5000/team/mcp:v2" \
+    "ab-mcp-c nginx" "ab-mcp-d ghcr.io/org/pinned@sha256:abc" > "$STUB_DIR/running"
+  cu_run
+  grep -qx 'https://ghcr.io/v2/org/mcp/manifests/latest' "$T/urls" || fail "untagged: $(cat "$T/urls")"
+  grep -qx 'https://localhost:5000/v2/team/mcp/manifests/v2' "$T/urls" || fail "registry port: $(cat "$T/urls")"
+  grep -qx 'https://registry-1.docker.io/v2/library/nginx/manifests/latest' "$T/urls" || fail "short name: $(cat "$T/urls")"
+  grep -q pinned "$T/urls" && fail "a digest reference was checked"
+  assert_no_out "could not check ghcr.io/org/pinned"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {
@@ -706,6 +786,7 @@ cu_setup() {
   cat > "$T/bin/curl" <<EOF
 #!/usr/bin/env bash
 echo curl >> "$T/net"
+echo "\${*: -1}" >> "$T/urls"
 d="\$(cat "$T/remote_digest" 2>/dev/null)"
 [[ "\$d" == fail ]] && exit 7
 printf 'HTTP/1.1 200 OK\r\nDocker-Content-Digest: sha256:%s\r\n' "\$d"

@@ -14,10 +14,11 @@
 #   STUB_PULL_NEW   images (space-separated) a pull replaces: ID new-<image>
 #   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
 #   STUB_NO_SOCAT   the agentbox image has no socat: run -d with it fails
+#   STUB_NETWORKS   networks a service container is on (default: podman ab-services)
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
-touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images"
+touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids"
 printf '%s\n' "podman $*" >> "$S/calls"
 
 image_id() {  # <image>
@@ -54,7 +55,8 @@ case "$1 ${2:-}" in
       *Labels*) key="$(sed -n 's/.*"\([^"]*\)".*/\1/p' <<<"$3")"
                 awk -v n="$name" -v k="$key" '$1 == n { split($2, a, "="); if (a[1] == k) print a[2] }' "$S/labels" ;;
       *NetworkMode*) echo bridge ;;
-      *Networks*) echo "podman ab-services" ;;
+      *Networks*) echo "${STUB_NETWORKS:-podman ab-services}" ;;
+      *'{{.Id}}'*) awk -v n="$name" '$1 == n { print $2 }' "$S/ids" ;;
       *'{{.Image}}'*) id="$(awk -v n="$name" '$1 == n { print $2 }' "$S/container_images")"
                       if [[ -z "$id" ]]; then
                         img="$(awk -v n="$name" '$1 == n { print $2 }' "$S/running")"
@@ -96,7 +98,10 @@ case "$1 ${2:-}" in
       esac
     done
     grep -v "^$name " "$S/running" > "$S/running.new"; mv "$S/running.new" "$S/running"
-    echo "$name $image" >> "$S/running" ;;
+    echo "$name $image" >> "$S/running"
+    # A new container ID on every run.
+    grep -v "^$name " "$S/ids" > "$S/ids.new"; mv "$S/ids.new" "$S/ids"
+    echo "$name $name-$(wc -l < "$S/calls")" >> "$S/ids" ;;
   "run --rm")
     if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then
       out="$(printf '%s\n' "$@" | sed -n 's#^\(.*\):/out:z$#\1#p')"

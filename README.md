@@ -54,11 +54,12 @@ Each agent has its own home volume, so neither can read the other's credentials 
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
-- **Host-side git execution.** `.git/hooks` and `.git/config` are mounted read-only. A writable copy would let the agent plant a hook or `core.fsmonitor` that runs **on the host** the next time you run `git commit` or `git status`.
+- **Host-side git execution.** `.git/hooks` and `.git/config` are mounted read-only, and so is the `.git` file of a worktree or submodule. A writable copy would let the agent plant a hook or `core.fsmonitor` that runs **on the host** the next time you run `git commit` or `git status`. This is not complete yet: see the first item under What is NOT isolated.
 - **Process hardening.** `--cap-drop=ALL`, `no-new-privileges`, rootless Podman.
 
 **What is NOT isolated**
 
+- **The rest of `.git` is writable, and git on the host trusts it.** The agent can write `.git/commondir` (or rename `.git` and create a new one) to point git at a directory with its own config and hooks; the next `git status` on the host, including the one your editor runs by itself, then runs its command outside the box. Commits, branches and worktrees in the box need `.git` writable, so this is open until a safer design is chosen. Until then, treat a repo the agent worked in as untrusted: check `ls .git` for a `commondir` file and `git config --show-origin -l` before running git there on the host, and keep editors with git integration closed on it while an agent works.
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
 - MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
@@ -245,7 +246,7 @@ A group file is data, never run: one host per line, `#` starts a comment.
 
 ```
 # egress.local.d/test-data.conf
-test-data.s3.eu-central-1.amazonaws.com   # HTTPS (port 443) to this host
+test-data.s3.eu-central-1.amazonaws.com   # HTTPS (port 443) and plain HTTP (port 80) to this host
 .test.example                             # test.example and all its subdomains
 minio.test.example:9000                   # this host on this port only, HTTPS or plain HTTP
 ```
@@ -256,7 +257,7 @@ AB_EGRESS=anthropic openai pypi go test-data
 
 - Prefer exact hosts to domains. `.amazonaws.com` is all of AWS, and any API that accepts uploads with a token is an exfiltration path (see [Security model](#security-model)): the agent can use a token planted through prompt injection. An S3 bucket host is narrower than the regional endpoint.
 - Credentials for these services go in a [per-project environment](#per-project-environment) file. The agent sees them; use test credentials with the least rights, read-only where possible.
-- Squid sees only host names, so an allowed host is allowed for any path and any method.
+- Squid sees only host names, so an allowed host is allowed for any path and any method, on port 443 (HTTPS) and 80 (plain HTTP); other ports only as `host:port` entries.
 - The list is the same for all sessions: squid is shared.
 - Only HTTP(S) goes through squid. Databases and queues are [local services](#local-services) or [test servers](#test-servers).
 
@@ -540,7 +541,7 @@ A skill source is a git repository of skills, described in a small file:
 | `skills.d/<name>.conf` | Shared sources, in git: `mattpocock` |
 | `skills.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `skills.d/` replaces that source |
 
-`AB_SKILLS` in `config.env` lists the enabled ones (`AB_SKILLS=mattpocock`). Nobody gets skills they did not enable. The `.conf` is `KEY=VALUE` data, never run:
+`AB_SKILLS` in `config.env` lists the enabled ones (`AB_SKILLS=mattpocock`). Nobody gets skills they did not enable. The `.conf` is `KEY=VALUE` data, never run: Each repository can be one source only: two sources with the same `URL` stop the start with an error; list the skills of both in one `ONLY`.
 
 | Key | |
 |---|---|
@@ -555,7 +556,7 @@ Read what you enable: skills are instructions the agent follows, and bundled scr
 
 #### How a source is installed: `sync-skills.sh`
 
-`run.sh` calls `sync-skills.sh`, which also works by hand for a one-off repository. It clones the repository afresh into a scratch directory (no clone is kept: it would live where a session that mounts agentbox can write, and a hook planted in it would run on the host), finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed, from where and at which commit in `skills/.sources/<owner>__<repo>`, removes skills dropped upstream or deselected, and never overwrites a skill it did not install.
+`run.sh` calls `sync-skills.sh`, which also works by hand for a one-off repository. It clones the repository afresh into a scratch directory (no clone is kept: it would live where a session that mounts agentbox can write, and a hook planted in it would run on the host), finds every directory with a `SKILL.md` at any depth and copies it **flat** into `skills/<name>/`, because Claude Code only looks one level deep. It records what it installed, from where and at which commit in `skills/.sources/<owner>__<repo>`, removes skills dropped upstream or deselected, and never overwrites a skill it did not install. A skill that contains symlinks is not installed: the link could point at a file on your host, which would then end up in the agent's skills.
 
 Installed skills get a prefix, the repo owner by default: `code-review` from `mattpocock/skills` becomes `mattpocock-code-review`. Without it, a vendored skill shadows a Claude Code built-in with the same name (`/code-review`), and two repos can collide. The script renames the directory and the frontmatter `name`, and adds a note after the frontmatter of each `SKILL.md`: the text still says `/tdd` or `call the Skill tool with "code-review"`, and the note tells the agent to use `mattpocock-<name>` for the listed skills. The text itself is not rewritten.
 
@@ -715,7 +716,7 @@ To let the agent use your dev containers (Redis, RabbitMQ, PostgreSQL, ...), lis
 AB_SERVICES=redis rabbitmq postgres
 ```
 
-On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` network that the session joins, and the agent connects by container name and the container's own port: `redis:6379`, `rabbitmq:5672` (management UI `rabbitmq:15672`), `postgres:5432`. Ports published on the host (`-p`) are not used and not needed.
+On start, `run.sh` attaches each one to `ab-services`, a separate `--internal` network that the session joins, and the agent connects by container name and the container's own port: `redis:6379`, `rabbitmq:5672` (management UI `rabbitmq:15672`), `postgres:5432`. Ports published on the host (`-p`) are not used and not needed. The service names are in the session's `NO_PROXY`, so HTTP clients reach them directly, not through squid.
 
 - Only **rootless Podman** containers of the same user can be attached. Docker or rootful containers are invisible to rootless Podman networks; for those, run a copy under rootless Podman.
 - The container must be on a **bridge network**. Rootless containers started without `--network` use `pasta` and cannot join another network later (`"pasta" is not supported: invalid network mode`). Recreate them once with `--network podman` (the default bridge network; `-p` and volumes work as before), and `run.sh` attaches them to `ab-services` on the next start:

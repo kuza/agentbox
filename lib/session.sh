@@ -36,6 +36,9 @@ session_git_mounts() {
       -v "$REPO/.git/config:$WORK_DIR/.git/config:ro,z"
     )
   elif [[ -f "$REPO/.git" ]]; then
+    # Its "gitdir:" line tells git on the host where the repository is; the
+    # agent must not point it at a directory with a config of its own.
+    GIT_MOUNTS+=(-v "$REPO/.git:$WORK_DIR/.git:ro,z")
     echo "agentbox: warning: $REPO is a git worktree or submodule;" \
          "its git dir is outside the mount, so git will not work inside the container" >&2
   fi
@@ -182,7 +185,7 @@ session_agent_args() {
 session_exec() {  # <agent arguments...>
   local venv_key no_proxy tty_flags
   venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
-  no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}${FORWARD_NAMES[*]+${FORWARD_NAMES[*]},}ab-llm-openai")"
+  no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}${FORWARD_NAMES[*]+${FORWARD_NAMES[*]},}${SERVICE_NAMES[*]+${SERVICE_NAMES[*]},}ab-llm-openai")"
   # Allocate a TTY only when attached to a terminal (keeps piping/scripts working).
   tty_flags=(-i)
   [[ -t 0 && -t 1 ]] && tty_flags+=(-t)

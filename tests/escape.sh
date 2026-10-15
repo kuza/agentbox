@@ -102,6 +102,11 @@ else
   # An allowed host on a port other than 443: CONNECT must still be refused.
   code="$(http_code https://pypi.org:22)"
   [[ "$code" == 000 || "$code" == 403 ]] && pass "CONNECT to an allowed host on port 22 is refused" || fail "pypi.org:22 through the proxy: HTTP $code"
+  # Plain HTTP to an allowed host on a port other than 80.
+  # Only squid's own 403 counts: 000 means it let the request through and
+  # the host did not answer on that port.
+  code="$(via_proxy http://pypi.org:8080/)"
+  [[ "$code" == 403 ]] && pass "plain HTTP to an allowed host on port 8080 is refused" || fail "plain HTTP to pypi.org:8080 passes the proxy (HTTP $code)"
   # The proxy must not be a way to the sidecars or to itself.
   for u in http://ab-mcp-grafana:8000/ http://ab-mcp-github:8080/ http://ab-egress:3128/squid-internal-mgr/info http://localhost:3128/; do
     code="$(via_proxy "$u")"

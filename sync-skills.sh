@@ -132,6 +132,18 @@ else
   for n in "${!src_of[@]}"; do wanted[$n]=1; done
 fi
 
+# Symlinks are refused. prefix_skill reads SKILL.md here on the host, so a
+# link out of the repository (SKILL.md -> ../../../.ssh/id_ed25519) would
+# copy a host file into the skills the agent reads.
+for n in "${!wanted[@]}"; do
+  links="$(find "${src_of[$n]}" -type l)"
+  if [[ -n "$links" ]]; then
+    echo "error: skill '$n' in $slug contains symlinks, which are not installed:" >&2
+    printf '  %s\n' "${links//"$VENDOR"\//}" >&2
+    exit 1
+  fi
+done
+
 # --- 3. install -------------------------------------------------------------
 declare -A previously=()
 for n in $(installed_skills); do previously[$n]=1; done

@@ -12,7 +12,7 @@
 # included by squid.conf.
 #
 # A group file is data, never run: one host per line, # starts a comment.
-#   example.com          HTTPS to example.com (port 443)
+#   example.com          HTTPS to example.com (port 443), plain HTTP (port 80)
 #   .example.com         the same for example.com and all its subdomains
 #   minio.example:9000   that host on that port only, HTTPS or plain HTTP
 #

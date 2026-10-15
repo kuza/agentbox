@@ -62,16 +62,26 @@ ask() {  # <question>; true on yes
 
 # Digest the registry serves for an image tag (manifest list for multi-arch
 # images). Empty on any failure.
-remote_digest() {  # <registry/repo:tag>
-  local ref="$1" reg rest repo tag url hdrs challenge realm service scope token
+remote_digest() {  # <image reference: [registry/]repo[:tag]; no tag means latest>
+  local ref="$1" reg repo tag first url hdrs challenge realm service scope token
   local accept=(
     -H 'Accept: application/vnd.oci.image.index.v1+json'
     -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json'
     -H 'Accept: application/vnd.oci.image.manifest.v1+json'
     -H 'Accept: application/vnd.docker.distribution.manifest.v2+json'
   )
-  reg="${ref%%/*}"; rest="${ref#*/}"
-  repo="${rest%:*}"; tag="${rest##*:}"
+  # The tag follows the last ":" after the last "/"; a ":" before it is a
+  # registry port (localhost:5000/x).
+  if [[ "${ref##*/}" == *:* ]]; then tag="${ref##*:}"; ref="${ref%:*}"; else tag=latest; fi
+  # A registry is a first component with a "." or ":", or localhost;
+  # anything else is on Docker Hub (nginx -> library/nginx).
+  first="${ref%%/*}"
+  if [[ "$ref" == */* && ( "$first" == *.* || "$first" == *:* || "$first" == localhost ) ]]; then
+    reg="$first"; repo="${ref#*/}"
+  else
+    reg=docker.io; repo="$ref"
+    [[ "$repo" == */* ]] || repo="library/$repo"
+  fi
   [[ "$reg" == docker.io ]] && reg=registry-1.docker.io
   url="https://$reg/v2/$repo/manifests/$tag"
 
@@ -103,6 +113,8 @@ if (( ${#image_of[@]} )); then
   mapfile -t images < <(printf '%s\n' "${image_of[@]}" | sort -u)
 fi
 for img in ${images[@]+"${images[@]}"}; do
+  # Pinned to a digest: the reference itself is the version, nothing to check.
+  [[ "$img" == *@* ]] && continue
   podman image exists "$img" || continue
   remote="$(remote_digest "$img")"
   if [[ -z "$remote" ]]; then

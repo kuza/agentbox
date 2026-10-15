@@ -87,7 +87,7 @@ sorted_list() {  # <comma-separated list>: sorted, no spaces
 
 skills_sources() {
   local list="${AB_SKILLS:-}" name d conf url only prefix ref slug sync want have at f src
-  local -A enabled_url=()
+  local -A enabled_url=() source_of_slug=()
   for name in ${list//,/ }; do
     if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
       echo "error: AB_SKILLS: invalid source name '$name'" >&2
@@ -108,6 +108,14 @@ skills_sources() {
     fi
     only="$(sorted_list "$(source_value "$conf" ONLY)")"
     slug="$(repo_slug "$url")"
+    # The sync record is per repository: two sources of one repository
+    # would overwrite each other's skills on every start.
+    if [[ -n "${source_of_slug[$slug]:-}" ]]; then
+      echo "error: AB_SKILLS: sources '${source_of_slug[$slug]}' and '$name' both use $url;" \
+           "make them one source (ONLY lists the skills of both)" >&2
+      exit 2
+    fi
+    source_of_slug[$slug]="$name"
     if source_has "$conf" PREFIX; then
       prefix="$(source_value "$conf" PREFIX)"
     else
