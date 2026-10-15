@@ -172,6 +172,13 @@ session_agent_args() {
 # ab-cache, keyed by repo name + path hash, so both agents use the same env.
 #
 # Session: internal network only, no host credentials, read-only agent binary.
+#
+# --dns 127.0.0.1: podman's DNS (aardvark-dns) answers container names on the
+# session's networks and forwards every other name to the container's DNS
+# servers. Older aardvark-dns (podman 4.x) forwards them even on --internal
+# networks, so external names resolved: a channel for data in the query
+# names, without any TCP. Nothing listens on 127.0.0.1 where aardvark-dns
+# runs, so external names fail; container names still resolve.
 session_exec() {  # <agent arguments...>
   local venv_key no_proxy tty_flags
   venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
@@ -182,6 +189,7 @@ session_exec() {  # <agent arguments...>
   exec podman run --rm "${tty_flags[@]}" \
     --name "ab-$AGENT-$$" \
     --network ab-internal \
+    --dns 127.0.0.1 \
     ${SERVICE_NET[@]+"${SERVICE_NET[@]}"} \
     ${FORWARD_NET[@]+"${FORWARD_NET[@]}"} \
     --userns="$USERNS" \

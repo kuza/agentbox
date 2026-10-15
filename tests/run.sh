@@ -11,6 +11,11 @@
 # python3 for the JSON checks (skipped without it).
 set -uo pipefail
 
+# Nothing from the caller's environment may point the scripts at real files:
+# agentbox's settings, sync-skills.sh's, and the XDG directories (with
+# XDG_CONFIG_HOME set, AB_HOME would be the caller's own ~/.config/agentbox).
+while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(AB_|SKILLS_|XDG_)')
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
 trap 'rm -rf -- "${WORK:?}"' EXIT
@@ -568,6 +573,7 @@ test_session_basics() {
   grep -qx -- "$CFG/env/repo.env" <<<"$args" || fail "env file not passed"
   grep -qx -- "$CFG/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "AGENTS.md not mounted"
   grep -qx -- '--cap-drop=ALL' <<<"$args" || fail "capabilities not dropped"
+  grep -A1 -x -- '--dns' <<<"$args" | grep -qx '127.0.0.1' || fail "external DNS not cut off"
 }
 
 test_shell_mode() {
