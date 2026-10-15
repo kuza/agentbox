@@ -798,7 +798,7 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated; the session reaches them by name. Also per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
 | `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
-| `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
+| `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets). `shell` runs bash in the same box instead of an agent, with its own home volume `ab-shell-home`; arguments go to bash: none for an interactive shell, a script, or `-c '...'` |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag or mounted files (nginx templates, `squid.conf`, egress hosts) change. Needed after recreating a Podman secret |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
@@ -833,15 +833,26 @@ Run them after changing `run.sh`, `lib/`, a module in `mcp/`, `check-updates.sh`
 
 ### Escape checks
 
-`tests/run.sh` checks what `run.sh` asks podman to do, not what a session can actually reach. `tests/escape.sh` does that from the inside: open any repo in a session and have the agent run it, or run it yourself in the session's shell (`! bash /path/to/agentbox/tests/escape.sh`, the agentbox repo opened in the box is simplest).
+`tests/run.sh` checks what `run.sh` asks podman to do, not what a session can actually reach. `tests/escape.sh` does that from the inside, in a real box. No agent is needed: `AB_AGENT=shell` runs bash in the same box instead.
 
 ```bash
-bash tests/escape.sh
+AB_AGENT=shell ./run.sh ~/src/agentbox tests/escape.sh   # a clone of agentbox as the repo
 ```
+
+In an agent's session it works too (`bash tests/escape.sh` with the agentbox repo open).
 
 It tries what an agent under prompt injection would: direct connections and DNS around the proxy, the host and the network gateways, disallowed hosts, IP addresses and other ports through the proxy, the sidecars through the proxy and without their caller tokens, container runtime sockets, credentials in the home directory and the environment, privileges, and writes to everything mounted read-only. PASS means the attempt failed; FAIL is a hole, and the exit status is 1. WARN lines are not holes by themselves. It changes nothing: connection attempts and reads, plus a scratch file it removes again.
 
-Run it after changes to networks, squid, sidecars or the session's mounts, and on a new host. Not covered yet: another repo's `AB_FORWARD` network, which needs a setup with forwards in two repos.
+Run it after changes to networks, squid, sidecars or the session's mounts, and on a new host. `ESCAPE_FORBIDDEN` and `ESCAPE_REACHABLE` (space-separated `host:port`) add targets that must not, or must, be reachable.
+
+### CI
+
+GitHub Actions runs both on every push to `main` and every pull request:
+
+- `.github/workflows/checks.yml`: `tests/run.sh` and `shellcheck`, about a minute.
+- `.github/workflows/box.yml`: a real box on the runner's rootless podman: builds the image, starts squid and two repos' `AB_FORWARD` sidecars, and runs `tests/escape.sh` in a session of one repo, with the other repo's forward sidecar as a target that must stay out of reach. Also daily, to catch breakage from outside (new squid or nginx images, podman or Ubuntu updates on the runner).
+
+The workflows have read-only access to the repo and no secrets; actions are pinned to a commit, not a tag.
 
 ## Troubleshooting
 

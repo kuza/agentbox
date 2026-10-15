@@ -31,12 +31,24 @@ agent_select() {
       # subscription, none for an API key.
       AGENT_EGRESS=()
       ;;
+    shell)
+      # No agent: bash in the same box, for looking around by hand and for
+      # tests/escape.sh. Its own home volume, so nothing done here lands in
+      # an agent's home.
+      AGENT_PKG=""
+      AGENT_VOL=""; AGENT_PREFIX=""
+      AGENT_HOME="ab-shell-home"
+      AGENT_INSTALL_FLAGS=()
+      AGENT_SECRETS=()
+      AGENT_EGRESS=()
+      ;;
     *)
-      echo "error: AB_AGENT must be 'claude' or 'pi', got '$AGENT'" >&2
+      echo "error: AB_AGENT must be 'claude', 'pi' or 'shell', got '$AGENT'" >&2
       exit 2
       ;;
   esac
   AGENT_BIN="$AGENT_PREFIX/bin/$AGENT"
+  [[ "$AGENT" == shell ]] && AGENT_BIN=/bin/bash
   STAMP="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.$AGENT.updated"
 }
 
@@ -55,6 +67,7 @@ agent_check_secrets() {
 # repo nor the agent. Installs into the agent's tools volume, which the session
 # container mounts read-only, so the agent can't tamper with its own binary.
 agent_update() {
+  [[ -n "$AGENT_PKG" ]] || return 0
   mkdir -p "$(dirname "$STAMP")"
   if [[ "${AB_UPDATE:-}" == 1 || ! -f "$STAMP" ]] \
      || (( $(date +%s) - $(stat -c %Y "$STAMP") > UPDATE_EVERY )); then
@@ -101,7 +114,7 @@ agent_update() {
 #    - statusLine running claude/statusline.py, when that file exists.
 #    An unreadable settings file is left alone.
 agent_prepare_home() {
-  local home_dirs
+  local home_dirs=()
   case "$AGENT" in
     claude) home_dirs=(.claude) ;;
     pi)     home_dirs=(.pi .pi/agent) ;;
@@ -153,5 +166,5 @@ agent_prepare_home() {
           }"
         chown node:node /home/node/.claude.json /home/node/.claude/settings.json
       fi
-    ' sh "${home_dirs[@]}"
+    ' sh ${home_dirs[@]+"${home_dirs[@]}"}
 }

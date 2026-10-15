@@ -66,9 +66,19 @@ session_env_file() {
 # caller tokens are environment variables (MCP_SESSION_ARGS), which the
 # generated configs reference as ${AB_MCP_TOKEN_<NAME>}.
 session_agent_args() {
-  AGENT_ARGS=(-v "$AGENT_VOL:$AGENT_PREFIX:ro" ${MCP_SESSION_ARGS[@]+"${MCP_SESSION_ARGS[@]}"})
+  AGENT_ARGS=(${MCP_SESSION_ARGS[@]+"${MCP_SESSION_ARGS[@]}"})
+  [[ -n "$AGENT_VOL" ]] && AGENT_ARGS+=(-v "$AGENT_VOL:$AGENT_PREFIX:ro")
   AGENT_CMD=()
   case "$AGENT" in
+    shell)
+      # The arguments go to bash: none for an interactive shell, a script
+      # path (tests/escape.sh) or -c '...'. Claude Code's MCP config is
+      # there to try the sidecars with.
+      AGENT_ARGS+=(
+        --entrypoint "$AGENT_BIN"
+        -v "$MCP_CLAUDE_JSON:/etc/agentbox/mcp.json:ro,z"
+      )
+      ;;
     claude)
       # ENABLE_CLAUDEAI_MCP_SERVERS=false  don't pull in connectors configured on
       #                                    claude.ai (Gmail, Slack, ...)

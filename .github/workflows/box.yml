@@ -1,0 +1,70 @@
+# A real box on the runner's rootless podman: builds the image, starts squid
+# and AB_FORWARD sidecars, and runs tests/escape.sh inside a session
+# (AB_AGENT=shell, no agent and no credentials needed). Two repos with
+# forwards check that one repo's session cannot reach the other's.
+# Daily as well, for breakage from outside: new squid or nginx images,
+# podman or Ubuntu updates on the runner.
+name: Box
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: box-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  escape:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      AB_CHECK_UPDATES: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Podman
+        run: podman version
+
+      - name: Settings and repos
+        # Two repos (copies of this one, so that tests/escape.sh is inside),
+        # each with a forward of its own. One Python version: a faster build.
+        run: |
+          set -eu
+          mkdir -p ~/.config/agentbox/env
+          printf '%s\n' 'AB_PYTHON_VERSIONS=3.13' > ~/.config/agentbox/config.env
+          echo 'AB_FORWARD=fa=example.com:80' > ~/.config/agentbox/env/repo-a.conf
+          echo 'AB_FORWARD=fb=example.com:80' > ~/.config/agentbox/env/repo-b.conf
+          cp -R . "$RUNNER_TEMP/repo-a"
+          cp -R . "$RUNNER_TEMP/repo-b"
+
+      - name: Build the image, start repo A's sidecars
+        run: AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-a" -c true
+
+      - name: Escape checks from repo B
+        run: |
+          set -eu
+          # Repo A's forward sidecar, by name and by each of its addresses.
+          a="$(podman ps --filter label=agentbox.forward --format '{{.Names}}' | grep -- '-fa$')"
+          forbidden="fa:80"
+          for ip in $(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$a"); do
+            forbidden="$forbidden $ip:80"
+          done
+          echo "repo A's sidecar: $a ($forbidden)"
+          AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \
+            -c "ESCAPE_FORBIDDEN='$forbidden' ESCAPE_REACHABLE='fb:80' bash tests/escape.sh"
+
+      - name: Sidecars and logs
+        if: always()
+        run: |
+          podman ps -a --format '{{.Names}} {{.Image}} {{.Status}}'
+          podman logs ab-egress 2>&1 | tail -n 50 || true

@@ -21,7 +21,9 @@
 # Settings / environment overrides:
 #   AB_HOME           directory with your files (default: ~/.config/agentbox)
 #   AB_CONFIG         path of the config file (default: <AB_HOME>/config.env)
-#   AB_AGENT          claude (default) or pi
+#   AB_AGENT          claude (default), pi, or shell: bash in the same box
+#                     instead of an agent, arguments go to bash (README,
+#                     Escape checks)
 #   AB_MCP            MCP modules to enable, e.g. "grafana graylog github"; each
 #                     from <AB_HOME>/mcp.local/<name>/ or mcp/<name>/, with its own
 #                     settings (GRAFANA_URL, ...). context7 is always on.

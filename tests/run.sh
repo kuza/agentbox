@@ -570,6 +570,24 @@ test_session_basics() {
   grep -qx -- '--cap-drop=ALL' <<<"$args" || fail "capabilities not dropped"
 }
 
+test_shell_mode() {
+  setup "${FUNCNAME[0]}"
+  : > "$STUB_DIR/secrets"   # no claude_oauth: not needed without an agent
+  config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
+  ab_run AB_AGENT=shell -- tests/escape.sh
+  assert_rc 0
+  grep -q 'npm' "$STUB_DIR/calls" && fail "an agent was installed"
+  grep -qE '^podman run --rm -i .* --entrypoint /bin/bash .* localhost/agentbox tests/escape.sh$' "$STUB_DIR/calls" \
+    || fail "session command: $(grep -o 'localhost/agentbox.*' "$STUB_DIR/calls" | tail -1)"
+  local args; args="$(session_args)"
+  grep -qx 'ab-shell-home:/home/node' <<<"$args" || fail "not its own home volume"
+  grep -q '^/opt/' <<<"$args" && fail "an agent tools volume is mounted"
+  grep -qx -- "$(cache mcp-claude.json):/etc/agentbox/mcp.json:ro,z" <<<"$args" || fail "MCP config not mounted"
+  grep -qx 'grafana_mcp_caller,type=env,target=AB_MCP_TOKEN_GRAFANA' <<<"$args" || fail "caller token not passed"
+  assert_eq "$(grep -c '^ab-shell-home' <<<"$args")" 1 "home mounts"
+}
+
 test_refuses_agentbox_code_and_user_files() {
   setup "${FUNCNAME[0]}"
   mkdir -p "$T/elsewhere/env"

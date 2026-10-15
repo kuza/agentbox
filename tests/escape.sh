@@ -11,6 +11,12 @@
 # Harmless by design: no exploits, nothing is changed outside a scratch file
 # it removes again, only connection attempts and reads. Some checks depend on
 # the setup (MCP modules, AB_FORWARD); missing pieces are reported as INFO.
+#
+# Environment, for setups that know more (CI):
+#   ESCAPE_FORBIDDEN  host:port targets that must NOT be reachable, such as
+#                     another repo's AB_FORWARD sidecar by name or address
+#   ESCAPE_REACHABLE  host:port targets that must be reachable, such as this
+#                     repo's own AB_FORWARD names (the forward works)
 set -uo pipefail
 
 FAILS=0
@@ -70,6 +76,16 @@ for ip in $(printf '%s\n' "${targets[@]}" | sort -u); do
     if tcp "$ip" "$port"; then fail "host/gateway $ip:$port reachable"; else pass "host/gateway $ip:$port unreachable"; fi
   done
 done
+
+if [[ -n "${ESCAPE_FORBIDDEN:-}${ESCAPE_REACHABLE:-}" ]]; then
+  section "Network: given targets"
+  for t in ${ESCAPE_FORBIDDEN:-}; do
+    if tcp "${t%:*}" "${t##*:}"; then fail "$t reachable, but must not be"; else pass "$t unreachable"; fi
+  done
+  for t in ${ESCAPE_REACHABLE:-}; do
+    if tcp "${t%:*}" "${t##*:}"; then pass "$t reachable"; else fail "$t unreachable, but should be"; fi
+  done
+fi
 
 # --------------------------------------------------------------------------
 section "Network: through the proxy"
