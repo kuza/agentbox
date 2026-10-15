@@ -36,6 +36,9 @@
 #                     e.g. "redis rabbitmq" (README, Local services)
 #   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
 #                     (default: none); applies on the next build (AB_UPGRADE=1)
+#   AB_PYTHON_VERSIONS, AB_GO_VERSION, AB_GOLANGCI_LINT_VERSION
+#                     tool versions baked into the image (default: the
+#                     Containerfile's); apply on the next build (AB_UPGRADE=1)
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <script dir>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
@@ -83,7 +86,13 @@ config_first_pass
 mcp_init
 config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"}
 UPDATE_EVERY="${AB_UPDATE_EVERY:-$((6 * 3600))}"
+# Image build settings from config.env; unset ones keep the Containerfile's
+# defaults (an empty AB_GO_VERSION or AB_GOLANGCI_LINT_VERSION means latest).
 BUILD_ARGS=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")
+for arg in PYTHON_VERSIONS GO_VERSION GOLANGCI_LINT_VERSION; do
+  var="AB_$arg"
+  [[ -n "${!var+x}" ]] && BUILD_ARGS+=(--build-arg "$arg=${!var}")
+done
 
 skills_init
 

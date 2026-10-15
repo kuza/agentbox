@@ -14,9 +14,10 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 # Python for development: uv plus preinstalled interpreters.
 # The agent cannot download interpreters at runtime (no github.com), so the
-# versions you need are baked in here. Add a version and rebuild to get more.
+# versions you need are baked in here.
 #   UV_VERSION        pinned uv release
-#   PYTHON_VERSIONS   space-separated, e.g. "3.11 3.12 3.13"
+#   PYTHON_VERSIONS   space-separated, e.g. "3.11 3.12 3.13"; run.sh passes
+#                     AB_PYTHON_VERSIONS from config.env
 # Interpreters land in /opt/uv-python (read-only for the agent) with
 # python3.X shims in /usr/local/bin. System python3 (Debian 13: 3.13) stays as is.
 # ---------------------------------------------------------------------------
@@ -37,7 +38,8 @@ RUN python3 -m venv /opt/uv \
 #                          build time; empty = latest stable at build time
 #   GOLANGCI_LINT_VERSION  e.g. "2.14.0"; empty = latest release at build time
 # Empty (or a minor version) means AB_UPGRADE brings newer releases; pin to
-# control it. The resolved versions are printed in the build log.
+# control it. The resolved versions are printed in the build log. run.sh
+# passes AB_GO_VERSION and AB_GOLANGCI_LINT_VERSION from config.env.
 # ---------------------------------------------------------------------------
 ARG GO_VERSION="1.26"
 ARG GOLANGCI_LINT_VERSION=""

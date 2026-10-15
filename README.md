@@ -568,12 +568,12 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 
 | | |
 |---|---|
-| Interpreters | `PYTHON_VERSIONS` in `Containerfile` (default `3.12 3.13 3.14`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is Debian 13's 3.13; graphify's own virtualenv uses it |
+| Interpreters | `AB_PYTHON_VERSIONS` in `config.env` (default `3.12 3.13 3.14`, from the `Containerfile`), installed at build time into `/opt/uv-python`, on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is Debian 13's 3.13; graphify's own virtualenv uses it |
 | Packages | `uv add`, `uv sync`, `uv run`, `pip` inside a venv: PyPI is in the egress allowlist |
 | Virtualenv | Per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), via `UV_PROJECT_ENVIRONMENT`. Shared by both agents |
 | uv cache | `ab-cache`, persists across sessions, shared by both agents |
 
-Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, add it to `PYTHON_VERSIONS` and run `AB_UPGRADE=1 ./run.sh`.
+Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, list it in `AB_PYTHON_VERSIONS` (all the versions you want, e.g. `3.11 3.12 3.13 3.14`) and run `AB_UPGRADE=1 ./run.sh`.
 
 **Why the venv is outside the repo.** A `.venv` created in the container points at `/opt/uv-python/...`, which does not exist on the host, and a host `.venv` points at host paths. Sharing one directory breaks whichever side used it last. With `UV_PROJECT_ENVIRONMENT`, `uv` in the box never touches `<repo>/.venv`, so you can keep using your host venv in parallel. Projects that do not use uv (plain `python -m venv .venv`) are not covered by this; create such venvs outside the repo too, e.g. under `~/.venvs`.
 
@@ -585,7 +585,7 @@ The image has the Go toolchain and [golangci-lint](https://golangci-lint.run), b
 
 | | |
 |---|---|
-| Versions | `GO_VERSION`, `GOLANGCI_LINT_VERSION` in `Containerfile`. `GO_VERSION` defaults to `1.26`: a minor version means the latest stable patch release of it at build time, an exact version (`1.26.3`) pins it, empty means the latest stable Go. `GOLANGCI_LINT_VERSION` empty (default) = latest release at build time. `AB_UPGRADE` brings whatever these resolve to; the build log prints what was installed |
+| Versions | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` in `config.env` (defaults from the `Containerfile`). Go defaults to `1.26`: a minor version means the latest stable patch release of it at build time, an exact version (`1.26.3`) pins it, empty means the latest stable Go. golangci-lint empty (default) = latest release at build time. `AB_UPGRADE` brings whatever these resolve to; the build log prints what was installed |
 | Modules | `proxy.golang.org` and `sum.golang.org` are in the egress allowlist, so `go mod download`, `go get`, `go build` work |
 | Caches | Module cache in `ab-go` (`~/go`), build cache in `ab-cache`, both persist and are shared by both agents |
 | Tools | `go install pkg@version` lands in `~/go/bin`, which is on `PATH` |
@@ -650,7 +650,7 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 | Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 ./run.sh` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
-| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` / edit `PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
+| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
 | Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
 
@@ -750,6 +750,8 @@ AMQP_URI=amqp://dev:dev@rabbitmq:5672/%2f
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<script dir>/skills` | Personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
+| `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. Applies on the next build (`AB_UPGRADE=1`). See [Python](#python) |
+| `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. Applies on the next build (`AB_UPGRADE=1`). See [Go](#go) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_ENV_DIR` | `<script dir>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets) |
@@ -795,7 +797,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host in a group in `egress.local.d/` (see [Egress](#egress)); the next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
-| `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `GO_VERSION`). |
+| `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `AB_GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
 | pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 ./pi.sh`. |
 | pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`, or squid not restarted: `AB_RESTART=1 ./pi.sh`. The squid log shows the denied host. |
@@ -804,7 +806,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
 | An MCP server is `failed` in `/mcp` | Check `podman logs` of its sidecar. Both agents list only enabled modules, so a failed one has a sidecar that should be running, or (Context7) a host squid should allow. |
 | `claude mcp list` does not show grafana, graylog, ... | Expected: the modules' servers come from `--mcp-config`, which `mcp list` ignores. Use `/mcp` in a session. |
-| `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `PYTHON_VERSIONS` in `Containerfile` and `AB_UPGRADE=1 ./run.sh`. |
+| `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `AB_PYTHON_VERSIONS` in `config.env` and `AB_UPGRADE=1 ./run.sh`. |
 | Sidecar can't resolve Grafana/Graylog | Internal DNS not visible to containers. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
 | `/mcp` shows a server as failed | Check `podman logs` of the sidecar. |
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is Graylog's own `HTTP 405 Method Not Allowed` API error, so nginx works but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and check the Graylog version is 7.0+. |

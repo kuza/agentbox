@@ -356,6 +356,18 @@ test_egress_recreated_when_groups_change() {
 
 # --- run.sh: other parts ---
 
+test_build_args_from_config() {
+  setup "${FUNCNAME[0]}"
+  config "AB_PYTHON_VERSIONS=3.11 3.13" "AB_GOLANGCI_LINT_VERSION=" "AB_GRAPHIFY_EXTRAS=[terraform]"
+  ab_run AB_UPGRADE=1 --
+  assert_rc 0
+  local b; b="$(grep '^podman build --pull' "$STUB_DIR/calls")"
+  [[ "$b" == *"--build-arg GRAPHIFY_EXTRAS=[terraform] "* ]] || fail "graphify extras: $b"
+  [[ "$b" == *"--build-arg PYTHON_VERSIONS=3.11 3.13 "* ]] || fail "python versions: $b"
+  [[ "$b" == *"--build-arg GOLANGCI_LINT_VERSION= "* ]] || fail "empty golangci-lint version not passed: $b"
+  [[ "$b" == *GO_VERSION=* ]] && fail "unset Go version passed: $b"
+}
+
 test_sidecars_mount_copies_not_repo_files() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=graylog github" "GRAYLOG_URL=https://graylog.example"
