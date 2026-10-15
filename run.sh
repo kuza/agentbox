@@ -113,6 +113,18 @@ if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
   AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
+# The image is built from an empty context directory: the Containerfile
+# copies nothing in, and the agentbox directory holds config.env, env/
+# (passwords) and skills/, which a build has no reason to receive. A COPY
+# added later fails instead of silently taking them along.
+build_image() {  # [podman build options...]
+  local ctx rc=0
+  ctx="$(mktemp -d)"
+  podman build "$@" "${BUILD_ARGS[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$ctx" || rc=$?
+  rmdir -- "$ctx"
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Full upgrade. podman never re-pulls an image it already has, and a cached
 # build never re-runs apt-get, so without this nothing but the agent updates.
@@ -122,7 +134,7 @@ if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   for img in $(printf '%s\n' "$IMG_SQUID" "$IMG_NGINX" ${MCP_IMAGES_ALL[@]+"${MCP_IMAGES_ALL[@]}"} | sort -u); do
     podman pull -q "$img" >/dev/null
   done
-  podman build --pull --no-cache "${BUILD_ARGS[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  build_image --pull --no-cache
   AB_UPDATE=1
   AB_RESTART=1
 fi
@@ -130,7 +142,7 @@ fi
 # Image: tooling only (node, git, ripgrep, ...). The agents are NOT baked in.
 # Rebuild after editing the Containerfile: AB_UPGRADE=1, or podman rmi localhost/agentbox
 podman image exists "$IMAGE" \
-  || podman build "${BUILD_ARGS[@]}" -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  || build_image
 
 agent_update
 agent_prepare_home

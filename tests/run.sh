@@ -367,6 +367,10 @@ test_build_args_from_config() {
   [[ "$b" == *"--build-arg PYTHON_VERSIONS=3.11 3.13 "* ]] || fail "python versions: $b"
   [[ "$b" == *"--build-arg GOLANGCI_LINT_VERSION= "* ]] || fail "empty golangci-lint version not passed: $b"
   [[ "$b" == *GO_VERSION=* ]] && fail "unset Go version passed: $b"
+  # Built from an empty, temporary context, never the agentbox directory.
+  local ctx="${b##* }"
+  [[ "$ctx" == "$AB" || "$ctx" == "$AB/" ]] && fail "build context is the agentbox directory"
+  [[ -e "$ctx" ]] && fail "build context $ctx left behind"
 }
 
 test_sidecars_mount_copies_not_repo_files() {
