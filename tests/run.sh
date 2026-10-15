@@ -86,7 +86,7 @@ json_keys() {  # <file>: mcpServers keys, space-separated
 
 run_test() {
   local name="$1"
-  [[ -n "$FILTER" && "$name" != "$FILTER"* ]] && return
+  [[ -n "$FILTER" && "${name#test_}" != "${FILTER#test_}"* ]] && return
   CURRENT_OK=1
   echo "  $name"
   ( "$name" ) > "$WORK/$name.log" 2>&1
@@ -280,7 +280,8 @@ test_egress_recreated_when_squid_conf_changes() {
   ab_run --
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "not recreated after squid.conf changed"
 }
--------------------------------------------------
+
+# --- run.sh: session ---
 
 test_session_basics() {
   setup "${FUNCNAME[0]}"

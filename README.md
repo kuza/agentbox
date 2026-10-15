@@ -85,13 +85,13 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `config.env.example` | Settings template; copy to `config.env` (ignored by git) |
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
-| `pi/extensions/` | pi extensions you choose to allow, mounted read-only (empty by default) |
+| `pi/extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi, ignored by git |
 | `llm-openai.conf.template` | nginx config for the OpenAI sidecar: caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress allowlist. The MCP modules' remote hosts are added from a generated file it includes |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` holds what `sync-skills.sh` installed from where |
 | `agents/AGENTS.md.example` | Template for `agents/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`). The copy is ignored by git |
-| `claude/statusline.py` | Optional. Claude Code status line (context use, subscription limits, cost), mounted read-only |
+| `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
 | `env/` | Optional. Per-project environment files, `<repo dir name>.env` (ignored by git) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
 | `skills.local.d/<name>.conf` | Your own skill sources, ignored by git |
@@ -443,7 +443,7 @@ Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.m
 
 `claude/statusline.py` draws Claude Code's status line: model, repo directory and git branch, context window use, the 5-hour and weekly subscription limits with their reset times, and the session cost. Percentages turn yellow from 50% and red from 80%. A part whose data Claude Code does not send (limits with an API key, context before the first reply) is left out.
 
-The script is mounted read-only as `~/.claude/statusline.py`. `run.sh` adds the `statusLine` setting to `~/.claude/settings.json` only when that key is absent, so your own status line there is kept; to switch to this one, delete the key and start a new session. Times use the host's time zone: `run.sh` passes it to the session as `TZ`.
+The script is mounted read-only as `~/.claude/statusline.py`. `run.sh` adds the `statusLine` setting to `~/.claude/settings.json` only when that key is absent, so your own status line there is kept and replaces this one; to switch to this one, delete the key and start a new session. Times use the host's time zone: `run.sh` passes it to the session as `TZ`.
 
 **About `--dangerously-skip-permissions`.** Inside this box it is a reasonable choice: the worst case is modified files in the repo (recoverable via git), read access to Grafana and Graylog within Viewer rights, and requests to allowlisted hosts. It is only reasonable if the service accounts are really read-only.
 
