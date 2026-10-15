@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# git-guard: a git wrapper for the HOST, installed as ~/.local/bin/git ahead
+# of the real git in PATH (README, Git on the host). It checks a repository
+# an agentbox session had mounted before git runs in it.
+#
+# Why: in the box the agent can write the repository's .git, apart from
+# hooks/, config and modules/, which are read-only. Git on the host trusts
+# what it finds there. A .git/commondir file, or a worktree's .git file,
+# pointing at a directory the agent made, makes host git use that
+# directory's config and hooks: core.fsmonitor alone runs a command on the
+# next `git status`, which editors run by themselves.
+#
+# For repositories run.sh recorded (<AB_HOME>/mounted-repos), it requires:
+#   - the common git dir is the repository's own .git, whose config and
+#     hooks were read-only in the box, or a submodule's dir under .git/modules
+#     (read-only in the box as well);
+#   - .git has no commondir file;
+#   - a worktree's git dir is .git/worktrees/<name>;
+#   - `git rebase --continue` has no exec lines left in the agent's todo.
+# Anything else stops git with an explanation. Other repositories go
+# straight to git. The check runs `git rev-parse`, which reads the config but
+# executes nothing from it.
+#
+# Install a COPY, never a link into a clone of agentbox that a session can
+# write: this script runs on every git call on the host.
+set -u
+
+say() { echo "agentbox git-guard: $*" >&2; }
+
+self="$(realpath -- "${BASH_SOURCE[0]}")"
+real=""
+IFS=: read -ra path_dirs <<< "${PATH:-}"
+for d in "${path_dirs[@]}"; do
+  if [[ -n "$d" && -x "$d/git" && ! -d "$d/git" && "$(realpath -- "$d/git")" != "$self" ]]; then
+    real="$d/git"
+    break
+  fi
+done
+if [[ -z "$real" ]]; then
+  say "no git in PATH besides this wrapper"
+  exit 127
+fi
+
+list="${AB_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/agentbox}/mounted-repos"
+[[ -s "$list" ]] || exec "$real" "$@"
+
+# Where git will run: the working directory, moved by -C options. An explicit
+# --git-dir, --work-tree or GIT_DIR is your own choice and passes unchecked.
+[[ -n "${GIT_DIR:-}" ]] && exec "$real" "$@"
+dir="$PWD"
+sub=""
+args=("$@")
+i=0
+while (( i < ${#args[@]} )); do
+  a="${args[$i]}"
+  case "$a" in
+    -C) i=$((i + 1)); p="${args[$i]:-}"
+        if [[ "$p" == /* ]]; then dir="$p"; elif [[ -n "$p" ]]; then dir="$dir/$p"; fi ;;
+    -c|--exec-path|--namespace|--config-env|--list-cmds) i=$((i + 1)) ;;
+    --git-dir|--git-dir=*|--work-tree|--work-tree=*) exec "$real" "$@" ;;
+    -*) ;;
+    *) sub="$a"; break ;;
+  esac
+  i=$((i + 1))
+done
+dir="$(realpath -e -- "$dir" 2>/dev/null)" || exec "$real" "$@"
+
+repo=""
+while IFS= read -r r; do
+  [[ -n "$r" ]] || continue
+  if [[ "$dir" == "$r" || "$dir" == "$r"/* ]]; then repo="$r"; break; fi
+done < "$list"
+[[ -n "$repo" ]] || exec "$real" "$@"
+
+refuse() {
+  say "refusing to run git in $dir: $1"
+  say "the agent may have tampered with $repo/.git; look before you trust it:"
+  say "  ls -la '$repo/.git'; cat '$repo/.git/commondir' 2>/dev/null; git config --show-origin -l"
+  say "(README, Git on the host; this check is the wrapper $self)"
+  exit 1
+}
+
+expected="$(realpath -m -- "$repo/.git")"
+[[ -e "$expected/commondir" ]] && refuse "$expected/commondir exists; a repository's own .git never has one"
+
+# Not a repository (or git fails on what it finds): let git say so itself.
+out="$("$real" -C "$dir" rev-parse --path-format=absolute --git-dir --git-common-dir 2>/dev/null)" \
+  || exec "$real" "$@"
+gitdir="$(realpath -m -- "$(sed -n 1p <<<"$out")")"
+common="$(realpath -m -- "$(sed -n 2p <<<"$out")")"
+
+case "$common" in
+  "$expected")
+    if [[ "$gitdir" != "$expected" ]]; then
+      parent="$(dirname -- "$gitdir")"
+      [[ "$parent" == "$expected/worktrees" ]] \
+        || refuse "its git dir is $gitdir, expected $expected or a worktree under $expected/worktrees"
+    fi ;;
+  "$expected"/modules/*)
+    [[ -e "$common/commondir" ]] && refuse "$common/commondir exists" ;;
+  *)
+    refuse "git would use $common for its config and hooks instead of $expected" ;;
+esac
+
+# A rebase the agent left half done: exec lines run on --continue.
+if [[ "$sub" == rebase ]] && printf '%s\n' "$@" | grep -qx -- '--continue'; then
+  todo="$gitdir/rebase-merge/git-rebase-todo"
+  if [[ -f "$todo" ]] && grep -qE '^[[:space:]]*(x|exec)[[:space:]]' "$todo"; then
+    say "the rebase todo has exec lines, which would run on this host:"
+    grep -E '^[[:space:]]*(x|exec)[[:space:]]' "$todo" | sed 's/^/  /' >&2
+    say "remove them (git rebase --edit-todo) or abort (git rebase --abort)"
+    exit 1
+  fi
+fi
+
+exec "$real" "$@"

@@ -194,6 +194,15 @@ try_append() {  # <existing file>: can it be opened for writing? Writes nothing.
 }
 
 repo="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+if [[ -d "$repo/.git" ]]; then
+  # A mount of its own cannot be renamed and replaced with the agent's .git.
+  if awk -v t="$repo/.git" '$5 == t { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+    pass "$repo/.git is a mount of its own (cannot be renamed)"
+  else
+    fail "$repo/.git can be renamed and replaced"
+  fi
+  [[ -d "$repo/.git/modules" ]] && { if try_write "$repo/.git/modules"; then fail "$repo/.git/modules writable: submodule config runs on the host"; else pass "$repo/.git/modules read-only"; fi; }
+fi
 if [[ -d "$repo/.git/hooks" ]]; then
   if try_write "$repo/.git/hooks"; then fail "$repo/.git/hooks writable: a hook would run on the host"; else pass "$repo/.git/hooks read-only"; fi
 fi

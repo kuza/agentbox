@@ -525,6 +525,120 @@ test_updates_image_references() {
   assert_no_out "could not check ghcr.io/org/pinned"
 }
 
+# --- git-guard: real git, real attacks ---------------------------------------
+
+# A repository at $R, recorded as mounted; $T/gbin/git is the wrapper.
+# MARK is the file an attack's command would create.
+gg_setup() {
+  setup "$1"
+  mkdir -p "$T/gbin"
+  cp "$ROOT/git-guard" "$T/gbin/git"
+  chmod +x "$T/gbin/git"
+  R="$T/proj"
+  git init -q -b main "$R"
+  git -C "$R" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  echo "$R" > "$CFG/mounted-repos"
+  MARK="$T/pwned"
+}
+# gg <dir> <git args...>: the wrapper, from <dir>.
+gg() {
+  local d="$1"; shift
+  (cd "$d" && env HOME="$T/home" PATH="$T/gbin:$PATH" git "$@") > "$T/out" 2>&1
+  RC=$?
+}
+# bare_git <dir> <git args...>: the real git, as without the wrapper.
+bare_git() {
+  local d="$1"; shift
+  (cd "$d" && env HOME="$T/home" git "$@") > "$T/out.bare" 2>&1
+}
+# A directory with the agent's config: core.fsmonitor creates MARK.
+evil_common_dir() {  # <dir>
+  mkdir -p "$1"
+  cp -R "$R/.git/objects" "$R/.git/refs" "$R/.git/HEAD" "$1/"
+  printf '[core]\n\trepositoryformatversion = 0\n\tfsmonitor = "touch %s; false"\n' "$MARK" > "$1/config"
+}
+
+test_guard_clean_and_unlisted_repos_pass() {
+  gg_setup "${FUNCNAME[0]}"
+  gg "$R" status --short
+  assert_rc 0
+  git init -q "$T/other"
+  gg "$T/other" status --short
+  assert_rc 0
+  gg "$T" --version
+  assert_rc 0
+}
+
+test_guard_stops_commondir() {
+  gg_setup "${FUNCNAME[0]}"
+  evil_common_dir "$R/evil"
+  echo ../evil > "$R/.git/commondir"
+  bare_git "$R" status --short
+  [[ -e "$MARK" ]] || fail "control: the attack did not work on plain git"
+  rm -f "$MARK"
+  gg "$R" status --short
+  assert_rc 1
+  assert_out "commondir exists"
+  [[ -e "$MARK" ]] && fail "the agent's command ran"
+  # The same through -C, from outside the repository.
+  gg "$T" -C proj status --short
+  assert_rc 1
+  [[ -e "$MARK" ]] && fail "the agent's command ran (-C)"
+}
+
+test_guard_worktrees() {
+  gg_setup "${FUNCNAME[0]}"
+  git -C "$R" worktree add -q "$R/.claude/worktrees/a" 2>/dev/null
+  gg "$R/.claude/worktrees/a" status --short
+  assert_rc 0
+  # The agent builds a fake repository inside the tree and points the
+  # worktree's .git file at it.
+  git init -q -b main "$R/fake"
+  git -C "$R/fake" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+  git -C "$R/fake" worktree add -q "$T/fake-wt" 2>/dev/null
+  printf '[core]\n\trepositoryformatversion = 0\n\tfsmonitor = "touch %s; false"\n' "$MARK" >> "$R/fake/.git/config"
+  cp "$T/fake-wt/.git" "$R/.claude/worktrees/a/.git"
+  bare_git "$R/.claude/worktrees/a" status --short
+  [[ -e "$MARK" ]] || fail "control: the attack did not work on plain git"
+  rm -f "$MARK"
+  gg "$R/.claude/worktrees/a" status --short
+  assert_rc 1
+  assert_out "instead of $R/.git"
+  [[ -e "$MARK" ]] && fail "the agent's command ran"
+}
+
+test_guard_rebase_exec_lines() {
+  gg_setup "${FUNCNAME[0]}"
+  mkdir -p "$R/.git/rebase-merge"
+  printf 'pick 0000000 x\nexec touch %s\n' "$MARK" > "$R/.git/rebase-merge/git-rebase-todo"
+  gg "$R" rebase --continue
+  assert_rc 1
+  assert_out "exec lines"
+  [[ -e "$MARK" ]] && fail "the exec line ran"
+}
+
+test_guard_submodule_passes() {
+  gg_setup "${FUNCNAME[0]}"
+  git init -q -b main "$T/lib"
+  git -C "$T/lib" -c user.name=t -c user.email=t@t commit -q --allow-empty -m lib
+  git -C "$R" -c protocol.file.allow=always submodule add -q "$T/lib" sub 2>/dev/null
+  gg "$R/sub" status --short
+  assert_rc 0
+}
+
+test_session_protects_git_dir() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  local args; args="$(session_args)"
+  grep -qx -- "$REPO/.git:/work/repo/.git:z" <<<"$args" || fail ".git not a mount of its own"
+  grep -qx -- "$REPO/.git/modules:/work/repo/.git/modules:ro,z" <<<"$args" || fail "modules not read-only"
+  assert_file_has "$CFG/mounted-repos" "^$REPO\$"
+  assert_out "git on this host is not git-guard"
+  ab_run --
+  assert_eq "$(grep -c . "$CFG/mounted-repos")" 1 "repo recorded once"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {

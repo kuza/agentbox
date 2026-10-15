@@ -54,12 +54,12 @@ Each agent has its own home volume, so neither can read the other's credentials 
 - **claude.ai connectors.** `ENABLE_CLAUDEAI_MCP_SERVERS=false` stops Claude Code from loading MCP connectors configured in your claude.ai account (mail, chat, drives, ...). Only the MCP servers registered inside the box are available.
 - **Credentials.** Nothing from the host environment, `~/.ssh`, `~/.aws`, `~/.kube` etc. is visible. Grafana, Graylog and GitHub tokens exist only in their sidecars, provided as Podman secrets.
 - **The agent's own binary.** Claude Code is installed into `ab-claude-tools` by a separate short-lived container and mounted read-only, so the agent cannot modify its own executable.
-- **Host-side git execution.** `.git/hooks` and `.git/config` are mounted read-only, and so is the `.git` file of a worktree or submodule. A writable copy would let the agent plant a hook or `core.fsmonitor` that runs **on the host** the next time you run `git commit` or `git status`. This is not complete yet: see the first item under What is NOT isolated.
+- **Host-side git execution.** `.git/hooks`, `.git/config` and `.git/modules` are mounted read-only, `.git` itself is a mount of its own (it cannot be renamed and replaced), and the `.git` file of a worktree or submodule is read-only. A writable copy would let the agent plant a hook or `core.fsmonitor` that runs **on the host** the next time you run `git commit` or `git status`. The rest of `.git` stays writable for commits, branches and worktrees; [git-guard](#git-on-the-host) on the host covers what that leaves open.
 - **Process hardening.** `--cap-drop=ALL`, `no-new-privileges`, rootless Podman.
 
 **What is NOT isolated**
 
-- **The rest of `.git` is writable, and git on the host trusts it.** The agent can write `.git/commondir` (or rename `.git` and create a new one) to point git at a directory with its own config and hooks; the next `git status` on the host, including the one your editor runs by itself, then runs its command outside the box. Commits, branches and worktrees in the box need `.git` writable, so this is open until a safer design is chosen. Until then, treat a repo the agent worked in as untrusted: check `ls .git` for a `commondir` file and `git config --show-origin -l` before running git there on the host, and keep editors with git integration closed on it while an agent works.
+- **The rest of `.git` is writable, and git on the host trusts it.** The agent can write `.git/commondir`, or point a worktree's `.git` file at a directory it made, so that git on the host uses that directory's config and hooks; the next `git status`, including the one your editor runs by itself, then runs its command outside the box. **Install [git-guard](#git-on-the-host)**, which refuses such a repository before git runs. Without it this path is open.
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
 - MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
@@ -93,6 +93,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 | `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
+| `git-guard` | Host-side git wrapper, installed as `~/.local/bin/git`: refuses repositories whose `.git` a session redirected. See [Git on the host](#git-on-the-host) |
 | `sync-skills.sh` | Host-side: installs a skills repository into your `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |
 | `tests/run.sh` | Tests for `run.sh`, `check-updates.sh` and `sync-skills.sh` with a podman stand-in. See [Tests](#tests) |
@@ -221,6 +222,41 @@ Inside the session:
 - Ask Claude to run `curl -sI https://example.com`. Expected: **403** from squid.
 - Ask Claude to run `env | grep -iE 'token|key|pass'`. Expected: `CLAUDE_CODE_OAUTH_TOKEN` and the caller tokens `AB_MCP_TOKEN_*`, which only open the sidecars.
 - If enabled: ask for the latest errors from Graylog and the `up` status of Prometheus targets to confirm the MCP servers reach their backends.
+
+## Git on the host
+
+The agent commits, branches and creates worktrees in the box, so most of the repository's `.git` is writable there. Git on the host trusts what it finds in `.git`: a `.git/commondir` file, or a worktree's `.git` file, pointing at a directory the agent made, makes it use that directory's config and hooks, and `core.fsmonitor` in there runs a command on the next `git status`. Editors run `git status` by themselves whenever files change.
+
+`git-guard` closes this. It is a wrapper installed as `git` ahead of the real one: for every repository `run.sh` has mounted (recorded in `~/.config/agentbox/mounted-repos`) it checks, before git runs, that
+
+- git would use the repository's own `.git` for config and hooks (read-only in the box), or a submodule's directory under `.git/modules` (read-only as well);
+- `.git` has no `commondir` file;
+- a worktree's git dir is `.git/worktrees/<name>`;
+- `git rebase --continue` finds no `exec` lines in a rebase the agent left half done.
+
+Otherwise git stops with an explanation. Other repositories go straight to git. The check costs one `git rev-parse`, which reads the config but executes nothing from it. `tests/run.sh` reproduces the attacks with real git and checks that plain git falls for them and git-guard does not.
+
+Install it once, as a **copy**: it runs on every git call, so it must not be a link into a clone a session can write.
+
+```bash
+mkdir -p ~/.local/bin
+install -m 755 git-guard ~/.local/bin/git
+```
+
+`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...), `~/.config/environment.d/agentbox.conf`, effective at the next login:
+
+```
+PATH=$HOME/.local/bin:$PATH
+# Belt and braces: no repository config can switch on core.fsmonitor, even for
+# a program that calls /usr/bin/git directly.
+GIT_CONFIG_COUNT=1
+GIT_CONFIG_KEY_0=core.fsmonitor
+GIT_CONFIG_VALUE_0=false
+```
+
+Check with `command -v git` (should print `~/.local/bin/git`) in a terminal and in your editor's terminal. Editors with a setting for the git executable (VS Code `git.path`, JetBrains "Path to Git executable") can point at `~/.local/bin/git` explicitly. `run.sh` warns at every start while `git` is not git-guard.
+
+Update the copy when you update agentbox (`install -m 755 git-guard ~/.local/bin/git` from the copy you run). What it does not cover: a program that calls `/usr/bin/git` directly runs unchecked (the `environment.d` setting above still keeps `core.fsmonitor` off for it), and submodules cannot be updated inside the box, since `.git/modules` is read-only there.
 
 ## Egress
 

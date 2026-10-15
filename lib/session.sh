@@ -24,17 +24,34 @@ session_tz() {
   if [[ -n "$tz" ]]; then TZ_ENV=(-e "TZ=$tz"); fi
 }
 
-# Protect .git/hooks and .git/config. Both are executed/interpreted by git on
-# the HOST (hooks, core.fsmonitor, core.sshCommand, ...), so a writable copy
-# would let the agent run code outside the container on your next git command.
+# Protect what git on the HOST executes or trusts in .git: hooks/, config
+# (core.fsmonitor, core.sshCommand, ...) and modules/ (the submodules' own
+# config and hooks) are read-only, so the agent cannot plant code that runs
+# outside the container on your next git command. .git itself is a mount of
+# its own, which cannot be renamed and replaced from inside.
+#
+# The rest of .git stays writable for commits, branches and worktrees, and
+# that is not enough on its own: a .git/commondir file, or a worktree's .git
+# file, can point host git at a directory with the agent's config and hooks.
+# git-guard, a git wrapper on the host, refuses those; the repository is
+# recorded in <AB_HOME>/mounted-repos for it (README, Git on the host).
 session_git_mounts() {
   GIT_MOUNTS=()
   if [[ -d "$REPO/.git" ]]; then
-    mkdir -p "$REPO/.git/hooks"
+    mkdir -p "$REPO/.git/hooks" "$REPO/.git/modules"
     GIT_MOUNTS+=(
+      -v "$REPO/.git:$WORK_DIR/.git:z"
       -v "$REPO/.git/hooks:$WORK_DIR/.git/hooks:ro,z"
       -v "$REPO/.git/config:$WORK_DIR/.git/config:ro,z"
+      -v "$REPO/.git/modules:$WORK_DIR/.git/modules:ro,z"
     )
+    mkdir -p "$AB_HOME_DIR"
+    grep -qxF -- "$REPO" "$AB_HOME_DIR/mounted-repos" 2>/dev/null \
+      || printf '%s\n' "$REPO" >> "$AB_HOME_DIR/mounted-repos"
+    if ! grep -qs 'agentbox git-guard' "$(command -v git)"; then
+      echo "agentbox: warning: git on this host is not git-guard; a session can make" \
+           "your next git command in this repo run its code (README, Git on the host)" >&2
+    fi
   elif [[ -f "$REPO/.git" ]]; then
     # Its "gitdir:" line tells git on the host where the repository is; the
     # agent must not point it at a directory with a config of its own.
