@@ -1,7 +1,7 @@
 # agentbox base image: tooling only.
 # Claude Code itself is installed into the "ab-claude-tools" volume by run.sh,
 # so frequent Claude Code releases don't require rebuilding this image.
-FROM docker.io/library/node:22-trixie-slim
+FROM docker.io/library/node:24-trixie-slim
 
 # make runs project Makefiles; gcc and libc6-dev give Go cgo, which
 # `go test -race` needs (Go enables cgo only when it finds a C compiler).
