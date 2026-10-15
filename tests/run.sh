@@ -372,7 +372,8 @@ test_forward_global_and_repo() {
   assert_rc 0
   local k; k="$(fwd_key)"
   assert_out "repo config $CFG/env/repo.conf"
-  assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" "ab-fwd-$k-mq ab-fwd-$k-web ab-fwd-db" "forward sidecars"
+  assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" \
+    "$(printf '%s\n' "ab-fwd-$k-mq" "ab-fwd-$k-web" ab-fwd-db | sort | paste -sd' ' -)" "forward sidecars"
   local l; l="$(run_line ab-fwd-db)"
   [[ "$l" == *"--network ab-egress --network ab-forward:alias=db "* ]] || fail "global networks: $l"
   [[ "$l" == *"--entrypoint=socat localhost/agentbox TCP-LISTEN:5432,fork,reuseaddr TCP:db.test.example:5432" ]] || fail "socat command: $l"
