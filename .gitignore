@@ -1,15 +1,2 @@
-# Where your files lived before ~/.config/agentbox (README, Your files).
-# lib/paths.sh still uses ones not moved yet, with a warning; ignored so that
-# a config.env or env/ with passwords left here is never committed. Remove
-# together with that fallback.
-config.env
-env/
-skills/
-agents/AGENTS.md
-mcp.local/
-skills.local.d/
-egress.local.d/
-pi/extensions/
-
 # Local review notes.
 cr/

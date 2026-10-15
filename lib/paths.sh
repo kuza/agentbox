@@ -12,32 +12,29 @@
 #
 # The code can then be replaced (a new version, a fresh clone) without
 # touching them, and a session that has agentbox's code open as its repo
-# does not see them. Older versions kept them next to the code; each one
-# found only there is still used, with a warning saying how to move it.
+# does not see them. Older versions kept them next to the code; run.sh stops
+# while any is still there (user_paths_check_old).
 #
 # Sourced by run.sh, check-updates.sh and sync-skills.sh; needs SCRIPT_DIR.
-# Sets AB_HOME_DIR, the USER_* paths below and OLD_PLACES.
+# Sets AB_HOME_DIR and the USER_* paths below.
 
 AB_HOME_DIR="${AB_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/agentbox}"
-OLD_PLACES=()
 
-user_path() {  # <variable> <name in AB_HOME> <old name next to the code>
-  if [[ ! -e "$AB_HOME_DIR/$2" && -e "$SCRIPT_DIR/$3" ]]; then
-    OLD_PLACES+=("$3 $2")
-    printf -v "$1" '%s' "$SCRIPT_DIR/$3"
-  else
-    printf -v "$1" '%s' "$AB_HOME_DIR/$2"
-  fi
-}
+USER_CONFIG="$AB_HOME_DIR/config.env"
+USER_ENV_DIR="$AB_HOME_DIR/env"
+USER_SKILLS_DIR="$AB_HOME_DIR/skills"
+USER_AGENTS_MD="$AB_HOME_DIR/AGENTS.md"
+USER_MCP_DIR="$AB_HOME_DIR/mcp.local"
+USER_SKILLS_SOURCES_DIR="$AB_HOME_DIR/skills.local.d"
+USER_EGRESS_DIR="$AB_HOME_DIR/egress.local.d"
+USER_PI_EXTENSIONS="$AB_HOME_DIR/pi-extensions"
 
-user_path USER_CONFIG config.env config.env
-user_path USER_ENV_DIR env env
-user_path USER_SKILLS_DIR skills skills
-user_path USER_AGENTS_MD AGENTS.md agents/AGENTS.md
-user_path USER_MCP_DIR mcp.local mcp.local
-user_path USER_SKILLS_SOURCES_DIR skills.local.d skills.local.d
-user_path USER_EGRESS_DIR egress.local.d egress.local.d
-user_path USER_PI_EXTENSIONS pi-extensions pi/extensions
+# Old place next to the code -> name in AB_HOME.
+OLD_PLACES=(
+  "config.env config.env" "env env" "skills skills" "agents/AGENTS.md AGENTS.md"
+  "mcp.local mcp.local" "skills.local.d skills.local.d" "egress.local.d egress.local.d"
+  "pi/extensions pi-extensions"
+)
 
 # Refuses a repo that is, contains or lies inside agentbox's code or your
 # files: a session could change code that runs on the host, or read the
@@ -56,14 +53,27 @@ user_paths_check_repo() {  # <repo> <env dir> <skills dir> <config file>
   done
 }
 
-# Run once per start (run.sh): how to move what is still in the old place.
-user_paths_warn() {
-  local entry
-  (( ${#OLD_PLACES[@]} )) || return 0
-  echo "agentbox: warning: your files belong in $AB_HOME_DIR now, apart from the code (README, Your files)." >&2
-  echo "agentbox: these are still next to the code and used from there; to move them:" >&2
-  echo "  mkdir -p '$AB_HOME_DIR'" >&2
+# Stops if any of your files is still next to the code, where older versions
+# kept it: it would be silently ignored (a config.env with settings, env/
+# with passwords), and git would show it in agentbox's repository. Prints
+# how to move each. Empty directories (pi/extensions created by an older
+# run.sh) are just removed.
+user_paths_check_old() {
+  local entry old new found=()
   for entry in "${OLD_PLACES[@]}"; do
-    echo "  mv '$SCRIPT_DIR/${entry%% *}' '$AB_HOME_DIR/${entry#* }'" >&2
+    old="$SCRIPT_DIR/${entry%% *}"; new="$AB_HOME_DIR/${entry#* }"
+    [[ -e "$old" ]] || continue
+    if [[ -d "$old" ]] && rmdir -- "$old" 2>/dev/null; then continue; fi
+    if [[ -e "$new" ]]; then
+      found+=("  # both exist: merge $old into $new by hand, then remove $old")
+    else
+      found+=("  mv '$old' '$new'")
+    fi
   done
+  (( ${#found[@]} )) || return 0
+  echo "error: your files belong in $AB_HOME_DIR, apart from the code (README, Your files)." >&2
+  echo "These are still next to the code; move them:" >&2
+  echo "  mkdir -p '$AB_HOME_DIR'" >&2
+  printf '%s\n' "${found[@]}" >&2
+  exit 2
 }

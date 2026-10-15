@@ -696,25 +696,27 @@ test_refuses_agentbox_code_and_user_files() {
   assert_rc 0
 }
 
-test_user_files_in_old_place_used_with_warning() {
+test_user_files_in_old_place_stop_the_start() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$AB/env" "$AB/agents"
+  mkdir -p "$AB/env" "$AB/agents" "$AB/pi/extensions" "$CFG/skills" "$AB/skills/mine"
   echo "DB=x" > "$AB/env/repo.env"
   echo "# rules" > "$AB/agents/AGENTS.md"
   rm "$CFG/config.env"
   echo "AB_SERVICES=" > "$AB/config.env"
   ab_run --
-  assert_rc 0
-  assert_out "your files belong in $CFG now"
+  assert_rc 2
+  assert_out "your files belong in $CFG"
   assert_out "mv '$AB/env' '$CFG/env'"
   assert_out "mv '$AB/agents/AGENTS.md' '$CFG/AGENTS.md'"
   assert_out "mv '$AB/config.env' '$CFG/config.env'"
-  local args; args="$(session_args)"
-  grep -qx -- "$AB/env/repo.env" <<<"$args" || fail "old env file not used"
-  grep -qx -- "$AB/agents/AGENTS.md:/home/node/.claude/CLAUDE.md:ro,z" <<<"$args" || fail "old AGENTS.md not used"
-  # Once moved, the new place wins and the warning goes.
+  assert_out "both exist: merge $AB/skills into $CFG/skills by hand"
+  grep -q '^podman' "$STUB_DIR/calls" && fail "podman called before the check"
+  [[ -e "$AB/pi/extensions" ]] && fail "empty old pi/extensions left"
+  # Once moved, the start goes ahead with the new place.
   mv "$AB/env" "$CFG/env"; mv "$AB/agents/AGENTS.md" "$CFG/AGENTS.md"; mv "$AB/config.env" "$CFG/config.env"
+  rm -r "$AB/skills"
   ab_run --
+  assert_rc 0
   assert_no_out "belong in"
   session_args | grep -qx -- "$CFG/env/repo.env" || fail "new env file not used"
 }

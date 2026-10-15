@@ -114,7 +114,7 @@ Your settings and data live apart from the code, in `~/.config/agentbox/` (`AB_H
 
 `run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
 
-Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS.md`, `pi/extensions/` for `pi-extensions/`). Each one still found only there is used from there, and every start prints the commands that move it.
+Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS.md`, `pi/extensions/` for `pi-extensions/`). While any is still there, `run.sh` stops before starting anything and prints the commands that move it.
 
 ## First-time setup
 

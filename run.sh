@@ -88,6 +88,7 @@ WORK_DIR="/work/$(basename "$REPO")"
 # ---------------------------------------------------------------------------
 # Configuration: agentbox's settings, then the enabled MCP modules' settings.
 # ---------------------------------------------------------------------------
+user_paths_check_old
 config_first_pass
 mcp_init
 config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"}
@@ -102,7 +103,6 @@ done
 
 skills_init
 user_paths_check_repo "$REPO" "${AB_ENV_DIR:-$USER_ENV_DIR}" "$SKILLS_DIR" "$CONFIG_FILE"
-user_paths_warn
 
 agent_select
 agent_check_secrets
