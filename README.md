@@ -34,7 +34,9 @@ Needs Linux with rootless Podman 4.x or newer on the netavark backend (`podman i
 **1. Install a release** and check its signature (the key is under [Releases](#releases)):
 
 ```bash
-v=v0.1.0   # the latest: https://github.com/kuza/agentbox/releases
+# The latest release (https://github.com/kuza/agentbox/releases); or set v=vX.Y.Z
+v="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/kuza/agentbox/releases/latest)"; v="${v##*/}"
+echo "$v"
 mkdir -p ~/Downloads/agentbox && cd ~/Downloads/agentbox
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz.sig
@@ -81,7 +83,9 @@ Next: MCP servers for Grafana, Graylog or GitHub ([MCP servers](#mcp-servers)), 
 Install a release (below), or, to work on agentbox itself, clone the repository and run `./run.sh` from the clone; [Releases](#releases) says why that clone must not be the copy you open in the box.
 
 ```bash
-v=v0.1.0   # the latest: https://github.com/kuza/agentbox/releases
+# The latest release (https://github.com/kuza/agentbox/releases); or set v=vX.Y.Z
+v="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/kuza/agentbox/releases/latest)"; v="${v##*/}"
+echo "$v"
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz.sig
 # The first time, check the signature against the release key (Releases, Trust):
