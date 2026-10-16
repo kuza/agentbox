@@ -81,7 +81,8 @@ agent_check_secrets() {
 agent_login() {
   local token=""
   if [[ "$AGENT" != claude ]]; then
-    echo "error: agentbox login gets a Claude Code token; pi signs in inside its session (/login)" >&2
+    echo "error: agentbox login gets a Claude Code token, but AB_AGENT is $AGENT" \
+         "(pi signs in inside its session, /login; unset AB_AGENT for Claude Code)" >&2
     exit 2
   fi
   if [[ ! -t 0 || ! -t 1 ]]; then
@@ -96,6 +97,10 @@ agent_login() {
   fi
   echo "agentbox: now paste the token printed above (it starts with sk-ant-oat01-; the input is hidden)" >&2
   read -rsp "Claude token: " token || true
+  # A token wrapped over several lines arrives as several lines in one
+  # paste: take the lines that come right after the first.
+  local more
+  while IFS= read -rs -t 0.5 more; do token+="$more"; done
   echo >&2
   token="${token//[[:space:]]/}"
   if [[ "$token" != sk-ant-oat01-* ]]; then

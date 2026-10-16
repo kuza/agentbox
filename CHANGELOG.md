@@ -12,7 +12,8 @@ the steps a release needs from you, such as a rebuild.
 - Sidecars follow their image: squid after a rebuild (v0.1.1 rebuilds it
   once) and MCP images after a pull, without `AB_RESTART=1`.
 - `agentbox login` on podman before 4.7 (no `secret create --replace`), and
-  without building the squid image it does not use.
+  without building the squid image it does not use. A token pasted over
+  several lines is kept whole; with another `AB_AGENT` it says which.
 - `agentbox update`: a release missing a file is reported, not a silent
   exit; the download is removed after a failure; an install interrupted
   earlier no longer breaks the next one.

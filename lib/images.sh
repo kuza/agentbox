@@ -36,6 +36,9 @@ build_local() {  # <image> <containerfile> <fingerprint> [podman build options..
     pulled="$(date +%s)"
   else
     pulled="$(podman image inspect -f '{{index .Labels "agentbox.pulled"}}' "$image" 2>/dev/null)" || pulled=""
+    # An image from before the label: its build is the latest pull it shows.
+    [[ "$pulled" =~ ^[0-9]+$ ]] \
+      || pulled="$(podman image inspect -f '{{.Created.Unix}}' "$image" 2>/dev/null)" || pulled=""
     [[ "$pulled" =~ ^[0-9]+$ ]] || pulled=""
   fi
   ctx="$(mktemp -d)"
@@ -81,13 +84,13 @@ image_retire() {  # <image>
   printf '%s %s\n' "$1" "$id" >> "$RETIRED_IMAGES"
 }
 
-# Records <image> for removal by images_cleanup, tag and all: an image
-# agentbox no longer uses at all.
+# Records <image> for removal by images_cleanup, by its name: an image
+# agentbox no longer uses at all. Tried once; with another tag on it, rmi
+# only takes this name away.
 image_drop() {  # <image>
-  local id
-  id="$(podman image inspect -f '{{.Id}}' "$1" 2>/dev/null)" || return 0
+  podman image exists "$1" || return 0
   mkdir -p "$(dirname "$RETIRED_IMAGES")"
-  printf '%s %s\n' - "$id" >> "$RETIRED_IMAGES"
+  printf '%s %s\n' - "$1" >> "$RETIRED_IMAGES"
   echo "agentbox: $1 is no longer used; removing it once ab-egress has moved off it" >&2
 }
 
@@ -101,8 +104,9 @@ images_cleanup() {
   [[ -s "$RETIRED_IMAGES" ]] || return 0
   while read -r img id; do
     [[ -n "$id" ]] || continue
-    # "-": an image to remove although its tag still names it (image_drop).
-    [[ "$img" != - && "$(podman image inspect -f '{{.Id}}' "$img" 2>/dev/null)" == "$id" ]] && continue
+    # "-": a name to remove once (image_drop), whatever comes of it.
+    if [[ "$img" == - ]]; then podman rmi "$id" >/dev/null 2>&1; continue; fi
+    [[ "$(podman image inspect -f '{{.Id}}' "$img" 2>/dev/null)" == "$id" ]] && continue
     podman image exists "$id" || continue
     podman rmi "$id" >/dev/null 2>&1 || keep+=("$img $id")
   done < "$RETIRED_IMAGES"

@@ -1098,6 +1098,14 @@ test_login() {
   assert_rc 1
   assert_out "that is not the token"
   assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abc123 "token after a wrong paste"
+  # A token wrapped over two lines arrives in one paste: all of it is kept.
+  tty_run 'sk-ant-oat01-abc\ndef456\n' AB_LOGIN=1 --
+  assert_rc 0
+  assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abcdef456 "token over two lines"
+  # Another agent: the message names it.
+  ab_run AB_LOGIN=1 AB_AGENT=shell --
+  assert_rc 2
+  assert_out "but AB_AGENT is shell"
   # podman before 4.7 has no secret create --replace.
   tty_run 'sk-ant-oat01-new\n' AB_LOGIN=1 STUB_OLD_PODMAN=1 --
   assert_rc 0
@@ -1159,6 +1167,17 @@ test_trivy() {
 
 # --- squid built here ---
 
+# An image from before the label agentbox.pulled: a rebuild for a setting
+# takes its build date as the pull date.
+test_image_pulled_date_from_older_image() {
+  setup "${FUNCNAME[0]}"
+  echo "localhost/agentbox older-fingerprint" > "$STUB_DIR/image_labels"
+  ab_run STUB_IMAGE_CREATED=1700000000 --
+  assert_rc 0
+  grep -q '^podman build.*--label agentbox.pulled=1700000000 -t localhost/agentbox ' "$STUB_DIR/calls" \
+    || fail "build date not carried over: $(grep 'podman build' "$STUB_DIR/calls")"
+}
+
 test_squid_built_here() {
   setup "${FUNCNAME[0]}"
   ab_run --
@@ -1185,7 +1204,7 @@ test_old_squid_image_removed() {
   assert_rc 0
   assert_out "docker.io/ubuntu/squid:latest is no longer used"
   run_line ab-egress | grep -q ' localhost/agentbox-squid$' || fail "ab-egress not moved to the local squid"
-  grep -qx 'podman rmi id-docker.io/ubuntu/squid:latest' "$STUB_DIR/calls" || fail "old squid image not removed"
+  grep -qx 'podman rmi docker.io/ubuntu/squid:latest' "$STUB_DIR/calls" || fail "old squid image not removed by name"
   ab_run --
   assert_no_out "ubuntu/squid"
 }

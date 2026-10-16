@@ -25,6 +25,11 @@ jobs:
   escape:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # shell: bash runs every step with -eo pipefail: a failing ./run.sh
+    # piped into tee fails the step. Without it GitHub uses bash -e alone.
+    defaults:
+      run:
+        shell: bash
     env:
       AB_CHECK_UPDATES: "0"
     steps:
@@ -86,7 +91,7 @@ jobs:
       - name: Trivy in the session, offline, read-only database
         run: |
           AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \
-            -c 'trivy fs --scanners vuln,misconfig --exit-code 0 --quiet --format table . | tail -n 20 && echo TRIVY_OK' \
+            -c 'set -o pipefail; trivy fs --scanners vuln,misconfig --exit-code 0 --quiet --format table . | tail -n 20 && echo TRIVY_OK' \
             | tee "$RUNNER_TEMP/trivy.out"
           grep -qx TRIVY_OK "$RUNNER_TEMP/trivy.out"
           # Telemetry and version checks are off: squid saw no attempt.
