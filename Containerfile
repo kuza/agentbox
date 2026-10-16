@@ -83,6 +83,28 @@ RUN python3 -m venv /opt/graphify \
  && /opt/graphify/bin/pip install --no-cache-dir "graphifyy${GRAPHIFY_EXTRAS}==${GRAPHIFY_VERSION}" \
  && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify
 
+# ---------------------------------------------------------------------------
+# Trivy (https://trivy.dev), only with WITH_TRIVY=1 (run.sh passes it for
+# AB_TRIVY=1 in config.env). The release archive is verified against the
+# published checksums. Its vulnerability database is not baked in: run.sh
+# keeps it current in the ab-trivy volume (lib/trivy.sh).
+#   TRIVY_VERSION  pinned; bump deliberately and rebuild
+# ---------------------------------------------------------------------------
+ARG WITH_TRIVY=""
+ARG TRIVY_VERSION=0.76.0
+RUN set -eu; \
+    if [ "$WITH_TRIVY" != 1 ]; then exit 0; fi; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=64bit ;; arm64) a=ARM64 ;; *) echo "no Trivy build for this architecture" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"; \
+    f="trivy_${TRIVY_VERSION}_Linux-${a}.tar.gz"; \
+    curl -fsSL "$base/$f" -o /tmp/trivy.tgz; \
+    curl -fsSL "$base/trivy_${TRIVY_VERSION}_checksums.txt" | grep " $f\$" | sed "s# $f# /tmp/trivy.tgz#" | sha256sum -c -; \
+    tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy; \
+    rm /tmp/trivy.tgz; \
+    trivy --version
+
 # No telemetry and no self-updates: fewer hosts in the egress allowlist,
 # and updates are handled outside the agent container.
 #   UV_PYTHON_DOWNLOADS=never  use only the baked-in interpreters

@@ -208,7 +208,7 @@ if [[ -d "$repo/.git/hooks" ]]; then
 fi
 [[ -f "$repo/.git/config" ]] && { try_append "$repo/.git/config" && fail "$repo/.git/config writable: core.fsmonitor and friends run on the host" || pass "$repo/.git/config read-only"; }
 
-for d in /opt/claude /opt/pi ~/.claude/skills ~/.pi/agent/skills ~/.pi/agent/extensions /etc/agentbox; do
+for d in /opt/claude /opt/pi ~/.claude/skills ~/.pi/agent/skills ~/.pi/agent/extensions /etc/agentbox ~/.cache/trivy; do
   [[ -d "$d" ]] || continue
   try_write "$d" && fail "$d writable" || pass "$d read-only"
 done

@@ -982,6 +982,31 @@ test_first_start_offers_login() {
   assert_out "missing podman secrets: claude_oauth"
 }
 
+# --- Trivy ---
+
+test_trivy() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  grep -qE 'entrypoint trivy|ab-trivy|WITH_TRIVY' "$STUB_DIR/calls" && fail "Trivy used without AB_TRIVY"
+  config "AB_TRIVY=1"
+  ab_run AB_UPGRADE=1 --
+  assert_rc 0
+  grep -q '^podman build .*--build-arg WITH_TRIVY=1' "$STUB_DIR/calls" || fail "image built without Trivy"
+  grep -q '^podman run --rm --network ab-egress .* -v ab-trivy:/home/node/.cache/trivy --entrypoint trivy localhost/agentbox image --download-db-only' "$STUB_DIR/calls" \
+    || fail "database not updated outside the session"
+  local args; args="$(session_args)"
+  grep -qx 'ab-trivy:/home/node/.cache/trivy:ro' <<<"$args" || fail "database not read-only in the session"
+  grep -qx 'TRIVY_SKIP_DB_UPDATE=true' <<<"$args" || fail "session may download"
+  grep -qx 'TRIVY_SKIP_JAVA_DB_UPDATE=true' <<<"$args" || fail "Java database not switched off"
+  # Within UPDATE_EVERY: no new download.
+  ab_run --
+  grep -q 'download-db-only' "$STUB_DIR/calls" && fail "database downloaded again within the interval"
+  # An image without Trivy: a clear error.
+  ab_run AB_UPDATE=1 STUB_NO_TRIVY=1 --
+  assert_rc 1
+  assert_out "has no Trivy; rebuild it"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {

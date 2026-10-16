@@ -20,6 +20,8 @@ The first release.
 - Local dev containers (`AB_SERVICES`) and services outside the box
   (`AB_FORWARD`, globally or per repository).
 - Your files apart from the code, in `~/.config/agentbox/`.
+- Trivy in the box (`AB_TRIVY=1`), its database fetched outside the session;
+  CI reports fixable HIGH/CRITICAL issues in agentbox's images daily.
 - `git-guard`: host git refuses repositories whose `.git` a session
   redirected (README, Git on the host).
 - `agentbox login`: the Claude Code token through a browser sign-in in the

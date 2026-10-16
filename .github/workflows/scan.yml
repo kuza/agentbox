@@ -1,0 +1,60 @@
+# A report of known vulnerabilities in agentbox's images: the agentbox image
+# built from the Containerfile (with Trivy, as AB_TRIVY=1 builds it) and the
+# sidecar images. Only HIGH and CRITICAL ones that have a fix, since those are
+# what a rebuild (AB_UPGRADE=1) or a newer image can remove. It never fails:
+# a base image nearly always has some CVE, and the table in the run summary
+# is for deciding when to upgrade.
+name: Scan
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TRIVY_VERSION: "0.76.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Trivy (release archive, checked against its checksums)
+        run: |
+          set -eu
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL "$base/$f" -o "$RUNNER_TEMP/trivy.tgz"
+          curl -fsSL "$base/trivy_${TRIVY_VERSION}_checksums.txt" | grep " $f\$" \
+            | sed "s# $f# $RUNNER_TEMP/trivy.tgz#" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
+          "$RUNNER_TEMP/trivy" --version
+
+      - name: Build the agentbox image
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty"
+          podman build --layers=false --build-arg WITH_TRIVY=1 -t localhost/agentbox -f Containerfile "$RUNNER_TEMP/empty"
+          podman save -o "$RUNNER_TEMP/agentbox.tar" localhost/agentbox
+
+      - name: Scan
+        run: |
+          set -u
+          scan() {  # <title> <trivy image arguments...>
+            echo "### $1" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            "$RUNNER_TEMP/trivy" image --quiet --no-progress --scanners vuln \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --format table "${@:2}" \
+              >> "$GITHUB_STEP_SUMMARY" 2>&1 || echo "scan failed" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          }
+          scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
+          for img in docker.io/ubuntu/squid:latest docker.io/library/nginx:alpine \
+                     docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest; do
+            scan "$img" "$img"
+          done

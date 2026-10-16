@@ -1,5 +1,9 @@
 # agentbox
 
+[![Checks](https://github.com/kuza/agentbox/actions/workflows/checks.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/checks.yml)
+[![Box](https://github.com/kuza/agentbox/actions/workflows/box.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/box.yml)
+[![Scan](https://github.com/kuza/agentbox/actions/workflows/scan.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/scan.yml)
+
 Run [Claude Code](https://code.claude.com/docs), or the [pi](https://pi.dev) coding agent with OpenAI models (ChatGPT subscription or API key), in an isolated rootless Podman container that can reach only:
 
 - the model API (Anthropic for Claude Code; OpenAI for pi),
@@ -9,11 +13,11 @@ No host credentials are mounted into the agent container, and all service tokens
 
 ## Contents
 
-- **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [First-time setup](#first-time-setup) · [Daily usage](#daily-usage)
+- **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [Setup in detail](#setup-in-detail) · [Daily usage](#daily-usage)
 - **[How it works](#how-it-works):** [Architecture](#architecture) · [Security model](#security-model) · [Git on the host](#git-on-the-host) · [Egress](#egress)
 - **[Agents](#agents):** [pi (OpenAI)](#pi-openai) · [Memory and personal instructions](#memory-and-personal-instructions) · [Status line](#status-line) · [Skills](#skills)
 - **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Documentation (Context7)](#documentation-context7)
-- **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify)
+- **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
 - **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
 - **[Reference](#reference):** [Configuration reference](#configuration-reference) · [Files](#files) · [Tests](#tests) · [Not yet verified](#not-yet-verified)
@@ -65,7 +69,9 @@ Next: MCP servers for Grafana, Graylog or GitHub ([MCP servers](#mcp-servers)), 
 - For the optional Grafana and Graylog MCP servers: network access from the host to them, and **Graylog 7.0+** for its built-in MCP endpoint (marked experimental by Graylog)
 - A Claude subscription or Anthropic account for `claude setup-token`
 
-### First-time setup
+### Setup in detail
+
+[Quick start](#quick-start) does all of this with `install.sh` and `agentbox login`. This section is the long form: what each step does, the optional parts (service accounts and secrets for the MCP servers), and the manual way.
 
 #### 1. Install and configure
 
@@ -82,7 +88,7 @@ tar -xzf agentbox-$v.tar.gz
 agentbox-$v/install.sh
 ```
 
-`install.sh` puts the release into `~/.local/share/agentbox/versions/`, links `~/.local/bin/agentbox` to it, creates `~/.config/agentbox/config.env` from the example, and offers to install [git-guard](#git-on-the-host). From then on `agentbox update` brings newer releases, verifying their signatures itself. The commands below use `agentbox` where older text says `./run.sh`; both take the same arguments.
+`install.sh` puts the release into `~/.local/share/agentbox/versions/`, links `~/.local/bin/agentbox` to it, creates `~/.config/agentbox/config.env` from the example, and offers to install [git-guard](#git-on-the-host). From then on `agentbox update` brings newer releases, verifying their signatures itself.
 
 Set up `config.env`. Choose the MCP servers with `AB_MCP`, e.g. `AB_MCP=grafana graylog`, and set what those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL` (base URLs only, without `/api` or `/api/mcp`; trailing parts are stripped anyway). Context7 is always on; skip the steps below for servers you do not use. See [MCP servers](#mcp-servers).
 
@@ -170,7 +176,7 @@ There is no separate Prometheus server: `mcp-grafana` includes tools for queryin
 #### 7. Verify
 
 ```bash
-./run.sh ~/src/myrepo
+agentbox ~/src/myrepo
 ```
 
 Inside the session:
@@ -183,30 +189,23 @@ Inside the session:
 ### Daily usage
 
 ```
-run.sh [repo-dir] [claude args...]
+agentbox [repo-dir] [claude args...]        Claude Code
+agentbox pi [repo-dir] [pi args...]         pi
+agentbox shell [repo-dir] [bash args...]    bash in the same box, no agent
 ```
 
-If the first argument is an existing directory, it is mounted as the repo. Otherwise the **current directory** is used and all arguments go to `claude`. The script prints which directory it mounts, and refuses to mount the agentbox directory itself.
+If the first argument is an existing directory, it is mounted as the repo. Otherwise the **current directory** is used and all arguments go to the agent. It prints which directory it mounts, and refuses to mount agentbox's own code or your files in `~/.config/agentbox`.
 
 ```bash
-cd ~/src/myrepo && ~/agentbox/run.sh             # current directory
-~/agentbox/run.sh ~/src/myrepo                   # explicit repo
-~/agentbox/run.sh --dangerously-skip-permissions # current directory + claude flags
-~/agentbox/run.sh ~/src/myrepo -p "say ok"       # explicit repo + claude args
+cd ~/src/myrepo && agentbox                      # current directory
+agentbox ~/src/myrepo                            # explicit repo
+agentbox --dangerously-skip-permissions          # current directory + claude flags
+agentbox ~/src/myrepo -p "say ok"                # explicit repo + claude args
 ```
 
-Relative paths are resolved against **your** current directory, not the script's.
+Relative paths are resolved against **your** current directory. A first argument that happens to be the name of a directory in your current directory is taken as the repo; for a claude subcommand with such a name, pass the repo explicitly: `agentbox . <subcommand>`. The words `pi`, `shell`, `login`, `version`, `update`, `rollback` and `uninstall` are agentbox's own commands; open a directory with such a name as `./pi`.
 
-One caveat: a first argument that happens to be the name of a directory in your current directory is taken as the repo. For a claude subcommand with such a name, pass the repo explicitly: `run.sh . <subcommand>`.
-
-Convenient alias:
-
-```bash
-alias cbox=~/agentbox/run.sh
-# cbox                  -> current directory
-# cbox ~/src/other      -> that repo
-# cbox mcp list         -> current directory, claude subcommand
-```
+`agentbox` runs `run.sh` from the installed version; this README names `run.sh` where it describes what happens at a start. Settings in the environment go in front, as in `AB_UPGRADE=1 agentbox`.
 
 Several sessions can run in parallel. Each gets its own `ab-claude-<pid>` container, and they share the sidecars.
 
@@ -658,7 +657,7 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 | Virtualenv | Per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), via `UV_PROJECT_ENVIRONMENT`. Shared by both agents |
 | uv cache | `ab-cache`, persists across sessions, shared by both agents |
 
-Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, list it in `AB_PYTHON_VERSIONS` (all the versions you want, e.g. `3.11 3.12 3.13 3.14`) and run `AB_UPGRADE=1 ./run.sh`.
+Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, list it in `AB_PYTHON_VERSIONS` (all the versions you want, e.g. `3.11 3.12 3.13 3.14`) and run `AB_UPGRADE=1 agentbox`.
 
 **Why the venv is outside the repo.** A `.venv` created in the container points at `/opt/uv-python/...`, which does not exist on the host, and a host `.venv` points at host paths. Sharing one directory breaks whichever side used it last. With `UV_PROJECT_ENVIRONMENT`, `uv` in the box never touches `<repo>/.venv`, so you can keep using your host venv in parallel. Projects that do not use uv (plain `python -m venv .venv`) are not covered by this; create such venvs outside the repo too, e.g. under `~/.venvs`.
 
@@ -689,7 +688,7 @@ Things to know:
 
 [graphify](https://github.com/Graphify-Labs/graphify) turns the repo into a queryable knowledge graph. It is a Python CLI plus a `/graphify` skill that calls it, so unlike plain skills it has to be **in the image**: the agent cannot install it from PyPI.
 
-The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras with `AB_GRAPHIFY_EXTRAS` in `config.env` (none by default), e.g. `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. Both take effect on the next build: `AB_UPGRADE=1 ./run.sh`.
+The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras with `AB_GRAPHIFY_EXTRAS` in `config.env` (none by default), e.g. `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. Both take effect on the next build: `AB_UPGRADE=1 agentbox`.
 
 #### The skill
 
@@ -725,6 +724,23 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 - **`.claude/settings.json` and `CLAUDE.md` are shared if committed.** Hooks in a committed `settings.json` run for every colleague who opens the repo with Claude Code. Decide deliberately whether to commit them, or keep them out of git with `.git/info/exclude` on the host.
 - graphify creates `.claude/settings.json.graphify-bak` when it edits settings; don't commit it.
 - The query log is turned off in the image (`GRAPHIFY_QUERY_LOG_DISABLE=1`).
+
+### Trivy
+
+[Trivy](https://trivy.dev) scans the repository in the box: `trivy fs .` for known vulnerabilities in dependencies (lock files, `go.mod`, ...), `trivy config .` for misconfigurations in Terraform, Dockerfiles, Kubernetes manifests and the like. Off by default; enable it in `config.env` and rebuild:
+
+```
+AB_TRIVY=1
+```
+
+```bash
+AB_UPGRADE=1 agentbox
+```
+
+- **The database stays outside the session.** Trivy downloads its vulnerability database as an image from `mirror.gcr.io` or `ghcr.io`; the session cannot reach those, since a registry also takes uploads. Like the agent update, `run.sh` fetches it in a short-lived container, at most every 6 hours (`AB_UPDATE=1` forces it), into the `ab-trivy` volume, which the session mounts read-only.
+- **No downloads in the session**: `TRIVY_SKIP_DB_UPDATE`, `TRIVY_SKIP_JAVA_DB_UPDATE`, `TRIVY_SKIP_CHECK_UPDATE` and `TRIVY_SKIP_VERSION_CHECK` are set, and the scan cache stays in memory (`TRIVY_CACHE_BACKEND=memory`). Misconfiguration checks are the ones built into the Trivy binary; the Java database is not used, so Java artifacts are not checked for vulnerabilities.
+- **Version** pinned with `TRIVY_VERSION` in the `Containerfile`, installed from the release archive after a checksum check.
+- CI scans agentbox's own images with Trivy every day (`.github/workflows/scan.yml`): a report of fixable HIGH and CRITICAL issues in the run summary, for deciding when to rebuild. It never fails the build.
 
 ## Your projects
 
@@ -773,7 +789,7 @@ The agent connects by name and the target's port: `db:5432`, `mq:5672`. For each
 
 `<key>` comes from the repo's path, so another repo's sessions cannot reach these targets. The repo file uses the same `KEY=VALUE` format as `config.env`, accepts only `AB_FORWARD`, and lives with the [per-project environment](#per-project-environment) files, outside the repo: the agent cannot add targets for its next session.
 
-- **Needs socat in the image.** Rebuild once with `AB_UPGRADE=1 ./run.sh`; until then a start with forwards stops with an error saying so.
+- **Needs socat in the image.** Rebuild once with `AB_UPGRADE=1 agentbox`; until then a start with forwards stops with an error saying so.
 - **Plain TCP.** The target sees connections from your host, through your network and VPN, like any other client there. TLS (`sslmode=require`, `amqps`) goes end to end; certificates name the real host, so clients that verify host names need it set explicitly (e.g. `sslrootcert` with `sslmode=verify-ca` instead of `verify-full`).
 - **Names** are lowercase letters, digits and hyphens, not starting with `ab-`, and unique across both lists and `AB_SERVICES`. The session's `NO_PROXY` includes them, so HTTP clients connect directly.
 - **Changes** apply at the next start: changed targets get new sidecars, removed ones are removed. A repo's sidecars change only with a start in that repo. Sidecars keep running between sessions; `socat` opens a connection to the target only when the agent opens one.
@@ -836,14 +852,15 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section, that 
 
 | What | Updates how | Command |
 |---|---|---|
-| Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 ./run.sh` / `AB_UPDATE=1 ./pi.sh` to force |
-| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 ./run.sh` |
-| Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 ./run.sh` |
-| graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 ./run.sh` |
-| Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 ./run.sh` |
-| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`, then `AB_UPGRADE=1 ./run.sh`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
+| Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 agentbox` / `AB_UPDATE=1 agentbox pi` to force |
+| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 agentbox` |
+| Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 agentbox` |
+| graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 agentbox` |
+| Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Bump `TRIVY_VERSION`, then `AB_UPGRADE=1 agentbox`; `AB_UPDATE=1 agentbox` fetches the database now |
+| Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 agentbox` |
+| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`, then `AB_UPGRADE=1 agentbox`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
 | Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
-| Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 ./run.sh` |
+| Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 agentbox` |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
 
@@ -863,8 +880,8 @@ The skills directory is writable from inside a session that has the agentbox dir
 `run.sh` updates it at most once every 6 hours: a container with internet access but without the repo or the agent runs `npm install -g @anthropic-ai/claude-code@latest` into `ab-claude-tools`.
 
 ```bash
-AB_UPDATE=1 ./run.sh                # force an update now
-AB_UPDATE_EVERY=86400 ./run.sh      # change the interval (seconds)
+AB_UPDATE=1 agentbox                # force an update now
+AB_UPDATE_EVERY=86400 agentbox      # change the interval (seconds)
 ```
 
 To pin a version, change `@latest` in `run.sh` to `@x.y.z` and run with `AB_UPDATE=1`.
@@ -877,7 +894,7 @@ Check the latest release and what changed before bumping:
 curl -s https://pypi.org/pypi/graphifyy/json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])'
 ```
 
-Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 ./run.sh`. The same run reinstalls the `/graphify` skill from the new image (see [The skill](#the-skill)).
+Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 agentbox`. The same run reinstalls the `/graphify` skill from the new image (see [The skill](#the-skill)).
 
 #### Pinning sidecar images
 
@@ -909,28 +926,28 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | Symptom | Likely cause / fix |
 |---|---|
 | The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars mount copies of their config files from the cache, so they do not cause this |
-| `missing podman secrets` | Step 5 not done for the agent or a service enabled in `config.env`. |
+| `missing podman secrets` | No Claude Code token yet: `agentbox login`. For an MCP module enabled in `config.env`: step 5 of [Setup in detail](#setup-in-detail). |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host in a group in `egress.local.d/` (see [Egress](#egress)); the next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
-| `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 ./run.sh` (or raise a pinned `AB_GO_VERSION`). |
+| `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 agentbox` (or raise a pinned `AB_GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
-| pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 ./pi.sh`. |
+| pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 agentbox pi`. |
 | pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`. The squid log shows the denied host. |
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json` is mounted only when the `openai_api_key` secret exists. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
-| pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 ./pi.sh`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
+| pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 agentbox pi`). If you are on the legacy "OpenAI Codex" provider, switch to OpenAI → Sign in with ChatGPT. |
 | An MCP server is `failed` in `/mcp` | Check `podman logs` of its sidecar. Both agents list only enabled modules, so a failed one has a sidecar that should be running, or (Context7) a host squid should allow. |
 | `claude mcp list` does not show grafana, graylog, ... | Expected: the modules' servers come from `--mcp-config`, which `mcp list` ignores. Use `/mcp` in a session. |
-| `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `AB_PYTHON_VERSIONS` in `config.env` and `AB_UPGRADE=1 ./run.sh`. |
+| `uv` says a Python version is not available and downloads are set to `never` | That version is not baked into the image. Add it to `AB_PYTHON_VERSIONS` in `config.env` and `AB_UPGRADE=1 agentbox`. |
 | Sidecar can't resolve Grafana/Graylog | Internal DNS not visible to containers. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
 | `/mcp` shows a server as failed | Check `podman logs` of the sidecar. |
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is Graylog's own `HTTP 405 Method Not Allowed` API error, so nginx works but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and check the Graylog version is 7.0+. |
 | grafana in `/mcp` fails with `403 ... forbidden: host not allowed` | mcp-grafana validates the `Host` header against `--allowed-hosts`. It must include the name Claude uses (`ab-mcp-grafana:8000`). Recreate with `AB_RESTART=1`. |
 | nginx sidecar exits on start | nginx resolves `GRAYLOG_URL` at startup. Fix DNS, or use an IP and check TLS/SNI. |
-| Context7 fails in `/mcp` or its tools return proxy errors | Squid did not get the modules' hosts: `podman exec ab-egress cat /etc/squid/agentbox-allow.conf` should list `mcp.context7.com`. `AB_RESTART=1 ./run.sh` recreates squid. |
+| Context7 fails in `/mcp` or its tools return proxy errors | Squid did not get the modules' hosts: `podman exec ab-egress cat /etc/squid/agentbox-allow.conf` should list `mcp.context7.com`. `AB_RESTART=1 agentbox` recreates squid. |
 | Context7 tools return 429 | Anonymous rate limit. Wait, or add an API key through a sidecar (see [Documentation (Context7)](#documentation-context7)). |
-| github in `/mcp` fails with 401 | The sidecar has an older `github_mcp_caller` than the session (secret recreated while the sidecar ran): `AB_RESTART=1 ./run.sh`. |
+| github in `/mcp` fails with 401 | The sidecar has an older `github_mcp_caller` than the session (secret recreated while the sidecar ran): `AB_RESTART=1 agentbox`. |
 | github in `/mcp` fails with 502 | nginx cannot reach `ab-mcp-github-srv`: check `podman ps` and its logs. If that container was restarted on its own, restart both with `AB_RESTART=1` (nginx caches its IP). |
 | GitHub tools fail with 403 / 404 | The PAT lacks the permission, the repository is not selected in it, or an org-owned token is pending approval. Writes to code are expected to fail: Contents is read-only. |
 | `git fetch` / `git push` fail inside the box | Expected: GitHub is not reachable from the agent. Run them on the host. |
@@ -966,7 +983,7 @@ read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 **2. Does the token work at all?** Headless mode skips onboarding entirely:
 
 ```bash
-./run.sh . -p "say ok"
+agentbox . -p "say ok"
 ```
 
 - Works here but not interactively: an onboarding problem. Check `podman run --rm -v ab-claude-home:/h --entrypoint cat localhost/agentbox /h/.claude.json` for `"hasCompletedOnboarding": true`.
@@ -983,7 +1000,7 @@ read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 | `AB_HOME` | `~/.config/agentbox` | Directory with your files. See [Your files](#your-files) |
 | `AB_CONFIG` | `<AB_HOME>/config.env` | Settings file. All variables in this table except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE` can be set there; a module's settings only while the module is in `AB_MCP` |
 | `AB_MCP` | unset | MCP modules to enable, space- or comma-separated, e.g. `grafana graylog github`. `context7` is always on. See [MCP servers](#mcp-servers) |
-| `AB_EGRESS` | `anthropic openai pypi go` | Egress host groups to enable, space- or comma-separated, from `egress.local.d/` or `egress.d/`; empty enables none. See [Egress](#egress) |
+| `AB_EGRESS` | `anthropic openai pypi go` | Egress groups to enable, space- or comma-separated, from `egress.local.d/` or `egress.d/`; empty enables none. See [Egress](#egress) |
 | `GRAFANA_URL` | unset | Setting of the `grafana` module: Grafana base URL (needs the `grafana_sa` secret) |
 | `GRAYLOG_URL` | unset | Setting of the `graylog` module: Graylog base URL (needs the `graylog_basic` secret) |
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
@@ -992,6 +1009,7 @@ read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | Personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
+| `AB_TRIVY` | unset | `1`: Trivy in the image, its database kept current outside the session. Applies on the next build (`AB_UPGRADE=1`). See [Trivy](#trivy) |
 | `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. Applies on the next build (`AB_UPGRADE=1`). See [Python](#python) |
 | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. Applies on the next build (`AB_UPGRADE=1`). See [Go](#go) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
@@ -1005,7 +1023,7 @@ read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 Sidecars are started once and reused. The next start recreates a sidecar whose settings, image tag or mounted files changed, and removes those of modules no longer in `AB_MCP`. A recreated Podman secret is not visible to `run.sh`; after one:
 
 ```bash
-AB_RESTART=1 ./run.sh .
+AB_RESTART=1 agentbox .
 ```
 
 ### Files
@@ -1024,7 +1042,7 @@ AB_RESTART=1 ./run.sh .
 | `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
-| `egress.d/<name>.conf` | Egress host groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
+| `egress.d/<name>.conf` | Egress groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
 | `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
@@ -1045,7 +1063,7 @@ Your settings and data live apart from the code, in `~/.config/agentbox/` (`AB_H
 | `AGENTS.md` | Optional. Personal instructions for both agents, from `agents/AGENTS.md.example` |
 | `mcp.local/<name>/` | Your own MCP modules; one with the name of a module in `mcp/` replaces it |
 | `skills.local.d/<name>.conf` | Your own skill sources |
-| `egress.local.d/<name>.conf` | Your own egress host groups |
+| `egress.local.d/<name>.conf` | Your own egress groups |
 | `pi-extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi |
 
 `run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
@@ -1068,7 +1086,7 @@ Run them after changing `run.sh`, `lib/`, a module in `mcp/`, `check-updates.sh`
 `tests/run.sh` checks what `run.sh` asks podman to do, not what a session can actually reach. `tests/escape.sh` does that from the inside, in a real box. No agent is needed: `AB_AGENT=shell` runs bash in the same box instead.
 
 ```bash
-AB_AGENT=shell ./run.sh ~/src/agentbox tests/escape.sh   # a clone of agentbox as the repo
+agentbox shell ~/src/agentbox tests/escape.sh   # a clone of agentbox as the repo
 ```
 
 In an agent's session it works too (`bash tests/escape.sh` with the agentbox repo open).

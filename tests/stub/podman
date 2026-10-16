@@ -14,6 +14,7 @@
 #   STUB_PULL_NEW   images (space-separated) a pull replaces: ID new-<image>
 #   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
 #   STUB_NO_SOCAT   the agentbox image has no socat: run -d with it fails
+#   STUB_NO_TRIVY   the agentbox image has no trivy
 #   STUB_NETWORKS   networks a service container is on (default: podman ab-services)
 # For uninstall: volumes, networks ("<name>" per line) and netconns
 # ("<network> <container>" per line) list what exists.
@@ -124,6 +125,7 @@ case "$1 ${2:-}" in
     grep -v "^$name " "$S/ids" > "$S/ids.new"; mv "$S/ids.new" "$S/ids"
     echo "$name $name-$(wc -l < "$S/calls")" >> "$S/ids" ;;
   "run --rm")
+    if [[ -n "${STUB_NO_TRIVY:-}" && ( "$*" == *"--entrypoint trivy"* || "$*" == *"command -v trivy"* ) ]]; then exit 1; fi
     if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then
       out="$(printf '%s\n' "$@" | sed -n 's#^\(.*\):/out:z$#\1#p')"
       for d in .claude/skills/graphify .pi/agent/skills/graphify; do

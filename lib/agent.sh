@@ -68,7 +68,7 @@ agent_check_secrets() {
       return 0
     fi
   fi
-  echo "error: missing podman secrets: ${missing[*]} (agentbox login, or README, First-time setup)" >&2
+  echo "error: missing podman secrets: ${missing[*]} (agentbox login, or README, Setup in detail)" >&2
   exit 1
 }
 

@@ -9,7 +9,7 @@
 #   MCP_DESCRIPTION      one line, shown by pi
 #   MCP_CONFIG=()        config.env keys the module reads
 #   MCP_REQUIRED_CONFIG=()  of those, the ones that must be set
-#   MCP_SECRETS=()       podman secrets that must exist (README, step 5)
+#   MCP_SECRETS=()       podman secrets that must exist (README, Setup in detail, step 5)
 #   MCP_CALLER_SECRET    a caller token secret, generated on first use. The
 #                        agents send it as "Authorization: Bearer <token>";
 #                        the sidecar checks it. Inside the session it is the
@@ -110,7 +110,7 @@ mcp_check_secrets() {
     MCP_MANAGED+="$name $MCP_URL"$'\n'
   done
   if (( ${#missing[@]} )); then
-    echo "error: missing podman secrets for MCP modules: ${missing[*]} (see README.md, step 5)" >&2
+    echo "error: missing podman secrets for MCP modules: ${missing[*]} (README, Setup in detail, step 5)" >&2
     exit 1
   fi
 }

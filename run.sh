@@ -44,6 +44,8 @@
 #   AB_FORWARD        services outside the box the session may reach by name,
 #                     e.g. "db=db.test.example:5432"; also per repo in
 #                     <env dir>/<repo dir name>.conf (README, Test servers)
+#   AB_TRIVY=1        Trivy in the image, its database kept current outside
+#                     the session (README, Trivy); applies on the next build
 #   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
 #                     (default: none); applies on the next build (AB_UPGRADE=1)
 #   AB_PYTHON_VERSIONS, AB_GO_VERSION, AB_GOLANGCI_LINT_VERSION
@@ -63,7 +65,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
-for lib in config images agent sidecars mcp egress forward services skills session; do
+for lib in config images agent sidecars mcp egress forward services skills trivy session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
@@ -107,6 +109,7 @@ fi
 # Image build settings from config.env; unset ones keep the Containerfile's
 # defaults (an empty AB_GO_VERSION or AB_GOLANGCI_LINT_VERSION means latest).
 BUILD_ARGS=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")
+[[ "${AB_TRIVY:-}" == 1 ]] && BUILD_ARGS+=(--build-arg WITH_TRIVY=1)
 for arg in PYTHON_VERSIONS GO_VERSION GOLANGCI_LINT_VERSION; do
   var="AB_$arg"
   [[ -n "${!var+x}" ]] && BUILD_ARGS+=(--build-arg "$arg=${!var}")
@@ -169,6 +172,7 @@ agent_update
 # No token yet and you said yes at agent_check_secrets: sign in now.
 [[ -n "${AGENT_NEEDS_LOGIN:-}" ]] && agent_login
 agent_prepare_home
+trivy_update
 
 mcp_write_configs
 egress_write_conf

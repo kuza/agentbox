@@ -41,7 +41,7 @@ jobs:
         run: |
           set -eu
           mkdir -p ~/.config/agentbox/env
-          printf '%s\n' 'AB_PYTHON_VERSIONS=3.13' > ~/.config/agentbox/config.env
+          printf '%s\n' 'AB_PYTHON_VERSIONS=3.13' 'AB_TRIVY=1' > ~/.config/agentbox/config.env
           echo 'AB_FORWARD=fa=example.com:80' > ~/.config/agentbox/env/repo-a.conf
           echo 'AB_FORWARD=fb=example.com:80' > ~/.config/agentbox/env/repo-b.conf
           cp -R . "$RUNNER_TEMP/repo-a"
@@ -62,6 +62,13 @@ jobs:
           echo "repo A's sidecar: $a ($forbidden)"
           AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \
             -c "ESCAPE_FORBIDDEN='$forbidden' ESCAPE_REACHABLE='fb:80' bash tests/escape.sh"
+
+      - name: Trivy in the session, offline, read-only database
+        run: |
+          AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \
+            -c 'trivy fs --scanners vuln,misconfig --exit-code 0 --quiet --format table . | tail -n 20 && echo TRIVY_OK' \
+            | tee "$RUNNER_TEMP/trivy.out"
+          grep -qx TRIVY_OK "$RUNNER_TEMP/trivy.out"
 
       - name: Sidecars and logs
         if: always()

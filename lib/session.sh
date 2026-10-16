@@ -249,6 +249,7 @@ session_exec() {  # <agent arguments...>
     --dns 127.0.0.1 \
     ${SERVICE_NET[@]+"${SERVICE_NET[@]}"} \
     ${FORWARD_NET[@]+"${FORWARD_NET[@]}"} \
+    ${TRIVY_ARGS[@]+"${TRIVY_ARGS[@]}"} \
     --userns="$USERNS" \
     --cap-drop=ALL --security-opt no-new-privileges \
     ${ENV_FILE_ARGS[@]+"${ENV_FILE_ARGS[@]}"} \
