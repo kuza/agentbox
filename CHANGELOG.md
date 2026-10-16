@@ -4,6 +4,14 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.2
+
+- Tab completion for `agentbox` in bash (`completions/agentbox.bash`),
+  linked at install and at every update.
+- README: copying out of a session (OSC 52, kitty).
+
+Action: open a new terminal tab after the update for Tab completion.
+
 ## v0.1.1
 
 - Images rebuilt when their `Containerfile` or build settings change:
@@ -14,10 +22,7 @@ the steps a release needs from you, such as a rebuild.
 - git-guard skips any copy of itself when it looks for the real git: with
   two copies in PATH (an installed one and another) each called the other
   forever. Hit by `tests/run.sh` on a host with git-guard installed.
-- Tab completion for `agentbox` in bash (`completions/agentbox.bash`),
-  linked at install and at every update.
-- README: an Uninstall section; copying out of a session; release, license
-  and platform badges.
+- README: an Uninstall section; release, license and platform badges.
 
 Action: none. The first start after the update rebuilds the agentbox and
 squid images once (images from v0.1.0 have no fingerprint), a few minutes.
