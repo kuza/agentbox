@@ -18,10 +18,12 @@
 #   STUB_NETWORKS   networks a service container is on (default: podman ab-services)
 # For uninstall: volumes, networks ("<name>" per line) and netconns
 # ("<network> <container>" per line) list what exists.
+#   image_labels  "<image> <agentbox.build fingerprint>" per line, written by
+#                 build; an image without a line counts as current
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
-touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
+touch "$S/secrets" "$S/running" "$S/labels" "$S/image_labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
       "$S/volumes" "$S/networks" "$S/netconns"
 drop() {  # <file> <first field>: remove its lines
   awk -v x="$2" '$1 != x' "$S/$1" > "$S/$1.new"; mv "$S/$1.new" "$S/$1"
@@ -58,7 +60,24 @@ case "$1 ${2:-}" in
     grep -qx -- "$name" "$S/secrets" || echo "$name" >> "$S/secrets" ;;
   "network exists"|"image exists"|"container exists") exit 0 ;;
   "network create"|"network connect"|"start "*) exit 0 ;;
-  "build "*) [[ -n "${STUB_BUILT_ID:-}" ]] && echo "$STUB_BUILT_ID" > "$S/agentbox_id"; exit 0 ;;
+  "build "*)
+    tag=""; fp=""; prev=""
+    for a in "$@"; do
+      [[ "$prev" == -t ]] && tag="$a"
+      [[ "$prev" == --label && "$a" == agentbox.build=* ]] && fp="${a#agentbox.build=}"
+      prev="$a"
+    done
+    drop image_labels "$tag"; echo "$tag $fp" >> "$S/image_labels"
+    [[ -n "${STUB_BUILT_ID:-}" && "$tag" == localhost/agentbox ]] && echo "$STUB_BUILT_ID" > "$S/agentbox_id"
+    exit 0 ;;
+  "images -q")
+    # images -q --filter reference=<image> --filter label=agentbox.build=<fp>
+    ref=""; want=""
+    for a in "$@"; do
+      case "$a" in reference=*) ref="${a#reference=}" ;; label=agentbox.build=*) want="${a#label=agentbox.build=}" ;; esac
+    done
+    have="$(awk -v i="$ref" '$1 == i { print $2 }' "$S/image_labels")"
+    if ! grep -q "^$ref " "$S/image_labels" || [[ "$have" == "$want" ]]; then image_id "$ref"; fi ;;
   "pull -q")
     if [[ " ${STUB_PULL_NEW:-} " == *" $3 "* ]]; then
       grep -v "^$3 " "$S/image_ids" > "$S/image_ids.new"; mv "$S/image_ids.new" "$S/image_ids"

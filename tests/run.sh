@@ -35,7 +35,7 @@ setup() {
   CFG="$T/home/.config/agentbox"
   mkdir -p "$AB" "$CFG" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
-  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
+  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/Containerfile" "$ROOT/Containerfile.squid" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
         "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
   # Files the copy could not read (a sidecar's private SELinux label on the
   # source, see README, Troubleshooting) get a placeholder.
@@ -1019,7 +1019,7 @@ test_squid_built_here() {
   grep -q 'pull .*squid' "$STUB_DIR/calls" && fail "squid pulled from a registry"
   ab_run AB_UPGRADE=1 --
   assert_rc 0
-  grep -q '^podman build --layers=false --pull --no-cache -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
+  grep -q '^podman build --layers=false --pull --no-cache --label agentbox.build=[0-9a-f]* -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
     || fail "squid not rebuilt on AB_UPGRADE: $(grep 'podman build' "$STUB_DIR/calls")"
 }
 
@@ -1033,6 +1033,34 @@ test_updates_local_images_age() {
   assert_out "image localhost/agentbox was built 40 days ago"
   grep -q 'localhost' "$T/urls" 2>/dev/null && fail "registry asked about a local image"
   assert_no_out "could not check localhost"
+}
+
+test_image_rebuilt_when_its_build_changes() {
+  setup "${FUNCNAME[0]}"
+  ab_run AB_UPGRADE=1 --
+  : > "$STUB_DIR/calls"
+  ab_run --
+  assert_rc 0
+  grep -q '^podman build' "$STUB_DIR/calls" && fail "rebuilt without a change"
+  # A build setting: only the agentbox image, a cached build, the old one retired.
+  config "AB_TRIVY=1"
+  ab_run STUB_BUILT_ID=img-2 --
+  assert_rc 0
+  assert_out "localhost/agentbox was built from another Containerfile or build settings; rebuilding"
+  grep -q '^podman build --layers=false .*--build-arg WITH_TRIVY=1 --label agentbox.build=[0-9a-f]* -t localhost/agentbox ' "$STUB_DIR/calls" \
+    || fail "not rebuilt with Trivy: $(grep 'podman build' "$STUB_DIR/calls")"
+  grep -q '^podman build.*--pull' "$STUB_DIR/calls" && fail "a settings rebuild pulled"
+  grep -q '^podman build.*agentbox-squid' "$STUB_DIR/calls" && fail "squid rebuilt for an agentbox setting"
+  grep -q '^podman rmi img-1$' "$STUB_DIR/calls" || fail "old image not removed"
+  : > "$STUB_DIR/calls"
+  ab_run --
+  grep -q '^podman build' "$STUB_DIR/calls" && fail "rebuilt again without a change"
+  # A changed Containerfile.squid: only squid.
+  echo "# changed" >> "$AB/Containerfile.squid"
+  ab_run --
+  grep -q '^podman build.*-t localhost/agentbox-squid ' "$STUB_DIR/calls" || fail "squid not rebuilt after its Containerfile changed"
+  grep -q '^podman build.*-t localhost/agentbox ' "$STUB_DIR/calls" && fail "agentbox rebuilt for a squid change"
+  return 0
 }
 
 # --- run.sh: other parts ---

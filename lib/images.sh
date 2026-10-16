@@ -2,8 +2,8 @@
 # rebuild replaced. podman keeps a replaced image as "<none>", so every
 # upgrade would otherwise leave gigabytes behind.
 #
-# Sourced by run.sh and check-updates.sh. Needs SCRIPT_DIR; build_image also
-# IMAGE and BUILD_ARGS.
+# Sourced by run.sh and check-updates.sh. Needs SCRIPT_DIR; building also
+# IMAGE, IMG_SQUID and BUILD_ARGS.
 
 RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 
@@ -13,21 +13,53 @@ RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 # added later fails instead of silently taking them along.
 # --layers=false: no intermediate image per build step, which would stay
 # behind after every rebuild; a failed build starts over from the beginning.
+# Each image carries the label agentbox.build, a fingerprint of its
+# Containerfile and build arguments; ensure_images rebuilds an image whose
+# fingerprint is not the current one (a changed AB_TRIVY or AB_GO_VERSION, a
+# release with a new Containerfile).
 build_image() {  # [podman build options...]: the agentbox image
-  build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+  build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$(agentbox_fingerprint)" \
+    "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 }
 
 build_squid_image() {  # [podman build options...]: the egress proxy
-  build_local "$IMG_SQUID" "$SCRIPT_DIR/Containerfile.squid" "$@"
+  build_local "$IMG_SQUID" "$SCRIPT_DIR/Containerfile.squid" "$(squid_fingerprint)" "$@"
 }
 
-build_local() {  # <image> <containerfile> [podman build options...]
-  local image="$1" file="$2" ctx rc=0
-  shift 2
+build_local() {  # <image> <containerfile> <fingerprint> [podman build options...]
+  local image="$1" file="$2" fp="$3" ctx rc=0
+  shift 3
   ctx="$(mktemp -d)"
-  podman build --layers=false "$@" -t "$image" -f "$file" "$ctx" || rc=$?
+  podman build --layers=false "$@" --label "agentbox.build=$fp" -t "$image" -f "$file" "$ctx" || rc=$?
   rmdir -- "$ctx"
   return "$rc"
+}
+
+image_fingerprint() {  # <containerfile> [build arguments...]
+  { cat -- "$1"; shift; printf '%s\n' "$@"; } | sha256sum | cut -c1-16
+}
+agentbox_fingerprint() {
+  image_fingerprint "$SCRIPT_DIR/Containerfile" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+}
+squid_fingerprint() {
+  image_fingerprint "$SCRIPT_DIR/Containerfile.squid"
+}
+
+# Builds the agentbox and squid images if missing or built from something
+# else than now. The replaced image goes at images_cleanup.
+ensure_images() {
+  image_ensure "$IMAGE" "$(agentbox_fingerprint)" build_image
+  image_ensure "$IMG_SQUID" "$(squid_fingerprint)" build_squid_image
+}
+
+image_ensure() {  # <image> <fingerprint> <build function>
+  if ! podman image exists "$1"; then
+    "$3"
+  elif [[ -z "$(podman images -q --filter "reference=$1" --filter "label=agentbox.build=$2")" ]]; then
+    echo "agentbox: $1 was built from another Containerfile or build settings; rebuilding..." >&2
+    image_retire "$1"
+    "$3"
+  fi
 }
 
 # Call before a pull or build that may replace <image>: records its current

@@ -45,12 +45,14 @@
 #                     e.g. "db=db.test.example:5432"; also per repo in
 #                     <env dir>/<repo dir name>.conf (README, Test servers)
 #   AB_TRIVY=1        Trivy in the image, its database kept current outside
-#                     the session (README, Trivy); applies on the next build
+#                     the session (README, Trivy)
 #   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
-#                     (default: none); applies on the next build (AB_UPGRADE=1)
+#                     (default: none)
 #   AB_PYTHON_VERSIONS, AB_GO_VERSION, AB_GOLANGCI_LINT_VERSION
 #                     tool versions baked into the image (default: the
-#                     Containerfile's); apply on the next build (AB_UPGRADE=1)
+#                     Containerfile's)
+#                     A change to these or to a Containerfile rebuilds the
+#                     image at the next start.
 #   AB_SKILLS_DIR     host directory with personal skills, mounted read-only
 #                     into the agent's skills directory (default: <AB_HOME>/skills)
 #   AB_ENV_DIR        host directory with per-project environment files,
@@ -120,7 +122,7 @@ done
 if [[ "${AB_LOGIN:-}" == 1 ]]; then
   agent_select
   networks_create
-  podman image exists "$IMAGE" || build_image
+  ensure_images
   agent_update
   agent_login
   exit 0
@@ -165,13 +167,10 @@ if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   AB_RESTART=1
 fi
 
-# Image: tooling only (node, git, ripgrep, ...). The agents are NOT baked in.
-# Rebuild after editing the Containerfile: AB_UPGRADE=1, or podman rmi localhost/agentbox
-podman image exists "$IMAGE" \
-  || build_image
-# The egress proxy is built here too (Containerfile.squid).
-podman image exists "$IMG_SQUID" \
-  || build_squid_image
+# Images: tooling only (node, git, ripgrep, ...), the agents are NOT baked
+# in; and the egress proxy (Containerfile.squid). Rebuilt when their
+# Containerfile or build settings change.
+ensure_images
 
 agent_update
 # No token yet and you said yes at agent_check_secrets: sign in now.

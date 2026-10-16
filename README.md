@@ -657,7 +657,7 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 | Virtualenv | Per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), via `UV_PROJECT_ENVIRONMENT`. Shared by both agents |
 | uv cache | `ab-cache`, persists across sessions, shared by both agents |
 
-Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, list it in `AB_PYTHON_VERSIONS` (all the versions you want, e.g. `3.11 3.12 3.13 3.14`) and run `AB_UPGRADE=1 agentbox`.
+Interpreters cannot be downloaded at runtime (`UV_PYTHON_DOWNLOADS=never`; their source, GitHub, is blocked anyway). For another version, list it in `AB_PYTHON_VERSIONS` (all the versions you want, e.g. `3.11 3.12 3.13 3.14`); the next start rebuilds the image.
 
 **Why the venv is outside the repo.** A `.venv` created in the container points at `/opt/uv-python/...`, which does not exist on the host, and a host `.venv` points at host paths. Sharing one directory breaks whichever side used it last. With `UV_PROJECT_ENVIRONMENT`, `uv` in the box never touches `<repo>/.venv`, so you can keep using your host venv in parallel. Projects that do not use uv (plain `python -m venv .venv`) are not covered by this; create such venvs outside the repo too, e.g. under `~/.venvs`.
 
@@ -688,7 +688,7 @@ Things to know:
 
 [graphify](https://github.com/Graphify-Labs/graphify) turns the repo into a queryable knowledge graph. It is a Python CLI plus a `/graphify` skill that calls it, so unlike plain skills it has to be **in the image**: the agent cannot install it from PyPI.
 
-The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras with `AB_GRAPHIFY_EXTRAS` in `config.env` (none by default), e.g. `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. Both take effect on the next build: `AB_UPGRADE=1 agentbox`.
+The `Containerfile` installs it into `/opt/graphify` and exposes it as `/usr/local/bin/graphify`. The version is pinned with `GRAPHIFY_VERSION`; optional extras with `AB_GRAPHIFY_EXTRAS` in `config.env` (none by default), e.g. `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. A change to either rebuilds the image at the next start.
 
 #### The skill
 
@@ -789,7 +789,7 @@ The agent connects by name and the target's port: `db:5432`, `mq:5672`. For each
 
 `<key>` comes from the repo's path, so another repo's sessions cannot reach these targets. The repo file uses the same `KEY=VALUE` format as `config.env`, accepts only `AB_FORWARD`, and lives with the [per-project environment](#per-project-environment) files, outside the repo: the agent cannot add targets for its next session.
 
-- **Needs socat in the image.** Rebuild once with `AB_UPGRADE=1 agentbox`; until then a start with forwards stops with an error saying so.
+- **Needs socat in the image.** An image built before socat was added gets rebuilt at the next start; if a start with forwards still says socat is missing, `AB_UPGRADE=1 agentbox`.
 - **Plain TCP.** The target sees connections from your host, through your network and VPN, like any other client there. TLS (`sslmode=require`, `amqps`) goes end to end; certificates name the real host, so clients that verify host names need it set explicitly (e.g. `sslrootcert` with `sslmode=verify-ca` instead of `verify-full`).
 - **Names** are lowercase letters, digits and hyphens, not starting with `ab-`, and unique across both lists and `AB_SERVICES`. The session's `NO_PROXY` includes them, so HTTP clients connect directly.
 - **Changes** apply at the next start: changed targets get new sidecars, removed ones are removed. A repo's sidecars change only with a start in that repo. Sidecars keep running between sessions; `socat` opens a connection to the target only when the agent opens one.
@@ -855,14 +855,16 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section, that 
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 agentbox` / `AB_UPDATE=1 agentbox pi` to force |
 | Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 agentbox` |
 | Base image (Debian packages, git, Python) and the squid image (Debian's squid, `Containerfile.squid`) | Built here, so only on request: a cached build never re-runs `apt-get`. The update check reminds you once an image is a month old | `AB_UPGRADE=1 agentbox` |
-| graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 agentbox` |
-| Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Bump `TRIVY_VERSION`, then `AB_UPGRADE=1 agentbox`; `AB_UPDATE=1 agentbox` fetches the database now |
+| graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`; the next start rebuilds |
+| Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Bump `TRIVY_VERSION`; the next start rebuilds. `AB_UPDATE=1 agentbox` fetches the database now |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 agentbox` |
-| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`, then `AB_UPGRADE=1 agentbox`. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
+| uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`; the next start rebuilds. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
 | Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
 | Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 agentbox` |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
+
+You do not need it after changing a build setting (`AB_TRIVY`, `AB_PYTHON_VERSIONS`, `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION`, `AB_GRAPHIFY_EXTRAS`) or after an agentbox update that changed a `Containerfile`: each image carries a fingerprint of its `Containerfile` and build settings (label `agentbox.build`), and a start whose fingerprint differs rebuilds that image, as a cached build, not from scratch.
 
 #### Update check
 
@@ -894,7 +896,7 @@ Check the latest release and what changed before bumping:
 curl -s https://pypi.org/pypi/graphifyy/json | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])'
 ```
 
-Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 agentbox`. The same run reinstalls the `/graphify` skill from the new image (see [The skill](#the-skill)).
+Set `GRAPHIFY_VERSION` in `Containerfile`; the next start rebuilds the image. The same run reinstalls the `/graphify` skill from the new image (see [The skill](#the-skill)).
 
 #### Pinning sidecar images
 
@@ -1008,10 +1010,10 @@ agentbox . -p "say ok"
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | Setting of the `github` module: toolsets, enforced by nginx |
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | Personal skills directory, mounted read-only |
-| `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. Applies on the next build (`AB_UPGRADE=1`). See [Graphify](#graphify) |
-| `AB_TRIVY` | unset | `1`: Trivy in the image, its database kept current outside the session. Applies on the next build (`AB_UPGRADE=1`). See [Trivy](#trivy) |
-| `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. Applies on the next build (`AB_UPGRADE=1`). See [Python](#python) |
-| `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. Applies on the next build (`AB_UPGRADE=1`). See [Go](#go) |
+| `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. A change rebuilds the image at the next start. See [Graphify](#graphify) |
+| `AB_TRIVY` | unset | `1`: Trivy in the image, its database kept current outside the session. A change rebuilds the image at the next start. See [Trivy](#trivy) |
+| `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | Python interpreters baked into the image. A change rebuilds the image at the next start. See [Python](#python) |
+| `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | Go and golangci-lint in the image; empty = latest release. A change rebuilds the image at the next start. See [Go](#go) |
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated; the session reaches them by name. Also per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
 | `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
