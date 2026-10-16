@@ -4,7 +4,8 @@
 # The database comes as an OCI image from mirror.gcr.io or ghcr.io. The
 # session cannot reach those (a registry also takes uploads): like the agent
 # update, a short-lived container with internet access and no repository
-# fetches it, at most every UPDATE_EVERY seconds (AB_UPDATE=1 forces it). The
+# fetches it, at most every UPDATE_EVERY seconds (AB_UPDATE=1 forces it),
+# with telemetry off: that container is not behind squid. The
 # session gets the volume read-only, with every download switched off; the
 # misconfiguration checks are the ones built into the binary, and the Java
 # database is not used.
@@ -22,7 +23,8 @@ trivy_update() {
     echo "agentbox: updating the Trivy database..." >&2
     if podman run --rm --network ab-egress --userns="$USERNS" \
          -v ab-trivy:"$TRIVY_CACHE" --entrypoint trivy "$IMAGE" \
-         image --download-db-only --no-progress --cache-dir "$TRIVY_CACHE" >&2; then
+         image --download-db-only --no-progress --cache-dir "$TRIVY_CACHE" \
+               --disable-telemetry --skip-version-check >&2; then
       mkdir -p "$(dirname "$stamp")"
       touch "$stamp"
     elif ! podman run --rm --network none --entrypoint sh "$IMAGE" -c 'command -v trivy' >/dev/null 2>&1; then
@@ -41,5 +43,7 @@ trivy_update() {
     -e TRIVY_SKIP_JAVA_DB_UPDATE=true
     -e TRIVY_SKIP_CHECK_UPDATE=true
     -e TRIVY_SKIP_VERSION_CHECK=true
+    -e TRIVY_SKIP_VEX_REPO_UPDATE=true
+    -e TRIVY_DISABLE_TELEMETRY=true
   )
 }

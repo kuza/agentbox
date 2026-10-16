@@ -998,6 +998,8 @@ test_trivy() {
   grep -qx 'ab-trivy:/home/node/.cache/trivy:ro' <<<"$args" || fail "database not read-only in the session"
   grep -qx 'TRIVY_SKIP_DB_UPDATE=true' <<<"$args" || fail "session may download"
   grep -qx 'TRIVY_SKIP_JAVA_DB_UPDATE=true' <<<"$args" || fail "Java database not switched off"
+  grep -qx 'TRIVY_DISABLE_TELEMETRY=true' <<<"$args" || fail "telemetry not switched off in the session"
+  grep -q 'download-db-only .*--disable-telemetry' "$STUB_DIR/calls" || fail "telemetry not switched off for the update"
   # Within UPDATE_EVERY: no new download.
   ab_run --
   grep -q 'download-db-only' "$STUB_DIR/calls" && fail "database downloaded again within the interval"

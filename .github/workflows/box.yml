@@ -69,6 +69,11 @@ jobs:
             -c 'trivy fs --scanners vuln,misconfig --exit-code 0 --quiet --format table . | tail -n 20 && echo TRIVY_OK' \
             | tee "$RUNNER_TEMP/trivy.out"
           grep -qx TRIVY_OK "$RUNNER_TEMP/trivy.out"
+          # Telemetry and version checks are off: squid saw no attempt.
+          if podman exec ab-egress grep -q 'trivy\.dev' /var/log/squid/access.log; then
+            echo "Trivy tried to reach trivy.dev from the session:"; podman exec ab-egress grep 'trivy\.dev' /var/log/squid/access.log
+            exit 1
+          fi
 
       - name: Sidecars and logs
         if: always()

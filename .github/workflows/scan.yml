@@ -49,7 +49,8 @@ jobs:
             echo "### $1" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
             "$RUNNER_TEMP/trivy" image --quiet --no-progress --scanners vuln \
-              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --format table "${@:2}" \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --format table \
+              --disable-telemetry --skip-version-check "${@:2}" \
               >> "$GITHUB_STEP_SUMMARY" 2>&1 || echo "scan failed" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           }
