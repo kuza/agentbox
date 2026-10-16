@@ -13,11 +13,19 @@ RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 # added later fails instead of silently taking them along.
 # --layers=false: no intermediate image per build step, which would stay
 # behind after every rebuild; a failed build starts over from the beginning.
-build_image() {  # [podman build options...]
-  local ctx rc=0
+build_image() {  # [podman build options...]: the agentbox image
+  build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
+}
+
+build_squid_image() {  # [podman build options...]: the egress proxy
+  build_local "$IMG_SQUID" "$SCRIPT_DIR/Containerfile.squid" "$@"
+}
+
+build_local() {  # <image> <containerfile> [podman build options...]
+  local image="$1" file="$2" ctx rc=0
+  shift 2
   ctx="$(mktemp -d)"
-  podman build --layers=false "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"} \
-    -t "$IMAGE" -f "$SCRIPT_DIR/Containerfile" "$ctx" || rc=$?
+  podman build --layers=false "$@" -t "$image" -f "$file" "$ctx" || rc=$?
   rmdir -- "$ctx"
   return "$rc"
 }

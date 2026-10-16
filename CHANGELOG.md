@@ -13,6 +13,9 @@ The first release.
   agent binary, external DNS cut off.
 - Egress only through squid, by host groups (`AB_EGRESS`, `egress.d/`,
   `~/.config/agentbox/egress.local.d/`).
+- Squid built here from Debian (`Containerfile.squid`), not pulled: its
+  packages follow `AB_UPGRADE=1`; the update check reminds when the
+  agentbox and squid images are a month old.
 - MCP servers as modules (`AB_MCP`): context7, grafana, graylog, github.
   Tokens stay in sidecars; the agents send per-module caller tokens.
 - Skill sources (`AB_SKILLS`, `skills.d/`), vendored with a prefix, no

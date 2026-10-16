@@ -1009,6 +1009,32 @@ test_trivy() {
   assert_out "has no Trivy; rebuild it"
 }
 
+# --- squid built here ---
+
+test_squid_built_here() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  run_line ab-egress | grep -q ' localhost/agentbox-squid$' || fail "egress not on the local squid image: $(run_line ab-egress)"
+  grep -q 'pull .*squid' "$STUB_DIR/calls" && fail "squid pulled from a registry"
+  ab_run AB_UPGRADE=1 --
+  assert_rc 0
+  grep -q '^podman build --layers=false --pull --no-cache -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
+    || fail "squid not rebuilt on AB_UPGRADE: $(grep 'podman build' "$STUB_DIR/calls")"
+}
+
+test_updates_local_images_age() {
+  cu_setup "${FUNCNAME[0]}"
+  echo "ab-egress localhost/agentbox-squid" >> "$STUB_DIR/running"
+  # Built 40 days ago: a reminder; no registry is asked for a local image.
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+      STUB_IMAGE_CREATED="$(( $(date +%s) - 40 * 86400 ))" bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_out "image localhost/agentbox-squid was built 40 days ago"
+  assert_out "image localhost/agentbox was built 40 days ago"
+  grep -q 'localhost' "$T/urls" 2>/dev/null && fail "registry asked about a local image"
+  assert_no_out "could not check localhost"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {
@@ -1066,10 +1092,9 @@ test_replaced_images_removed() {
   grep -q '^podman rmi' "$STUB_DIR/calls" && fail "removed an image without an upgrade"
   # An upgrade replaces the agentbox image and squid's; nginx stays the same.
   # An open session still uses the old agentbox image: podman refuses.
-  ab_run AB_UPGRADE=1 STUB_BUILT_ID=img-2 STUB_PULL_NEW="docker.io/ubuntu/squid:latest" STUB_RMI_FAIL=img-1 --
+  ab_run AB_UPGRADE=1 STUB_BUILT_ID=img-2 STUB_PULL_NEW="docker.io/library/nginx:alpine" STUB_RMI_FAIL=img-1 --
   assert_rc 0
-  grep -qx 'podman rmi id-docker.io/ubuntu/squid:latest' "$STUB_DIR/calls" || fail "old squid image not removed"
-  grep -q '^podman rmi id-docker.io/library/nginx' "$STUB_DIR/calls" && fail "current nginx image removed"
+  grep -qx 'podman rmi id-docker.io/library/nginx:alpine' "$STUB_DIR/calls" || fail "old nginx image not removed"
   grep -qx 'podman rmi img-1' "$STUB_DIR/calls" || fail "old agentbox image not tried"
   assert_eq "$(cat "$(cache retired-images)")" "localhost/agentbox img-1" "kept for later"
   # The next start, with the session gone, removes it.

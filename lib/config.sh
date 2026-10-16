@@ -61,7 +61,8 @@ config_second_pass() {  # <module keys...>
 
 # Constants and defaults.
 IMAGE="localhost/agentbox"
-IMG_SQUID="docker.io/ubuntu/squid:latest"
+# Built here from Containerfile.squid (Debian), not pulled.
+IMG_SQUID="localhost/agentbox-squid"
 IMG_NGINX="docker.io/library/nginx:alpine"
 # Map the host user to uid/gid 1000 (the "node" user in the image),
 # so files written in the repo are owned by you on the host.

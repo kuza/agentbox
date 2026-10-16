@@ -21,9 +21,9 @@ RUN apt-get update \
 #                     AB_PYTHON_VERSIONS from config.env
 # Interpreters land in /opt/uv-python (read-only for the agent) with
 # python3.X shims in /usr/local/bin. System python3 (Debian 13: 3.13) stays as is.
-# pip leaves the /opt/uv and /opt/graphify venvs once they are installed: it
-# is not used there afterwards, and its vendored libraries (urllib3, msgpack,
-# ...) only add findings to image scans.
+# pip leaves the /opt/uv and /opt/graphify venvs once they are installed:
+# nothing uses it there afterwards. (The pip that ships inside the uv Python
+# interpreters stays; it is what python3.X -m pip runs.)
 # ---------------------------------------------------------------------------
 ARG UV_VERSION=0.12.23
 ARG PYTHON_VERSIONS="3.12 3.13 3.14"

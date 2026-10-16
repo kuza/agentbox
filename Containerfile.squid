@@ -1,0 +1,14 @@
+# The egress proxy (ab-egress): squid from Debian, built here like the
+# agentbox image (run.sh), so its packages are as current as the last build
+# and AB_UPGRADE=1 brings the security updates. squid.conf and the generated
+# host list are mounted at run time (lib/egress.sh).
+FROM docker.io/library/debian:trixie-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends squid \
+ && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 3128
+# -N: in the foreground, as the container's main process. squid drops to the
+# proxy user itself once the port is open.
+ENTRYPOINT ["/usr/sbin/squid", "-N", "-f", "/etc/squid/squid.conf"]

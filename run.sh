@@ -153,12 +153,14 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "${AB_UPGRADE:-}" == 1 ]]; then
   echo "agentbox: upgrading images..." >&2
-  for img in $(printf '%s\n' "$IMG_SQUID" "$IMG_NGINX" ${MCP_IMAGES_ALL[@]+"${MCP_IMAGES_ALL[@]}"} | sort -u); do
+  for img in $(printf '%s\n' "$IMG_NGINX" ${MCP_IMAGES_ALL[@]+"${MCP_IMAGES_ALL[@]}"} | sort -u); do
     image_retire "$img"
     podman pull -q "$img" >/dev/null
   done
   image_retire "$IMAGE"
   build_image --pull --no-cache
+  image_retire "$IMG_SQUID"
+  build_squid_image --pull --no-cache
   AB_UPDATE=1
   AB_RESTART=1
 fi
@@ -167,6 +169,9 @@ fi
 # Rebuild after editing the Containerfile: AB_UPGRADE=1, or podman rmi localhost/agentbox
 podman image exists "$IMAGE" \
   || build_image
+# The egress proxy is built here too (Containerfile.squid).
+podman image exists "$IMG_SQUID" \
+  || build_squid_image
 
 agent_update
 # No token yet and you said yes at agent_check_secrets: sign in now.

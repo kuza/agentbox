@@ -1,6 +1,6 @@
 # A report of known vulnerabilities in agentbox's images: the agentbox image
-# built from the Containerfile (with Trivy, as AB_TRIVY=1 builds it) and the
-# sidecar images. Only HIGH and CRITICAL ones that have a fix, since those are
+# built from the Containerfile (with Trivy, as AB_TRIVY=1 builds it), the
+# squid image from Containerfile.squid, and the pulled sidecar images. Only HIGH and CRITICAL ones that have a fix, since those are
 # what a rebuild (AB_UPGRADE=1) or a newer image can remove. It never fails:
 # a base image nearly always has some CVE, and the table in the run summary
 # is for deciding when to upgrade.
@@ -37,11 +37,13 @@ jobs:
           tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
           "$RUNNER_TEMP/trivy" --version
 
-      - name: Build the agentbox image
+      - name: Build the agentbox and squid images
         run: |
           mkdir -p "$RUNNER_TEMP/empty"
           podman build --layers=false --build-arg WITH_TRIVY=1 -t localhost/agentbox -f Containerfile "$RUNNER_TEMP/empty"
           podman save -o "$RUNNER_TEMP/agentbox.tar" localhost/agentbox
+          podman build --layers=false -t localhost/agentbox-squid -f Containerfile.squid "$RUNNER_TEMP/empty"
+          podman save -o "$RUNNER_TEMP/squid.tar" localhost/agentbox-squid
 
       - name: Scan
         run: |
@@ -59,7 +61,8 @@ jobs:
             } | tee -a "$GITHUB_STEP_SUMMARY"
           }
           scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
-          for img in docker.io/ubuntu/squid:latest docker.io/library/nginx:alpine \
+          scan "agentbox-squid (from Containerfile.squid)" --input "$RUNNER_TEMP/squid.tar"
+          for img in docker.io/library/nginx:alpine \
                      docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest; do
             scan "$img" "$img"
           done

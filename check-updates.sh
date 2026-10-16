@@ -14,6 +14,8 @@
 #            ab-llm-*), compares the local digest of its image tag with the
 #            registry's (an anonymous HEAD request, no pull), and flags
 #            containers still running an older image than the local one.
+#            Images built here (the agentbox image, its squid) have no
+#            registry: a reminder to rebuild once they are a month old.
 #   agentbox for an installed version (install.sh), whether a newer release
 #            exists; it says so and leaves the update to `agentbox update`,
 #            which verifies the release's signature first.
@@ -44,6 +46,8 @@ source "$SCRIPT_DIR/lib/paths.sh"
 source "$SCRIPT_DIR/lib/skills.sh"   # source_value, as run.sh reads the records
 # shellcheck source=lib/release.sh
 source "$SCRIPT_DIR/lib/release.sh"
+# shellcheck source=lib/config.sh
+source "$SCRIPT_DIR/lib/config.sh"   # IMAGE, IMG_SQUID
 TIMEOUT=5
 EVERY="${AB_UPDATE_EVERY:-21600}"
 if [[ ! "$EVERY" =~ ^[0-9]+$ ]]; then
@@ -127,6 +131,8 @@ fi
 for img in ${images[@]+"${images[@]}"}; do
   # Pinned to a digest: the reference itself is the version, nothing to check.
   [[ "$img" == *@* ]] && continue
+  # Built here (localhost/...): no registry to ask; see the age check below.
+  [[ "$img" == localhost/* ]] && continue
   podman image exists "$img" || continue
   remote="$(remote_digest "$img")"
   if [[ -z "$remote" ]]; then
@@ -176,6 +182,18 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
     interactive || pending=1
   fi
 fi
+
+# Images built here (the agentbox image, its squid) are as current as their
+# last build: a reminder once they are a month old. AB_UPGRADE=1 rebuilds them
+# with today's packages and security updates.
+for img in "$IMAGE" "$IMG_SQUID"; do
+  created="$(podman image inspect -f '{{.Created.Unix}}' "$img" 2>/dev/null)" || continue
+  [[ "$created" =~ ^[0-9]+$ ]] || continue
+  age=$(( ($(date +%s) - created) / 86400 ))
+  if (( age > 30 )); then
+    say "image $img was built $age days ago; AB_UPGRADE=1 agentbox rebuilds it with current packages"
+  fi
+done
 
 # --- agentbox itself ---------------------------------------------------------
 

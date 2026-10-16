@@ -359,7 +359,7 @@ AB_EGRESS=anthropic openai pypi go test-data
 
 ### pi (OpenAI)
 
-[pi](https://pi.dev) runs in the same box as Claude Code: same image, networks, squid, MCP sidecars, repo protections, Python and Go. Start it with `pi.sh` instead of `run.sh`; arguments work the same way.
+[pi](https://pi.dev) runs in the same box as Claude Code: same image, networks, squid, MCP sidecars, repo protections, Python and Go. Start it with `agentbox pi` instead of `agentbox`; arguments work the same way.
 
 > Do not use the Claude subscription token with pi. Anthropic permits subscription OAuth only in Claude Code and Claude.ai, not in third-party tools.
 
@@ -377,7 +377,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
 
 #### Setup: ChatGPT subscription
 
-1. Start pi in a repo: `cd ~/src/myrepo && ~/agentbox/pi.sh`. The first run installs pi into the `ab-pi-tools` volume.
+1. Start pi in a repo: `cd ~/src/myrepo && agentbox pi`. The first run installs pi into the `ab-pi-tools` volume.
 2. Run `/login`, choose **OpenAI**, then **Sign in with ChatGPT**. Open the shown URL in your browser on the host and approve.
 3. The browser is then redirected to `http://127.0.0.1:1455/auth/callback?...` and shows a connection error: the callback listener runs inside the container, not on your host. That is expected. **Copy the full URL from the address bar** and paste it into pi's prompt.
 4. pi stores the tokens in `~/.pi/agent/auth.json` in `ab-pi-home` and refreshes them itself; this is needed once per box, not per repo.
@@ -397,7 +397,7 @@ There are two ways to give pi OpenAI models. Both use pi's **OpenAI** provider (
    ```bash
    read -rsp 'OpenAI API key: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman secret create openai_api_key -; echo; unset T
    ```
-3. `~/agentbox/pi.sh`: creates `llm_openai_caller`, starts the sidecar. Pick an `openai/...` model with `/model`. No `/login`.
+3. `agentbox pi`: creates `llm_openai_caller`, starts the sidecar. Pick an `openai/...` model with `/model`. No `/login`.
 
 #### What pi gets from the host, read-only
 
@@ -853,8 +853,8 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section, that 
 | What | Updates how | Command |
 |---|---|---|
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 agentbox` / `AB_UPDATE=1 agentbox pi` to force |
-| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx, squid) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 agentbox` |
-| Base image (Debian packages, git, Python) | Only on request: a cached build never re-runs `apt-get` | `AB_UPGRADE=1 agentbox` |
+| Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 agentbox` |
+| Base image (Debian packages, git, Python) and the squid image (Debian's squid, `Containerfile.squid`) | Built here, so only on request: a cached build never re-runs `apt-get`. The update check reminds you once an image is a month old | `AB_UPGRADE=1 agentbox` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`, then `AB_UPGRADE=1 agentbox` |
 | Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Bump `TRIVY_VERSION`, then `AB_UPGRADE=1 agentbox`; `AB_UPDATE=1 agentbox` fetches the database now |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 agentbox` |
@@ -898,7 +898,7 @@ Set `GRAPHIFY_VERSION` in `Containerfile`, then `AB_UPGRADE=1 agentbox`. The sam
 
 #### Pinning sidecar images
 
-The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour, as happened with mcp-grafana's caller-auth and Host checks. To control that, pin tags in the `IMG_*` variables at the top of `run.sh` and bump them deliberately.
+The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour, as happened with mcp-grafana's caller-auth and Host checks. To control that, pin tags in the `IMG_*` variables at the top of `run.sh` and bump them deliberately. Squid is not pulled: `Containerfile.squid` builds it here from Debian (`localhost/agentbox-squid`), so its packages are as current as the last `AB_UPGRADE=1`.
 
 ### Disk space
 
@@ -1015,7 +1015,7 @@ agentbox . -p "say ok"
 | `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network; the session reaches them by name. See [Local services](#local-services) |
 | `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated; the session reaches them by name. Also per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
 | `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
-| `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `pi.sh` sets). `shell` runs bash in the same box instead of an agent, with its own home volume `ab-shell-home`; arguments go to bash: none for an interactive shell, a script, or `-c '...'` |
+| `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `agentbox pi` sets). `shell` runs bash in the same box instead of an agent, with its own home volume `ab-shell-home`; arguments go to bash: none for an interactive shell, a script, or `-c '...'` |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag or mounted files (nginx templates, `squid.conf`, egress hosts) change. Needed after recreating a Podman secret |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
@@ -1041,6 +1041,7 @@ AB_RESTART=1 agentbox .
 | `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
 | `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
+| `Containerfile.squid` | The egress proxy's image: Debian's squid, built here like the base image |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
 | `egress.d/<name>.conf` | Egress groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
 | `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |

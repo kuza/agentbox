@@ -67,6 +67,7 @@ case "$1 ${2:-}" in
   "rmi "*) [[ " ${STUB_RMI_FAIL:-} " != *" $2 "* ]] ;;
   "image inspect")
     case "$*" in
+      *Created.Unix*) [[ -n "${STUB_IMAGE_CREATED:-}" ]] && echo "$STUB_IMAGE_CREATED" || echo x ;;
       *RepoDigests*) awk -v i="${*: -1}" '$1 == i { print "x@" $2 }' "$S/digests" ;;
       *) image_id "${*: -1}" ;;
     esac ;;
