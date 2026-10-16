@@ -4,6 +4,18 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.1
+
+- Images rebuilt when their `Containerfile` or build settings change:
+  a changed `AB_TRIVY`, `AB_PYTHON_VERSIONS`, `AB_GO_VERSION`,
+  `AB_GOLANGCI_LINT_VERSION` or `AB_GRAPHIFY_EXTRAS` applies at the next
+  start, no `AB_UPGRADE=1` needed. Each image carries a fingerprint of what
+  it was built from (label `agentbox.build`).
+- README: an Uninstall section; release, license and platform badges.
+
+Action: none. The first start after the update rebuilds the agentbox and
+squid images once (images from v0.1.0 have no fingerprint), a few minutes.
+
 ## v0.1.0
 
 The first release.
