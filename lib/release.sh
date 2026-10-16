@@ -106,19 +106,28 @@ release_sync_completion() {
 # whatever XDG_CONFIG_HOME a shell sets. Written once per installation (a
 # stamp in INSTALL_DIR): a file you delete stays deleted, and one that is
 # there, or a link, is never changed. agentbox uninstall removes it only if
-# it starts with ENVIRONMENT_HEADER.
+# it is still exactly what agentbox wrote.
 ENVIRONMENT_FILE="$HOME/.config/environment.d/agentbox.conf"
 ENVIRONMENT_HEADER="# agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every"
 release_sync_environment() {
   local stamp="$INSTALL_DIR/environment-written"
-  [[ -e "$stamp" || -e "$ENVIRONMENT_FILE" || -L "$ENVIRONMENT_FILE" ]] && return 0
+  [[ -e "$stamp" ]] && return 0
+  # A file or link of yours: settled for good, also once you delete it.
+  if [[ -e "$ENVIRONMENT_FILE" || -L "$ENVIRONMENT_FILE" ]]; then
+    touch "$stamp" 2>/dev/null || true
+    return 0
+  fi
   grep -qs 'agentbox git-guard' "$HOME/.local/bin/git" || return 0
-  if ! { mkdir -p "$(dirname "$ENVIRONMENT_FILE")" && release_environment_content > "$ENVIRONMENT_FILE"; } 2>/dev/null; then
+  touch "$stamp" 2>/dev/null || true   # one try, one warning at most
+  # Through a temporary file: an interrupted write leaves no half file.
+  if ! { mkdir -p "$(dirname "$ENVIRONMENT_FILE")" \
+         && release_environment_content > "$ENVIRONMENT_FILE.tmp" \
+         && mv -f -- "$ENVIRONMENT_FILE.tmp" "$ENVIRONMENT_FILE"; } 2>/dev/null; then
+    rm -f -- "$ENVIRONMENT_FILE.tmp" 2>/dev/null
     echo "agentbox: warning: could not write $ENVIRONMENT_FILE; put ~/.local/bin first in PATH" \
          "yourself (README, Git on the host)" >&2
     return 0
   fi
-  touch "$stamp" 2>/dev/null || true
   echo "agentbox: wrote $ENVIRONMENT_FILE; log out and back in, then check that" \
        "'command -v git' prints ~/.local/bin/git (README, Git on the host)" >&2
 }

@@ -65,8 +65,10 @@ if [[ -n "$guard" ]]; then
   release_sync_environment
 fi
 
+# The environment.d file puts it there from the next login on.
 case ":$PATH:" in
   *":$HOME/.local/bin:"*) ;;
-  *) echo "agentbox: add ~/.local/bin to PATH, ahead of /usr/bin (README, Git on the host)" ;;
+  *) [[ -e "$ENVIRONMENT_FILE" ]] \
+       || echo "agentbox: add ~/.local/bin to PATH, ahead of /usr/bin (README, Git on the host)" ;;
 esac
 echo "agentbox: $version installed. Next: README, Quick start, step 2."

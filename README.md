@@ -36,7 +36,7 @@ Needs Linux with rootless Podman 4.x or newer on the netavark backend (`podman i
 ```bash
 # The latest release (https://github.com/kuza/agentbox/releases); or set v=vX.Y.Z
 v="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/kuza/agentbox/releases/latest)"; v="${v##*/}"
-echo "$v"
+[[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$v" || echo "could not find the latest release; set v=vX.Y.Z by hand"
 mkdir -p ~/Downloads/agentbox && cd ~/Downloads/agentbox
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz.sig
@@ -85,7 +85,7 @@ Install a release (below), or, to work on agentbox itself, clone the repository 
 ```bash
 # The latest release (https://github.com/kuza/agentbox/releases); or set v=vX.Y.Z
 v="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/kuza/agentbox/releases/latest)"; v="${v##*/}"
-echo "$v"
+[[ "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$v" || echo "could not find the latest release; set v=vX.Y.Z by hand"
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz
 curl -fLO https://github.com/kuza/agentbox/releases/download/$v/agentbox-$v.tar.gz.sig
 # The first time, check the signature against the release key (Releases, Trust):
@@ -310,7 +310,7 @@ mkdir -p ~/.local/bin
 install -m 755 git-guard ~/.local/bin/git
 ```
 
-`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...) that is `~/.config/environment.d/agentbox.conf`, effective at the next login. agentbox writes it when it installs git-guard, and an installed agentbox writes it at its next start if git-guard is there and the file is not. It does so once per installation: delete the file to do without, and it does not come back. A file or link that is there is never changed, and `agentbox uninstall` removes the file only if agentbox wrote it. Its content:
+`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...) that is `~/.config/environment.d/agentbox.conf`, effective at the next login. agentbox writes it when it installs git-guard, and an installed agentbox writes it at its next start if git-guard is there and the file is not. It does so once per installation: delete the file to do without, and it does not come back. A file or link that is there is never changed, and `agentbox uninstall` removes the file only if it is still as agentbox wrote it. Its content:
 
 ```
 # agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every

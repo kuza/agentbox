@@ -93,10 +93,11 @@ agentbox_uninstall() {
   # Only the file agentbox wrote; one of your own (made by hand from an
   # older README) stays.
   if [[ -f "$ENVIRONMENT_FILE" ]]; then
-    if [[ "$(head -n1 -- "$ENVIRONMENT_FILE")" == "$ENVIRONMENT_HEADER" ]]; then
+    # Exactly as agentbox wrote it: with lines of yours added, it stays.
+    if [[ "$(cat -- "$ENVIRONMENT_FILE")" == "$(release_environment_content)" ]]; then
       rm -f -- "$ENVIRONMENT_FILE"
     else
-      echo "kept $ENVIRONMENT_FILE: agentbox did not write it; remove it yourself if it is only for agentbox"
+      echo "kept $ENVIRONMENT_FILE: not as agentbox wrote it; remove it yourself if it is only for agentbox"
     fi
   fi
   [[ -L "$HOME/.local/bin/agentbox" ]] && rm -f -- "$HOME/.local/bin/agentbox"

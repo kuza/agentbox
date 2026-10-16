@@ -940,7 +940,25 @@ test_release_environment_file_yours() {
   ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
   ab_cmd agentbox uninstall --yes
   assert_eq "$(cat "$envf")" "# mine" "your file after uninstall"
-  assert_out "kept .*agentbox did not write it"
+  assert_out "kept .*not as agentbox wrote it"
+}
+
+# A file of yours there once: deleting it later does not bring agentbox's.
+# agentbox's file with lines of yours added stays at uninstall.
+test_release_environment_file_settled() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  local envf="$T/home/.config/environment.d/agentbox.conf"
+  mkdir -p "$(dirname "$envf")"
+  echo "# mine" > "$envf"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
+  rm "$envf"
+  ab_cmd agentbox version
+  [[ -e "$envf" ]] && fail "written after you deleted your own"
+  { bash -c "source '$ROOT/lib/release.sh'; release_environment_content"; echo "GIT_CONFIG_KEY_1=x"; } > "$envf"
+  ab_cmd agentbox uninstall --yes
+  grep -qx 'GIT_CONFIG_KEY_1=x' "$envf" || fail "your lines removed by uninstall"
+  assert_out "kept .*not as agentbox wrote it"
 }
 
 # The README shows exactly what agentbox writes.
