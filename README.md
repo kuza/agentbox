@@ -310,16 +310,22 @@ mkdir -p ~/.local/bin
 install -m 755 git-guard ~/.local/bin/git
 ```
 
-`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...) that is `~/.config/environment.d/agentbox.conf`, effective at the next login. agentbox writes it when it installs git-guard, and an installed agentbox writes it at its next start if git-guard is there and the file is not; it never changes a file that exists. Its content:
+`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...) that is `~/.config/environment.d/agentbox.conf`, effective at the next login. agentbox writes it when it installs git-guard, and an installed agentbox writes it at its next start if git-guard is there and the file is not. It does so once per installation: delete the file to do without, and it does not come back. A file or link that is there is never changed, and `agentbox uninstall` removes the file only if agentbox wrote it. Its content:
 
 ```
+# agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every
+# program of the login session (README, Git on the host). Remove this file
+# to do without; agentbox does not write it again.
 PATH=$HOME/.local/bin:$PATH
-# Belt and braces: no repository config can switch on core.fsmonitor, even for
-# a program that calls /usr/bin/git directly.
+# No repository config can switch on core.fsmonitor, even for a program that
+# calls /usr/bin/git directly. Replaces GIT_CONFIG_* entries of your own set
+# in an earlier environment.d file.
 GIT_CONFIG_COUNT=1
 GIT_CONFIG_KEY_0=core.fsmonitor
 GIT_CONFIG_VALUE_0=false
 ```
+
+If you set `GIT_CONFIG_COUNT` entries of your own for the session, merge them into one file: the `environment.d` file read last sets the count, and the other's entries are lost.
 
 Check with `command -v git` (should print `~/.local/bin/git`) in a terminal and in your editor's terminal. Editors with a setting for the git executable (VS Code `git.path`, JetBrains "Path to Git executable") can point at `~/.local/bin/git` explicitly. `run.sh` warns at every start while `git` is not git-guard.
 

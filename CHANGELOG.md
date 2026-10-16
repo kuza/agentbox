@@ -9,8 +9,9 @@ the steps a release needs from you, such as a rebuild.
 - With git-guard, agentbox writes `~/.config/environment.d/agentbox.conf`
   (`~/.local/bin` first in `PATH` for the whole desktop session, editors
   included; `core.fsmonitor` off for any git): at install, and at the next
-  start of an installed version that has git-guard but not the file. A
-  file that is there is never changed.
+  start of an installed version that has git-guard but not the file. Once
+  per installation: delete it to do without. A file that is there is never
+  changed, and uninstall removes only the one agentbox wrote.
 - README: the install steps find the latest release themselves.
 
 Action: if agentbox says it wrote the environment.d file, log out and back

@@ -90,7 +90,15 @@ agentbox_uninstall() {
   if grep -qs 'agentbox git-guard' "$HOME/.local/bin/git"; then
     rm -f -- "$HOME/.local/bin/git" && echo "removed git-guard; git is the system's again"
   fi
-  rm -f -- "$ENVIRONMENT_FILE"
+  # Only the file agentbox wrote; one of your own (made by hand from an
+  # older README) stays.
+  if [[ -f "$ENVIRONMENT_FILE" ]]; then
+    if [[ "$(head -n1 -- "$ENVIRONMENT_FILE")" == "$ENVIRONMENT_HEADER" ]]; then
+      rm -f -- "$ENVIRONMENT_FILE"
+    else
+      echo "kept $ENVIRONMENT_FILE: agentbox did not write it; remove it yourself if it is only for agentbox"
+    fi
+  fi
   [[ -L "$HOME/.local/bin/agentbox" ]] && rm -f -- "$HOME/.local/bin/agentbox"
   [[ -L "$COMPLETION_LINK" ]] && rm -f -- "$COMPLETION_LINK"
   if [[ -d "$INSTALL_DIR" ]]; then

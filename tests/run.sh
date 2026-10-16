@@ -893,7 +893,8 @@ test_release_completion_link() {
 }
 
 # Without git-guard no environment.d file; with it, an installed agentbox
-# writes one at its next start, and never changes one that is there.
+# writes one at its next start, once: deleted, it stays deleted. A file or
+# link that is there is never changed; uninstall removes only its own.
 test_release_environment_file() {
   rel_setup "${FUNCNAME[0]}"
   make_release v1.0.0
@@ -901,14 +902,52 @@ test_release_environment_file() {
   local envf="$T/home/.config/environment.d/agentbox.conf"
   [[ -e "$envf" ]] && fail "written without git-guard"
   install -m 755 "$ROOT/git-guard" "$T/home/.local/bin/git"
-  ab_cmd agentbox version
+  # Always ~/.config, whatever XDG_CONFIG_HOME a shell sets.
+  ab_cmd env XDG_CONFIG_HOME="$T/elsewhere" agentbox version
   [[ -f "$envf" ]] || fail "not written by the command with git-guard there"
+  [[ -e "$T/elsewhere/environment.d" ]] && fail "written under XDG_CONFIG_HOME"
+  assert_out "log out and back in"
+  # Deleted: not written again.
+  rm "$envf"
+  ab_cmd agentbox version
+  [[ -e "$envf" ]] && fail "written again after you deleted it"
+  # Its own file goes with uninstall.
+  bash -c "source '$ROOT/lib/release.sh'; release_environment_content" > "$envf"
+  ab_cmd agentbox uninstall --yes
+  [[ -e "$envf" ]] && fail "agentbox's file left by uninstall"
+  return 0
+}
+
+test_release_environment_file_yours() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  local envf="$T/home/.config/environment.d/agentbox.conf"
+  mkdir -p "$(dirname "$envf")"
+  # A dangling link is left alone, not followed.
+  ln -s "$T/target" "$envf"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
+  [[ -e "$T/target" ]] && fail "dangling link followed"
+  rm "$envf"
+  # A file of your own: kept, also by uninstall, which writes nothing first.
   echo "# mine" > "$envf"
   ab_cmd agentbox version
   assert_eq "$(cat "$envf")" "# mine" "your environment.d file"
+  rm -f "$T/home/.local/share/agentbox/environment-written"; rm "$envf"
   ab_cmd agentbox uninstall --yes
-  [[ -e "$envf" ]] && fail "left by uninstall"
-  return 0
+  assert_no_out "log out and back in"
+  [[ -e "$envf" ]] && fail "uninstall wrote the file first"
+  echo "# mine" > "$envf"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  ab_cmd agentbox uninstall --yes
+  assert_eq "$(cat "$envf")" "# mine" "your file after uninstall"
+  assert_out "kept .*agentbox did not write it"
+}
+
+# The README shows exactly what agentbox writes.
+test_environment_file_in_readme() {
+  local readme
+  readme="$(awk '/^`~\/.local\/bin` must come first/ { on = 1 } on && /^```$/ { n++; next } on && n == 1 { print } n == 2 { exit }' "$ROOT/README.md")"
+  assert_eq "$readme" "$(bash -c "source '$ROOT/lib/release.sh'; release_environment_content")" "README block"
 }
 
 test_release_install_keeps_your_git() {

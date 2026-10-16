@@ -102,25 +102,40 @@ release_sync_completion() {
 # With git-guard installed, ~/.config/environment.d/agentbox.conf puts
 # ~/.local/bin first in PATH for the whole login session, programs started
 # from the desktop (editors) too, and switches core.fsmonitor off for any
-# git (README, Git on the host). Written once, never over a file that is
-# there; agentbox uninstall removes it. Prints a note when it writes it.
-ENVIRONMENT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/agentbox.conf"
+# git (README, Git on the host). Always ~/.config: systemd reads it there,
+# whatever XDG_CONFIG_HOME a shell sets. Written once per installation (a
+# stamp in INSTALL_DIR): a file you delete stays deleted, and one that is
+# there, or a link, is never changed. agentbox uninstall removes it only if
+# it starts with ENVIRONMENT_HEADER.
+ENVIRONMENT_FILE="$HOME/.config/environment.d/agentbox.conf"
+ENVIRONMENT_HEADER="# agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every"
 release_sync_environment() {
-  [[ -e "$ENVIRONMENT_FILE" ]] && return 0
+  local stamp="$INSTALL_DIR/environment-written"
+  [[ -e "$stamp" || -e "$ENVIRONMENT_FILE" || -L "$ENVIRONMENT_FILE" ]] && return 0
   grep -qs 'agentbox git-guard' "$HOME/.local/bin/git" || return 0
-  mkdir -p "$(dirname "$ENVIRONMENT_FILE")"
-  cat > "$ENVIRONMENT_FILE" <<'CONF'
-# agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every
-# program of the login session (README, Git on the host).
-PATH=$HOME/.local/bin:$PATH
+  if ! { mkdir -p "$(dirname "$ENVIRONMENT_FILE")" && release_environment_content > "$ENVIRONMENT_FILE"; } 2>/dev/null; then
+    echo "agentbox: warning: could not write $ENVIRONMENT_FILE; put ~/.local/bin first in PATH" \
+         "yourself (README, Git on the host)" >&2
+    return 0
+  fi
+  touch "$stamp" 2>/dev/null || true
+  echo "agentbox: wrote $ENVIRONMENT_FILE; log out and back in, then check that" \
+       "'command -v git' prints ~/.local/bin/git (README, Git on the host)" >&2
+}
+
+release_environment_content() {
+  cat <<CONF
+$ENVIRONMENT_HEADER
+# program of the login session (README, Git on the host). Remove this file
+# to do without; agentbox does not write it again.
+PATH=\$HOME/.local/bin:\$PATH
 # No repository config can switch on core.fsmonitor, even for a program that
-# calls /usr/bin/git directly.
+# calls /usr/bin/git directly. Replaces GIT_CONFIG_* entries of your own set
+# in an earlier environment.d file.
 GIT_CONFIG_COUNT=1
 GIT_CONFIG_KEY_0=core.fsmonitor
 GIT_CONFIG_VALUE_0=false
 CONF
-  echo "agentbox: wrote $ENVIRONMENT_FILE; log out and back in, then check that" \
-       "'command -v git' prints ~/.local/bin/git (README, Git on the host)" >&2
 }
 
 release_update() {  # [--yes]
