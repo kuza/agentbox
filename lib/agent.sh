@@ -103,7 +103,13 @@ agent_login() {
          "(README, Token not picked up); nothing stored" >&2
     exit 1
   fi
-  printf '%s' "$token" | podman secret create --replace claude_oauth - >/dev/null
+  # --replace came with podman 4.7; before, the old secret goes first.
+  if podman secret create --help 2>/dev/null | grep -q -- '--replace'; then
+    printf '%s' "$token" | podman secret create --replace claude_oauth - >/dev/null
+  else
+    podman secret rm claude_oauth >/dev/null 2>&1 || true
+    printf '%s' "$token" | podman secret create claude_oauth - >/dev/null
+  fi
   echo "agentbox: token stored as the podman secret claude_oauth" >&2
 }
 

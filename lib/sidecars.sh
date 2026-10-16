@@ -19,13 +19,24 @@ start_sidecar() {  # <name> <podman run arguments...>
   } | sha256sum | cut -c1-16)"
   if [[ "${AB_RESTART:-}" != 1 ]] \
      && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]] \
-     && [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.config"}}' "$name" 2>/dev/null)" == "$hash" ]]; then
+     && [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.config"}}' "$name" 2>/dev/null)" == "$hash" ]] \
+     && sidecar_image_current "$name"; then
     return 0
   fi
   # -v: with the container's anonymous volumes (squid declares some), which
   # would otherwise stay behind on every recreation.
   podman rm -f -v "$name" >/dev/null 2>&1 || true
   podman run -d --replace --name "$name" --label "agentbox.config=$hash" "$@" >/dev/null
+}
+
+# 0 if the container runs the image its tag names now: a rebuilt squid image
+# (image_ensure) or a pulled one keeps the tag, so the arguments alone do not
+# show it.
+sidecar_image_current() {  # <container>
+  local tag id
+  tag="$(podman inspect -f '{{.ImageName}}' "$1" 2>/dev/null)" || return 1
+  id="$(podman image inspect -f '{{.Id}}' "$tag" 2>/dev/null)" || return 1
+  [[ -n "$id" && "$(podman inspect -f '{{.Image}}' "$1" 2>/dev/null)" == "$id" ]]
 }
 
 # Removes agentbox sidecars this start did not ask for: those of MCP modules

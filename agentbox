@@ -22,6 +22,9 @@ SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
 # shellcheck source=lib/release.sh
 source "$SCRIPT_DIR/lib/release.sh"
 
+# Tab completion: an update from an older version did not link it.
+if release_installed; then release_sync_completion 2>/dev/null || true; fi
+
 case "${1:-}" in
   pi)       shift; exec env AB_AGENT=pi "$SCRIPT_DIR/run.sh" "$@" ;;
   shell)    shift; exec env AB_AGENT=shell "$SCRIPT_DIR/run.sh" "$@" ;;

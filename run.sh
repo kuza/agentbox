@@ -122,7 +122,7 @@ done
 if [[ "${AB_LOGIN:-}" == 1 ]]; then
   agent_select
   networks_create
-  ensure_images
+  image_ensure "$IMAGE" "$(agentbox_fingerprint)" build_image
   agent_update
   agent_login
   exit 0

@@ -46,7 +46,7 @@ release_latest() {
   [[ "$tag" =~ $VERSION_RE ]] || return 0
   tar="$(grep -o '"browser_download_url": *"[^"]*"' <<<"$json" | sed 's/.*"\([^"]*\)"$/\1/' | grep -F "/agentbox-$tag.tar.gz" | grep -v '\.sig$' | head -n1)"
   sig="$(grep -o '"browser_download_url": *"[^"]*"' <<<"$json" | sed 's/.*"\([^"]*\)"$/\1/' | grep -F "/agentbox-$tag.tar.gz.sig" | head -n1)"
-  [[ -n "$tar" && -n "$sig" ]] && echo "$tag $tar $sig"
+  if [[ -n "$tar" && -n "$sig" ]]; then echo "$tag $tar $sig"; fi
 }
 
 # The CHANGELOG.md section of a version.
@@ -83,10 +83,12 @@ release_sync_git_guard() {
 
 # Tab completion in bash: a link into bash-completion's directory for your
 # own completions, to the current version's file, so that it follows every
-# switch. Made at the first switch with this code (install or update).
+# switch. Made at every switch, and by the agentbox command of an installed
+# version: an update runs the old version's code, which may not know it.
 COMPLETION_LINK="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/agentbox"
 release_sync_completion() {
   [[ -L "$COMPLETION_LINK" || ! -e "$COMPLETION_LINK" ]] || return 0  # your own file stays
+  [[ "$(readlink -- "$COMPLETION_LINK")" == "$INSTALL_DIR/current/completions/agentbox.bash" ]] && return 0
   mkdir -p "$(dirname "$COMPLETION_LINK")"
   ln -sfn "$INSTALL_DIR/current/completions/agentbox.bash" "$COMPLETION_LINK"
 }
@@ -110,8 +112,10 @@ release_update() {  # [--yes]
     return 0
   fi
   tmp="$(mktemp -d)"
+  # EXIT, not RETURN: a failing step ends the agentbox command (set -e)
+  # without returning, and the download would stay behind.
   # shellcheck disable=SC2064  # expand now: tmp is local
-  trap "rm -rf -- '$tmp'" RETURN
+  trap "rm -rf -- '$tmp'" EXIT
   curl -fsSL --max-time 120 -o "$tmp/release.tar.gz" "$tar_url" \
     && curl -fsSL --max-time 30 -o "$tmp/release.tar.gz.sig" "$sig_url" \
     || { echo "error: download of $tag failed" >&2; return 1; }
@@ -145,6 +149,11 @@ release_place() {
   if [[ -e "$dst" ]]; then
     chmod -R u+w -- "$dst"
     rm -rf -- "${dst:?}"
+  fi
+  # Left by an interrupted install: cp would copy into it, one level down.
+  if [[ -e "$dst.tmp" ]]; then
+    chmod -R u+w -- "$dst.tmp"
+    rm -rf -- "${dst:?}.tmp"
   fi
   cp -R -- "$1" "$dst.tmp"
   rm -rf -- "${dst:?}.tmp/.git"

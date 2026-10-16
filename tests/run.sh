@@ -870,9 +870,39 @@ test_release_completion_link() {
   ab_cmd agentbox update --yes
   assert_rc 0
   [[ -f "$comp" ]] || fail "completion not linked by the update"
+  # An update by an older version leaves no link: the new command makes it.
+  rm "$comp"
+  ab_cmd agentbox version
+  [[ -f "$comp" ]] || fail "completion not linked by the command"
   rm "$comp"; echo "# mine" > "$comp"
   ab_cmd agentbox rollback
+  ab_cmd agentbox version
   assert_eq "$(cat "$comp")" "# mine" "your completion file"
+}
+
+test_release_missing_asset() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  make_release v1.1.0
+  pack v1.1.0
+  sed -i 's#, {"browser_download_url": "[^"]*\.sig"}##' "$T/api/repos/kuza/agentbox/releases/latest"
+  ab_cmd agentbox update --yes
+  assert_rc 1
+  assert_out "could not find the latest release"
+}
+
+# An interrupted install leaves versions/<v>.tmp: the next one still works.
+test_release_install_after_interrupted_one() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  mkdir -p "$T/home/.local/share/agentbox/versions/v1.0.0.tmp/half"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  assert_rc 0
+  ab_cmd agentbox version
+  assert_eq "$(cat "$T/out")" v1.0.0 "version"
+  [[ -e "$T/home/.local/share/agentbox/versions/v1.0.0/half" ]] && fail "the leftover went into the version"
+  return 0
 }
 
 # What Tab offers, word by word.
@@ -1035,6 +1065,15 @@ test_login() {
   assert_rc 1
   assert_out "that is not the token"
   assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abc123 "token after a wrong paste"
+  # podman before 4.7 has no secret create --replace.
+  tty_run 'sk-ant-oat01-new\n' AB_LOGIN=1 STUB_OLD_PODMAN=1 --
+  assert_rc 0
+  assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-new "token replaced on old podman"
+  # Login needs no squid image, so it does not build one.
+  echo "localhost/agentbox-squid old" >> "$STUB_DIR/image_labels"
+  tty_run 'sk-ant-oat01-new\n' AB_LOGIN=1 --
+  grep -q '^podman build.*agentbox-squid' "$STUB_DIR/calls" && fail "login built squid"
+  return 0
 }
 
 test_first_start_offers_login() {
@@ -1154,6 +1193,18 @@ test_sidecar_recreated_when_its_setup_changes() {
   ab_run --
   run_line ab-mcp-graylog >/dev/null || fail "not recreated after its template changed"
   run_line ab-egress && fail "squid recreated although nothing of it changed"
+}
+
+# A rebuilt or pulled image keeps its tag: the sidecar follows the image.
+test_sidecar_recreated_on_new_image() {
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  ab_run --
+  run_line ab-egress && fail "recreated without a change"
+  echo "localhost/agentbox-squid rebuilt-squid" >> "$STUB_DIR/image_ids"
+  ab_run --
+  run_line ab-egress | grep -q ' localhost/agentbox-squid$' || fail "squid not recreated on its new image"
+  return 0
 }
 
 test_mcp_graylog_checks_caller_token() {

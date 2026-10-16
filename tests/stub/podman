@@ -20,6 +20,7 @@
 # ("<network> <container>" per line) list what exists.
 #   image_labels  "<image> <agentbox.build fingerprint>" per line, written by
 #                 build; an image without a line counts as current
+#   STUB_OLD_PODMAN podman before 4.7: secret create has no --replace
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
@@ -54,6 +55,14 @@ case "$1 ${2:-}" in
     fi
     drop networks "${*: -1}" ;;
   "secret create")
+    if [[ " $* " == *" --help "* ]]; then
+      [[ -n "${STUB_OLD_PODMAN:-}" ]] && echo "  -d, --driver string" || echo "      --replace   replace the secret"
+      exit 0
+    fi
+    if [[ -n "${STUB_OLD_PODMAN:-}" && " $* " == *" --replace "* ]]; then echo "Error: unknown flag: --replace" >&2; exit 125; fi
+    if [[ " $* " != *" --replace "* ]] && grep -qx -- "${*: -2:1}" "$S/secrets"; then
+      echo "Error: ${*: -2:1}: secret name in use" >&2; exit 125
+    fi
     # secret create [--replace] <name> -: the value goes to secret-<name>.
     name=""; for a in "${@:3}"; do [[ "$a" == -* ]] || { name="$a"; break; }; done
     cat > "$S/secret-$name"
@@ -97,6 +106,7 @@ case "$1 ${2:-}" in
       *Labels*) key="$(sed -n 's/.*"\([^"]*\)".*/\1/p' <<<"$3")"
                 awk -v n="$name" -v k="$key" '$1 == n { split($2, a, "="); if (a[1] == k) print a[2] }' "$S/labels" ;;
       *NetworkMode*) echo bridge ;;
+      *ImageName*) awk -v n="$name" '$1 == n { print $2 }' "$S/running" ;;
       *Networks*) echo "${STUB_NETWORKS:-podman ab-services}" ;;
       *'{{.Id}}'*) awk -v n="$name" '$1 == n { print $2 }' "$S/ids" ;;
       *'{{.Image}}'*) id="$(awk -v n="$name" '$1 == n { print $2 }' "$S/container_images")"
@@ -143,7 +153,10 @@ case "$1 ${2:-}" in
     echo "$name $image" >> "$S/running"
     # A new container ID on every run.
     grep -v "^$name " "$S/ids" > "$S/ids.new"; mv "$S/ids.new" "$S/ids"
-    echo "$name $name-$(wc -l < "$S/calls")" >> "$S/ids" ;;
+    # The container keeps the image it started on, whatever its tag names later.
+    drop container_images "$name"; echo "$name $(image_id "$image")" >> "$S/container_images"
+    seq=$(( $(cat "$S/idseq" 2>/dev/null || echo 0) + 1 )); echo "$seq" > "$S/idseq"
+    echo "$name $name-$seq" >> "$S/ids" ;;
   "run --rm")
     if [[ -n "${STUB_NO_TRIVY:-}" && ( "$*" == *"--entrypoint trivy"* || "$*" == *"command -v trivy"* ) ]]; then exit 1; fi
     if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then

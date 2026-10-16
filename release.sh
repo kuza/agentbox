@@ -66,6 +66,10 @@ dist="$SCRIPT_DIR/dist"
 mkdir -p "$dist"
 tarball="$dist/agentbox-$v.tar.gz"
 git -c gpg.format=ssh -c user.signingkey="$signer" tag -s "$v" -m "agentbox $v"
+# Until the tag is pushed, any stop takes it back, so that a rerun can make
+# it again.
+pushed=""
+trap '[[ -n "$pushed" ]] || { git tag -d "$v" >/dev/null 2>&1 && echo "release: tag $v deleted again" >&2; }' EXIT
 git archive --prefix="agentbox-$v/" -o "$tarball" "$v"
 rm -f -- "$tarball.sig"
 ssh-keygen -q -Y sign -f "$signer" -n "$RELEASE_NAMESPACE" "$tarball"
@@ -79,8 +83,9 @@ echo "release: $tarball, signed and verified"
 if [[ "${AB_RELEASE_YES:-}" != 1 ]]; then
   reply=""
   read -r -p "release: push tag $v and publish the GitHub release? [y/N] " reply || true
-  [[ "$reply" == [yY]* ]] || { echo "release: stopped; delete the tag with: git tag -d $v"; exit 0; }
+  [[ "$reply" == [yY]* ]] || { echo "release: stopped"; exit 0; }
 fi
+pushed=1
 git push origin "$v"
 gh release create "$v" "$tarball" "$tarball.sig" --title "agentbox $v" --notes-file "$dist/notes-$v.md"
 echo "release: $v published"

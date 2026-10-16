@@ -9,6 +9,14 @@ the steps a release needs from you, such as a rebuild.
 - Tab completion for `agentbox` in bash (`completions/agentbox.bash`),
   linked at install and at every update.
 - README: copying out of a session (OSC 52, kitty).
+- Sidecars follow their image: squid after a rebuild (v0.1.1 rebuilds it
+  once) and MCP images after a pull, without `AB_RESTART=1`.
+- `agentbox login` on podman before 4.7 (no `secret create --replace`), and
+  without building the squid image it does not use.
+- `agentbox update`: a release missing a file is reported, not a silent
+  exit; the download is removed after a failure; an install interrupted
+  earlier no longer breaks the next one.
+- `release.sh` deletes its tag again when it stops before pushing it.
 
 Action: open a new terminal tab after the update for Tab completion.
 
