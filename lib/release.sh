@@ -74,6 +74,7 @@ release_switch() {
   if [[ -n "$old" && "$old" != "$1" ]]; then echo "$old" > "$INSTALL_DIR/previous"; fi
   release_sync_git_guard
   release_sync_completion
+  release_sync_environment
   echo "agentbox: now $1"
 }
 
@@ -96,6 +97,30 @@ release_sync_completion() {
   [[ "$(readlink -- "$COMPLETION_LINK")" == "$INSTALL_DIR/current/completions/agentbox.bash" ]] && return 0
   mkdir -p "$(dirname "$COMPLETION_LINK")"
   ln -sfn "$INSTALL_DIR/current/completions/agentbox.bash" "$COMPLETION_LINK"
+}
+
+# With git-guard installed, ~/.config/environment.d/agentbox.conf puts
+# ~/.local/bin first in PATH for the whole login session, programs started
+# from the desktop (editors) too, and switches core.fsmonitor off for any
+# git (README, Git on the host). Written once, never over a file that is
+# there; agentbox uninstall removes it. Prints a note when it writes it.
+ENVIRONMENT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/agentbox.conf"
+release_sync_environment() {
+  [[ -e "$ENVIRONMENT_FILE" ]] && return 0
+  grep -qs 'agentbox git-guard' "$HOME/.local/bin/git" || return 0
+  mkdir -p "$(dirname "$ENVIRONMENT_FILE")"
+  cat > "$ENVIRONMENT_FILE" <<'CONF'
+# agentbox: git-guard (~/.local/bin/git) ahead of the system git, for every
+# program of the login session (README, Git on the host).
+PATH=$HOME/.local/bin:$PATH
+# No repository config can switch on core.fsmonitor, even for a program that
+# calls /usr/bin/git directly.
+GIT_CONFIG_COUNT=1
+GIT_CONFIG_KEY_0=core.fsmonitor
+GIT_CONFIG_VALUE_0=false
+CONF
+  echo "agentbox: wrote $ENVIRONMENT_FILE; log out and back in, then check that" \
+       "'command -v git' prints ~/.local/bin/git (README, Git on the host)" >&2
 }
 
 release_update() {  # [--yes]

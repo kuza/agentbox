@@ -8,7 +8,8 @@
 # (read-only; AB_INSTALL_DIR moves it), makes it the current version, links
 # ~/.local/bin/agentbox to it, and creates ~/.config/agentbox/config.env from
 # the example if you have none. --git-guard also installs git-guard as
-# ~/.local/bin/git (README, Git on the host); without it, you are asked.
+# ~/.local/bin/git and ~/.config/environment.d/agentbox.conf, which puts it
+# first in PATH (README, Git on the host); without it, you are asked.
 #
 # From a clone (no release version in VERSION) it refuses: run ./run.sh there
 # for development, or install a release.
@@ -61,6 +62,7 @@ fi
 if [[ -n "$guard" ]]; then
   install -m 755 "$INSTALL_DIR/current/git-guard" "$HOME/.local/bin/git"
   echo "agentbox: git-guard installed as ~/.local/bin/git"
+  release_sync_environment
 fi
 
 case ":$PATH:" in

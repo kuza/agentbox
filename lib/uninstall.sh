@@ -90,7 +90,7 @@ agentbox_uninstall() {
   if grep -qs 'agentbox git-guard' "$HOME/.local/bin/git"; then
     rm -f -- "$HOME/.local/bin/git" && echo "removed git-guard; git is the system's again"
   fi
-  rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/agentbox.conf"
+  rm -f -- "$ENVIRONMENT_FILE"
   [[ -L "$HOME/.local/bin/agentbox" ]] && rm -f -- "$HOME/.local/bin/agentbox"
   [[ -L "$COMPLETION_LINK" ]] && rm -f -- "$COMPLETION_LINK"
   if [[ -d "$INSTALL_DIR" ]]; then

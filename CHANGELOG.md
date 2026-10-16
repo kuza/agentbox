@@ -4,6 +4,18 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.3
+
+- With git-guard, agentbox writes `~/.config/environment.d/agentbox.conf`
+  (`~/.local/bin` first in `PATH` for the whole desktop session, editors
+  included; `core.fsmonitor` off for any git): at install, and at the next
+  start of an installed version that has git-guard but not the file. A
+  file that is there is never changed.
+- README: the install steps find the latest release themselves.
+
+Action: if agentbox says it wrote the environment.d file, log out and back
+in.
+
 ## v0.1.2
 
 - Tab completion for `agentbox` in bash (`completions/agentbox.bash`),

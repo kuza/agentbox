@@ -852,6 +852,10 @@ test_release_install() {
   [[ -w "$T/home/.local/share/agentbox/versions/v1.0.0/run.sh" ]] && fail "installed version writable"
   [[ "$(readlink "$T/home/.local/bin/agentbox")" == "$T/home/.local/share/agentbox/current/agentbox" ]] || fail "command not linked"
   grep -q 'agentbox git-guard' "$T/home/.local/bin/git" || fail "git-guard not installed"
+  local envf="$T/home/.config/environment.d/agentbox.conf"
+  grep -qx 'PATH=$HOME/.local/bin:$PATH' "$envf" || fail "environment.d file not written"
+  grep -qx 'GIT_CONFIG_KEY_0=core.fsmonitor' "$envf" || fail "fsmonitor not switched off"
+  assert_out "log out and back in"
   [[ -f "$CFG/config.env" ]] || fail "config.env not created"
   local comp="$T/home/.local/share/bash-completion/completions/agentbox"
   [[ "$(readlink "$comp")" == "$T/home/.local/share/agentbox/current/completions/agentbox.bash" ]] || fail "completion not linked"
@@ -886,6 +890,25 @@ test_release_completion_link() {
   ab_cmd agentbox rollback
   ab_cmd agentbox version
   assert_eq "$(cat "$comp")" "# mine" "your completion file"
+}
+
+# Without git-guard no environment.d file; with it, an installed agentbox
+# writes one at its next start, and never changes one that is there.
+test_release_environment_file() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  local envf="$T/home/.config/environment.d/agentbox.conf"
+  [[ -e "$envf" ]] && fail "written without git-guard"
+  install -m 755 "$ROOT/git-guard" "$T/home/.local/bin/git"
+  ab_cmd agentbox version
+  [[ -f "$envf" ]] || fail "not written by the command with git-guard there"
+  echo "# mine" > "$envf"
+  ab_cmd agentbox version
+  assert_eq "$(cat "$envf")" "# mine" "your environment.d file"
+  ab_cmd agentbox uninstall --yes
+  [[ -e "$envf" ]] && fail "left by uninstall"
+  return 0
 }
 
 test_release_install_keeps_your_git() {

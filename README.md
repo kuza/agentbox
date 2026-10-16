@@ -45,7 +45,7 @@ ssh-keygen -Y verify -f allowed_signers -I kuza -n agentbox-release -s agentbox-
 tar -xzf agentbox-$v.tar.gz && agentbox-$v/install.sh   # answer y to git-guard
 ```
 
-Then add `~/.local/bin` to the front of `PATH` and the `environment.d` file from [Git on the host](#git-on-the-host), and log in again.
+With git-guard, `install.sh` also writes `~/.config/environment.d/agentbox.conf`, which puts it first in `PATH` for your whole desktop session ([Git on the host](#git-on-the-host)). Log out and back in, then check that `command -v git` prints `~/.local/bin/git`.
 
 **2. Sign in to Claude:**
 
@@ -303,14 +303,14 @@ The agent commits, branches and creates worktrees in the box, so most of the rep
 
 Otherwise git stops with an explanation. Other repositories go straight to git. The check costs one `git rev-parse`, which reads the config but executes nothing from it. `tests/run.sh` reproduces the attacks with real git and checks that plain git falls for them and git-guard does not.
 
-Install it once, as a **copy**: it runs on every git call, so it must not be a link into a clone a session can write.
+`install.sh` installs it when you answer `y` (or with `--git-guard`), as a **copy**: it runs on every git call, so it must not be a link into a clone a session can write. It never replaces a `~/.local/bin/git` of your own. By hand, from a clone:
 
 ```bash
 mkdir -p ~/.local/bin
 install -m 755 git-guard ~/.local/bin/git
 ```
 
-`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...), `~/.config/environment.d/agentbox.conf`, effective at the next login:
+`~/.local/bin` must come first in `PATH`, for your shells and for programs started from the desktop (editors). On systemd desktops (Fedora, Ubuntu, ...) that is `~/.config/environment.d/agentbox.conf`, effective at the next login. agentbox writes it when it installs git-guard, and an installed agentbox writes it at its next start if git-guard is there and the file is not; it never changes a file that exists. Its content:
 
 ```
 PATH=$HOME/.local/bin:$PATH
