@@ -19,7 +19,7 @@ No host credentials are mounted into the agent container, and all service tokens
 - **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
-- **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
+- **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
 - **[Reference](#reference):** [Configuration reference](#configuration-reference) · [Files](#files) · [Tests](#tests) · [Not yet verified](#not-yet-verified)
 
 ## Getting started
@@ -57,7 +57,7 @@ cd ~/src/your-repo
 agentbox          # Claude Code in the box; agentbox pi for pi, agentbox shell for bash
 ```
 
-Next: MCP servers for Grafana, Graylog or GitHub ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Releases](#releases)).
+Next: MCP servers for Grafana, Graylog or GitHub ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Uninstall](#uninstall)).
 
 ### Requirements
 
@@ -826,7 +826,7 @@ Versions are git tags `vX.Y.Z` with a section in `CHANGELOG.md`. A release on Gi
 | `agentbox version` | The version you run; `dev` in a clone |
 | `agentbox update` | Finds the latest release, downloads it, verifies the signature against `release/allowed_signers` of the version you run now, shows its CHANGELOG section and installs it next to the old one after you confirm (`--yes`: without asking) |
 | `agentbox rollback` | Back to the version before the last switch |
-| `agentbox uninstall` | Removes agentbox from the host after showing what: containers, volumes and networks named `ab-*` (your own containers on `ab-services` are only disconnected), its images, the cache, git-guard, the command and the installed versions. It asks separately about the Podman secrets and your files in `~/.config/agentbox`. `--yes` removes without asking but keeps those two; `--yes --all` removes them too |
+| `agentbox uninstall` | Removes agentbox from the host; see [Uninstall](#uninstall) |
 
 `check-updates.sh` mentions a newer release, at most every 6 hours; it never installs one. Installed versions are read-only; `agentbox uninstall` removes them with the rest.
 
@@ -846,7 +846,7 @@ Fingerprint `SHA256:KESk+phlkaooJLO6Kk6vP2qWGmGrYrFmU66JIcJ3YBY` (ED25519); chec
 ./release.sh vX.Y.Z
 ```
 
-It checks the version, the clean and pushed `main`, the CHANGELOG section, that your signing key (`AB_RELEASE_KEY`, else `git config user.signingkey`, else `~/.ssh/id_ed25519`) is in `release/allowed_signers`, and the tests; then makes a signed tag, the archive and its signature in `dist/`, verifies the signature the way `agentbox update` will, and, after you confirm, pushes the tag and creates the GitHub release with `gh`. A new signing key goes into `release/allowed_signers` in a release signed by a key listed there already.
+It checks the version, the clean and pushed `main`, the CHANGELOG section, that your signing key (`AB_RELEASE_KEY`, else `git config user.signingkey`, else `~/.ssh/agentbox-release`) is in `release/allowed_signers`, and the tests; then makes a signed tag, the archive and its signature in `dist/`, verifies the signature the way `agentbox update` will, and, after you confirm, pushes the tag and creates the GitHub release with `gh`. A new signing key goes into `release/allowed_signers` in a release signed by a key listed there already.
 
 ### Updates
 
@@ -913,7 +913,29 @@ Images and volumes from before this cleanup existed, or from other projects, are
 
 The cache volumes grow on purpose, so that sessions do not download the same dependencies again: `ab-cache` (uv cache, Go build cache, per-repo virtualenvs) and `ab-go` (Go modules). With no session running, `podman volume rm ab-cache ab-go` empties them; the next sessions fill them again.
 
-### Troubleshooting
+### Uninstall
+
+```bash
+agentbox uninstall
+```
+
+It lists what it removes and asks before removing anything:
+
+- containers, volumes and networks named `ab-*`. Open sessions end; Claude Code and pi with their logins, session history and caches go with the volumes. Your own containers on `ab-services` ([Local services](#local-services)) are only disconnected, never removed;
+- agentbox's images: `localhost/agentbox`, `localhost/agentbox-squid` and the sidecar images;
+- the cache `~/.cache/agentbox` and its stamps;
+- git-guard (`~/.local/bin/git`, only if it is git-guard: your system git takes over again) and `~/.config/environment.d/agentbox.conf`;
+- the command `~/.local/bin/agentbox` and the installed versions in `~/.local/share/agentbox`.
+
+Then it asks two more questions, each answered no by default:
+
+- the Podman secrets agentbox and its modules use (`claude_oauth`, `openai_api_key`, the MCP tokens and caller tokens);
+- your files in `~/.config/agentbox`: `config.env`, `env/` with passwords, your skills, `AGENTS.md`, local modules.
+
+`agentbox uninstall --yes` removes without asking but keeps the secrets and your files; `--yes --all` removes those too. The repositories you opened in the box are not touched. From a clone, run `./agentbox uninstall` in it; the clone itself stays, delete it yourself.
+
+A setting from `environment.d` stays in your login session until you log out.
+
 
 ```bash
 podman logs ab-mcp-grafana        # Grafana auth or URL errors
