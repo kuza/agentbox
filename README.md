@@ -1,5 +1,8 @@
 # agentbox
 
+[![Release](https://img.shields.io/github/v/release/kuza/agentbox)](https://github.com/kuza/agentbox/releases/latest)
+[![License](https://img.shields.io/github/license/kuza/agentbox)](LICENSE)
+[![Linux, rootless Podman](https://img.shields.io/badge/Linux-rootless%20Podman-892CA0?logo=podman&logoColor=white)](#requirements)
 [![Checks](https://github.com/kuza/agentbox/actions/workflows/checks.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/checks.yml)
 [![Box](https://github.com/kuza/agentbox/actions/workflows/box.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/box.yml)
 [![Scan](https://github.com/kuza/agentbox/actions/workflows/scan.yml/badge.svg)](https://github.com/kuza/agentbox/actions/workflows/scan.yml)
