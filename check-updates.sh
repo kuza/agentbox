@@ -199,7 +199,7 @@ done
 
 if release_installed; then
   latest="$(RELEASE_TIMEOUT="$TIMEOUT" release_latest)"
-  if [[ -n "$latest" && "${latest%% *}" != "$(agentbox_version)" ]]; then
+  if [[ -n "$latest" ]] && version_newer "${latest%% *}" "$(agentbox_version)"; then
     say "update available: agentbox $(agentbox_version) -> ${latest%% *}; run: agentbox update"
   fi
 fi

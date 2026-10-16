@@ -20,6 +20,8 @@
 # ("<network> <container>" per line) list what exists.
 #   image_labels  "<image> <agentbox.build fingerprint>" per line, written by
 #                 build; an image without a line counts as current
+#   old_squid     exists: docker.io/ubuntu/squid:latest is there (else not)
+#   volumes_absent  volumes that do not exist, one per line (others do)
 #   STUB_OLD_PODMAN podman before 4.7: secret create has no --replace
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
@@ -67,7 +69,11 @@ case "$1 ${2:-}" in
     name=""; for a in "${@:3}"; do [[ "$a" == -* ]] || { name="$a"; break; }; done
     cat > "$S/secret-$name"
     grep -qx -- "$name" "$S/secrets" || echo "$name" >> "$S/secrets" ;;
-  "network exists"|"image exists"|"container exists") exit 0 ;;
+  "image exists")
+    [[ "$3" == docker.io/ubuntu/squid:latest ]] && { [[ -f "$S/old_squid" ]]; exit; }
+    exit 0 ;;
+  "volume exists") ! grep -qx -- "$3" "$S/volumes_absent" 2>/dev/null ;;
+  "network exists"|"container exists") exit 0 ;;
   "network create"|"network connect"|"start "*) exit 0 ;;
   "build "*)
     tag=""; fp=""; prev=""
@@ -92,7 +98,10 @@ case "$1 ${2:-}" in
       grep -v "^$3 " "$S/image_ids" > "$S/image_ids.new"; mv "$S/image_ids.new" "$S/image_ids"
       echo "$3 new-$3" >> "$S/image_ids"
     fi ;;
-  "rmi "*) [[ " ${STUB_RMI_FAIL:-} " != *" $2 "* ]] ;;
+  "rmi "*)
+    [[ " ${STUB_RMI_FAIL:-} " != *" $2 "* ]] || exit 1
+    [[ "$2" == docker.io/ubuntu/squid:latest ]] && rm -f "$S/old_squid"
+    exit 0 ;;
   "image inspect")
     case "$*" in
       *Created.Unix*) [[ -n "${STUB_IMAGE_CREATED:-}" ]] && echo "$STUB_IMAGE_CREATED" || echo x ;;

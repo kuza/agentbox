@@ -78,6 +78,11 @@ image_retire() {  # <image>
 # nothing new) is dropped from the list and kept.
 images_cleanup() {
   local img id keep=()
+  # Fails while a container still uses it (an ab-egress from before).
+  if [[ -n "${IMG_SQUID_OLD:-}" ]] && podman image exists "$IMG_SQUID_OLD" \
+     && podman rmi "$IMG_SQUID_OLD" >/dev/null 2>&1; then
+    echo "agentbox: removed $IMG_SQUID_OLD, replaced by $IMG_SQUID" >&2
+  fi
   [[ -s "$RETIRED_IMAGES" ]] || return 0
   while read -r img id; do
     [[ -n "$id" ]] || continue

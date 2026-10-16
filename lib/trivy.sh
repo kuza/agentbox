@@ -15,10 +15,13 @@
 TRIVY_CACHE=/home/node/.cache/trivy
 
 trivy_update() {
-  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.trivy.updated"
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox.trivy.updated" have=""
   TRIVY_ARGS=()
   [[ "${AB_TRIVY:-}" == 1 ]] || return 0
-  if [[ "${AB_UPDATE:-}" == 1 || ! -f "$stamp" ]] \
+  # A database: the volume (podman volume prune removes it, however fresh
+  # the stamp) and a download that once succeeded.
+  [[ -f "$stamp" ]] && podman volume exists ab-trivy && have=1
+  if [[ "${AB_UPDATE:-}" == 1 || -z "$have" ]] \
      || (( $(date +%s) - $(stat -c %Y "$stamp") > UPDATE_EVERY )); then
     echo "agentbox: updating the Trivy database..." >&2
     if podman run --rm --network ab-egress --userns="$USERNS" \
@@ -30,8 +33,11 @@ trivy_update() {
     elif ! podman run --rm --network none --entrypoint sh "$IMAGE" -c 'command -v trivy' >/dev/null 2>&1; then
       echo "error: AB_TRIVY=1, but the agentbox image has no Trivy; rebuild it: AB_UPGRADE=1 agentbox" >&2
       exit 1
-    else
+    elif [[ -n "$have" ]]; then
       echo "agentbox: warning: Trivy database update failed, using the one there is" >&2
+    else
+      echo "agentbox: warning: Trivy database download failed; trivy fails in this session," \
+           "a later start tries again" >&2
     fi
   fi
   # memory: no scan cache written into the read-only volume.

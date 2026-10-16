@@ -26,7 +26,7 @@ uninstall_names() {  # <MCP_ variable>
 }
 
 agentbox_uninstall() {
-  local yes="" all="" reply secrets_too="" files_too="" a c v n
+  local yes="" all="" reply secrets_too="" files_too="" a c v n id
   for a in "$@"; do
     case "$a" in
       --yes) yes=1 ;;
@@ -67,7 +67,12 @@ agentbox_uninstall() {
   for v in $(podman volume ls --format '{{.Name}}' 2>/dev/null | grep '^ab-'); do
     podman volume rm "$v" >/dev/null && echo "removed volume $v"
   done
-  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES); do
+  # Replaced images kept for a session that still ran on them: their record
+  # goes with the cache below.
+  while read -r _ id; do
+    [[ -n "${id:-}" ]] && podman rmi "$id" >/dev/null 2>&1 && echo "removed image $id (replaced earlier)"
+  done < <(cat "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images" 2>/dev/null)
+  for v in "$IMAGE" "$IMG_SQUID" "$IMG_SQUID_OLD" "$IMG_NGINX" $(uninstall_names MCP_IMAGES); do
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then

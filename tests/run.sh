@@ -81,6 +81,14 @@ ab_run() {
   RC=$?
 }
 
+# ab_run_repo <dir>: run.sh with <dir> as the repo.
+ab_run_repo() {
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_UPDATES=0 \
+      bash "$AB/run.sh" "$1" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+
 # The session's podman run command, one argument per line.
 session_args() {
   grep -E '^podman run --rm -i' "$STUB_DIR/calls" | tail -1 | tr ' ' '\n'
@@ -880,6 +888,29 @@ test_release_completion_link() {
   assert_eq "$(cat "$comp")" "# mine" "your completion file"
 }
 
+test_release_install_keeps_your_git() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  printf '#!/bin/sh\n# my own git\n' > "$T/home/.local/bin/git"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
+  assert_rc 0
+  assert_out "is not git-guard; left as it is"
+  grep -q 'my own git' "$T/home/.local/bin/git" || fail "your git replaced"
+}
+
+# GitHub's "latest" older than what runs: no downgrade, no nagging.
+test_release_older_latest_not_offered() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.1.0
+  ab_cmd bash "$T/rel/agentbox-v1.1.0/install.sh"
+  make_release v1.0.0
+  pack v1.0.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  assert_out "v1.1.0 is the latest release"
+  assert_eq "$(current_version)" v1.1.0 "after update"
+}
+
 test_release_missing_asset() {
   rel_setup "${FUNCNAME[0]}"
   make_release v1.0.0
@@ -996,6 +1027,7 @@ test_uninstall() {
   printf '%s\n' "ab-services redis" "ab-services ab-claude-7" > "$STUB_DIR/netconns"
   printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller mine > "$STUB_DIR/secrets"
   mkdir -p "$T/home/.cache/agentbox"
+  echo "localhost/agentbox old-image-id" > "$T/home/.cache/agentbox/retired-images"
   : > "$STUB_DIR/calls"
   env HOME="$T/home" PATH="$T/bin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes > "$T/out" 2>&1 < /dev/null
   RC=$?
@@ -1005,6 +1037,7 @@ test_uninstall() {
   assert_eq "$(paste -sd' ' "$STUB_DIR/networks")" "podman" "networks left"
   grep -qx 'podman network disconnect ab-services redis' "$STUB_DIR/calls" || fail "redis not disconnected"
   grep -q '^podman network rm -f' "$STUB_DIR/calls" && fail "network rm -f would remove your containers"
+  grep -qx 'podman rmi old-image-id' "$STUB_DIR/calls" || fail "replaced image left behind"
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller mine" "secrets kept"
   [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
   [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
@@ -1113,6 +1146,11 @@ test_trivy() {
   # Within UPDATE_EVERY: no new download.
   ab_run --
   grep -q 'download-db-only' "$STUB_DIR/calls" && fail "database downloaded again within the interval"
+  # A removed volume holds no database, however fresh the stamp.
+  echo ab-trivy > "$STUB_DIR/volumes_absent"
+  ab_run --
+  grep -q 'download-db-only' "$STUB_DIR/calls" || fail "database not fetched into a removed volume"
+  : > "$STUB_DIR/volumes_absent"
   # An image without Trivy: a clear error.
   ab_run AB_UPDATE=1 STUB_NO_TRIVY=1 --
   assert_rc 1
@@ -1131,6 +1169,16 @@ test_squid_built_here() {
   assert_rc 0
   grep -q '^podman build --layers=false --pull --no-cache --label agentbox.build=[0-9a-f]* -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
     || fail "squid not rebuilt on AB_UPGRADE: $(grep 'podman build' "$STUB_DIR/calls")"
+}
+
+test_old_squid_image_removed() {
+  setup "${FUNCNAME[0]}"
+  touch "$STUB_DIR/old_squid"
+  ab_run --
+  assert_rc 0
+  assert_out "removed docker.io/ubuntu/squid:latest, replaced by localhost/agentbox-squid"
+  ab_run --
+  assert_no_out "ubuntu/squid"
 }
 
 test_updates_local_images_age() {
@@ -1347,6 +1395,14 @@ test_refuses_agentbox_code_and_user_files() {
     assert_rc 2
     assert_out "refusing to mount $r: it overlaps"
     grep -q '^podman run' "$STUB_DIR/calls" && fail "$r: something started"
+  done
+  # Another installed version (rollback would run it), and the directory of
+  # git-guard (it runs on every git call on the host).
+  mkdir -p "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin"
+  for r in "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin"; do
+    ab_run_repo "$r"
+    assert_rc 2
+    assert_out "refusing to mount $r: it overlaps"
   done
   # A separate clone of agentbox is an ordinary repo.
   cp -R "$AB" "$T/clone"

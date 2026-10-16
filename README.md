@@ -91,7 +91,7 @@ tar -xzf agentbox-$v.tar.gz
 agentbox-$v/install.sh
 ```
 
-`install.sh` puts the release into `~/.local/share/agentbox/versions/`, links `~/.local/bin/agentbox` to it, creates `~/.config/agentbox/config.env` from the example, and offers to install [git-guard](#git-on-the-host). From then on `agentbox update` brings newer releases, verifying their signatures itself.
+`install.sh` puts the release into `~/.local/share/agentbox/versions/`, links `~/.local/bin/agentbox` to it, creates `~/.config/agentbox/config.env` from the example, and offers to install [git-guard](#git-on-the-host) (never over a `~/.local/bin/git` of your own). From then on `agentbox update` brings newer releases, verifying their signatures itself.
 
 Set up `config.env`. Choose the MCP servers with `AB_MCP`, e.g. `AB_MCP=grafana graylog`, and set what those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL` (base URLs only, without `/api` or `/api/mcp`; trailing parts are stripped anyway). Context7 is always on; skip the steps below for servers you do not use. See [MCP servers](#mcp-servers).
 
@@ -197,7 +197,7 @@ agentbox pi [repo-dir] [pi args...]         pi
 agentbox shell [repo-dir] [bash args...]    bash in the same box, no agent
 ```
 
-If the first argument is an existing directory, it is mounted as the repo. Otherwise the **current directory** is used and all arguments go to the agent. It prints which directory it mounts, and refuses to mount agentbox's own code or your files in `~/.config/agentbox`.
+If the first argument is an existing directory, it is mounted as the repo. Otherwise the **current directory** is used and all arguments go to the agent. It prints which directory it mounts, and refuses to mount agentbox's own code, the installed versions, git-guard or your files in `~/.config/agentbox`.
 
 ```bash
 cd ~/src/myrepo && agentbox                      # current directory
@@ -319,7 +319,7 @@ GIT_CONFIG_VALUE_0=false
 
 Check with `command -v git` (should print `~/.local/bin/git`) in a terminal and in your editor's terminal. Editors with a setting for the git executable (VS Code `git.path`, JetBrains "Path to Git executable") can point at `~/.local/bin/git` explicitly. `run.sh` warns at every start while `git` is not git-guard.
 
-Update the copy when you update agentbox (`install -m 755 git-guard ~/.local/bin/git` from the copy you run).
+An installed agentbox updates the copy at every `agentbox update` and `rollback`. Running from a clone, update it yourself (`install -m 755 git-guard ~/.local/bin/git` from the copy you run).
 
 What it does not cover, because the agent writes the files that git on the host then uses:
 
@@ -1105,7 +1105,7 @@ Your settings and data live apart from the code, in `~/.config/agentbox/` (`AB_H
 | `egress.local.d/<name>.conf` | Your own egress groups |
 | `pi-extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi |
 
-`run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
+`run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code, any installed version (`~/.local/share/agentbox`; `agentbox rollback` would run it), git-guard (`~/.local/bin/git`) or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
 
 Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS.md`, `pi/extensions/` for `pi-extensions/`). While any is still there, `run.sh` stops before starting anything and prints the commands that move it.
 

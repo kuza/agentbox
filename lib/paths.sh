@@ -36,13 +36,15 @@ OLD_PLACES=(
   "pi/extensions pi-extensions"
 )
 
-# Refuses a repo that is, contains or lies inside agentbox's code or your
-# files: a session could change code that runs on the host, or read the
-# passwords in env/. Run once the settings are read (AB_ENV_DIR,
-# AB_SKILLS_DIR, AB_CONFIG may move them).
+# Refuses a repo that is, contains or lies inside agentbox's code, the other
+# installed versions, git-guard or your files: a session could change code
+# that runs on the host (rollback switches to another version; git-guard
+# runs on every git call), or read the passwords in env/. Run once the
+# settings are read (AB_ENV_DIR, AB_SKILLS_DIR, AB_CONFIG may move them).
+# Needs INSTALL_DIR (lib/release.sh).
 user_paths_check_repo() {  # <repo> <env dir> <skills dir> <config file>
   local repo="$1" p what
-  for p in "code:$SCRIPT_DIR" "your files:$AB_HOME_DIR" "env dir:$2" "skills dir:$3" "config file:$4"; do
+  for p in "code:$SCRIPT_DIR" "installed versions:$INSTALL_DIR" "git-guard:$HOME/.local/bin/git" "your files:$AB_HOME_DIR" "env dir:$2" "skills dir:$3" "config file:$4"; do
     what="${p%%:*}"; p="$(realpath -m -- "${p#*:}")"
     if [[ "$repo" == "$p" || "$p" == "$repo"/* || "$repo" == "$p"/* || "$repo" == / ]]; then
       echo "error: refusing to mount $repo: it overlaps agentbox's $what ($p)." >&2

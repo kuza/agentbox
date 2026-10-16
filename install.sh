@@ -47,8 +47,15 @@ if [[ ! -e "$USER_CONFIG" ]]; then
   echo "agentbox: created $USER_CONFIG from the example; edit it (README, Quick start)"
 fi
 
-if [[ -z "$guard" && -t 0 ]] && ! grep -qs 'agentbox git-guard' "$HOME/.local/bin/git"; then
-  read -r -p "agentbox: install git-guard as ~/.local/bin/git (README, Git on the host)? [Y/n] " reply
+gitbin="$HOME/.local/bin/git"
+if [[ ( -e "$gitbin" || -L "$gitbin" ) ]] && ! grep -qs 'agentbox git-guard' "$gitbin"; then
+  # Your own git or wrapper there: never replaced.
+  [[ -n "$guard" || -t 0 ]] && echo "agentbox: ~/.local/bin/git is not git-guard; left as it is." \
+    "To use git-guard (README, Git on the host), move it away, then:" \
+    "install -m 755 '$INSTALL_DIR/current/git-guard' ~/.local/bin/git"
+  guard=""
+elif [[ -z "$guard" && -t 0 ]] && ! grep -qs 'agentbox git-guard' "$gitbin"; then
+  read -r -p "agentbox: install git-guard as ~/.local/bin/git (README, Git on the host)? [Y/n] " reply || reply=n
   [[ "$reply" == [nN]* ]] || guard=1
 fi
 if [[ -n "$guard" ]]; then

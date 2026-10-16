@@ -17,6 +17,15 @@ the steps a release needs from you, such as a rebuild.
   exit; the download is removed after a failure; an install interrupted
   earlier no longer breaks the next one.
 - `release.sh` deletes its tag again when it stops before pushing it.
+- `run.sh` refuses to mount the other installed versions (`agentbox
+  rollback` would run code a session changed) and git-guard's directory.
+- `install.sh` never puts git-guard over a `~/.local/bin/git` of your own.
+- `agentbox update` and the update check no longer offer an older release
+  as an update.
+- The `docker.io/ubuntu/squid` image of v0.1.0 and earlier is removed once
+  no container uses it; `agentbox uninstall` also removes images replaced
+  earlier that a session still held.
+- Trivy: a removed `ab-trivy` volume is filled again at the next start.
 
 Action: open a new terminal tab after the update for Tab completion.
 

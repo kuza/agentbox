@@ -27,6 +27,11 @@ agentbox_version() {  # [dir]
   if [[ "$v" =~ $VERSION_RE ]]; then echo "$v"; else echo dev; fi
 }
 
+# version_newer <a> <b>: 0 if release version a is newer than b.
+version_newer() {
+  [[ "$1" != "$2" && "$(printf '%s\n%s\n' "${1#v}" "${2#v}" | sort -V | tail -n1)" == "${1#v}" ]]
+}
+
 # release_verify <tarball> <signature> <allowed_signers>: 0 if a trusted key
 # signed the tarball for agentbox releases.
 release_verify() {
@@ -107,7 +112,7 @@ release_update() {  # [--yes]
     return 1
   fi
   read -r tag tar_url sig_url <<<"$latest"
-  if [[ "$tag" == "$current" ]]; then
+  if ! version_newer "$tag" "$current"; then
     echo "agentbox: $current is the latest release"
     return 0
   fi
@@ -135,7 +140,7 @@ release_update() {  # [--yes]
   release_notes "$tmp/x/agentbox-$tag/CHANGELOG.md" "$tag" | sed 's/^/  /'
   if [[ -z "$yes" ]]; then
     local reply=""
-    if [[ -t 0 ]]; then read -r -p "agentbox: install $tag? [y/N] " reply; fi
+    if [[ -t 0 ]]; then read -r -p "agentbox: install $tag? [y/N] " reply || reply=""; fi
     [[ "$reply" == [yY]* ]] || { echo "agentbox: not installed"; return 0; }
   fi
   release_place "$tmp/x/agentbox-$tag" "$tag"

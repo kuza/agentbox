@@ -67,7 +67,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
-for lib in config images agent sidecars mcp egress forward services skills trivy session; do
+for lib in config release images agent sidecars mcp egress forward services skills trivy session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
