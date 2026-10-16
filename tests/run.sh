@@ -570,6 +570,25 @@ test_guard_clean_and_unlisted_repos_pass() {
   assert_rc 0
 }
 
+# Two copies in PATH (one installed, one in a test or an older place): each
+# skips the other instead of calling it forever.
+test_guard_two_copies_in_path() {
+  gg_setup "${FUNCNAME[0]}"
+  mkdir -p "$T/gbin2"
+  cp "$ROOT/git-guard" "$T/gbin2/git"
+  chmod +x "$T/gbin2/git"
+  (cd "$R" && env HOME="$T/home" PATH="$T/gbin:$T/gbin2:$PATH" timeout 20 git status --short) > "$T/out" 2>&1
+  RC=$?
+  assert_rc 0
+  evil_common_dir "$R/evil"
+  echo ../evil > "$R/.git/commondir"
+  (cd "$R" && env HOME="$T/home" PATH="$T/gbin:$T/gbin2:$PATH" timeout 20 git status --short) > "$T/out" 2>&1
+  RC=$?
+  assert_rc 1
+  assert_out "commondir exists"
+  assert_out "this check is the wrapper $T/gbin/git"
+}
+
 test_guard_stops_commondir() {
   gg_setup "${FUNCNAME[0]}"
   evil_common_dir "$R/evil"

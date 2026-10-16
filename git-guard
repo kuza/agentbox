@@ -34,10 +34,18 @@ set -u
 say() { echo "agentbox git-guard: $*" >&2; }
 
 self="$(realpath -- "${BASH_SOURCE[0]}")"
+# The real git: the first git in PATH that is not a git-guard, this one or
+# another copy (two copies would otherwise call each other forever). Only a
+# script can be one; a binary is not read past its first two bytes.
+is_guard() {  # <file>
+  local head=""
+  IFS= read -r -n 2 head < "$1" 2>/dev/null
+  [[ "$head" == '#!' ]] && grep -qs 'agentbox git-guard' "$1"
+}
 real=""
 IFS=: read -ra path_dirs <<< "${PATH:-}"
 for d in "${path_dirs[@]}"; do
-  if [[ -n "$d" && -x "$d/git" && ! -d "$d/git" && "$(realpath -- "$d/git")" != "$self" ]]; then
+  if [[ -n "$d" && -x "$d/git" && ! -d "$d/git" ]] && ! is_guard "$d/git"; then
     real="$d/git"
     break
   fi

@@ -11,6 +11,9 @@ the steps a release needs from you, such as a rebuild.
   `AB_GOLANGCI_LINT_VERSION` or `AB_GRAPHIFY_EXTRAS` applies at the next
   start, no `AB_UPGRADE=1` needed. Each image carries a fingerprint of what
   it was built from (label `agentbox.build`).
+- git-guard skips any copy of itself when it looks for the real git: with
+  two copies in PATH (an installed one and another) each called the other
+  forever. Hit by `tests/run.sh` on a host with git-guard installed.
 - README: an Uninstall section; release, license and platform badges.
 
 Action: none. The first start after the update rebuilds the agentbox and
