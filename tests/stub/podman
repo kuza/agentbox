@@ -50,7 +50,11 @@ case "$1 ${2:-}" in
       echo "Error: network $3 is in use" >&2; exit 2
     fi
     drop networks "${*: -1}" ;;
-  "secret create") cat > /dev/null; echo "$3" >> "$S/secrets" ;;
+  "secret create")
+    # secret create [--replace] <name> -: the value goes to secret-<name>.
+    name=""; for a in "${@:3}"; do [[ "$a" == -* ]] || { name="$a"; break; }; done
+    cat > "$S/secret-$name"
+    grep -qx -- "$name" "$S/secrets" || echo "$name" >> "$S/secrets" ;;
   "network exists"|"image exists"|"container exists") exit 0 ;;
   "network create"|"network connect"|"start "*) exit 0 ;;
   "build "*) [[ -n "${STUB_BUILT_ID:-}" ]] && echo "$STUB_BUILT_ID" > "$S/agentbox_id"; exit 0 ;;

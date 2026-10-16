@@ -21,6 +21,8 @@
 # Settings / environment overrides:
 #   AB_HOME           directory with your files (default: ~/.config/agentbox)
 #   AB_CONFIG         path of the config file (default: <AB_HOME>/config.env)
+#   AB_LOGIN=1        only sign in: a Claude Code token into the claude_oauth
+#                     secret (agentbox login), no session
 #   AB_AGENT          claude (default), pi, or shell: bash in the same box
 #                     instead of an agent, arguments go to bash (README,
 #                     Escape checks)
@@ -72,13 +74,16 @@ done
 # agent. Paths are resolved relative to the CALLER's working directory, before
 # anything else, so "." and "../repo" mount what you expect.
 # ---------------------------------------------------------------------------
-if [[ $# -gt 0 && -d "$1" ]]; then
+# AB_LOGIN=1 (agentbox login) only gets a Claude Code token: no repository.
+if [[ "${AB_LOGIN:-}" == 1 ]]; then
+  REPO=""
+elif [[ $# -gt 0 && -d "$1" ]]; then
   REPO="$(realpath -e -- "$1")"
   shift
 else
   REPO="$(realpath -e -- "$PWD")"
 fi
-echo "agentbox: repo $REPO" >&2
+[[ -n "$REPO" ]] && echo "agentbox: repo $REPO" >&2
 # Mount point inside the session, named after the repo directory. Agents key
 # their per-project state by working directory (Claude Code: memory, session
 # history, project permissions), so one fixed path for every repo would make
@@ -106,6 +111,17 @@ for arg in PYTHON_VERSIONS GO_VERSION GOLANGCI_LINT_VERSION; do
   var="AB_$arg"
   [[ -n "${!var+x}" ]] && BUILD_ARGS+=(--build-arg "$arg=${!var}")
 done
+
+# agentbox login: the image and Claude Code, then a browser sign-in for a
+# token, stored as the claude_oauth secret. Nothing else starts.
+if [[ "${AB_LOGIN:-}" == 1 ]]; then
+  agent_select
+  networks_create
+  podman image exists "$IMAGE" || build_image
+  agent_update
+  agent_login
+  exit 0
+fi
 
 skills_init
 user_paths_check_repo "$REPO" "${AB_ENV_DIR:-$USER_ENV_DIR}" "$SKILLS_DIR" "$CONFIG_FILE"
@@ -150,6 +166,8 @@ podman image exists "$IMAGE" \
   || build_image
 
 agent_update
+# No token yet and you said yes at agent_check_secrets: sign in now.
+[[ -n "${AGENT_NEEDS_LOGIN:-}" ]] && agent_login
 agent_prepare_home
 
 mcp_write_configs

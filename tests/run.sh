@@ -933,6 +933,55 @@ test_uninstall_asks() {
   [[ -e "$T/home/.local/share/agentbox/current" ]] || fail "removed without confirmation"
 }
 
+# --- agentbox login: a real terminal through script(1) ---
+
+# tty_run <input> <env...> -- <run.sh args...>: run.sh on a pseudo-terminal,
+# <input> typed into it.
+tty_run() {
+  local input="$1"; shift
+  local envs=()
+  while (( $# )) && [[ "$1" != -- ]]; do envs+=("$1"); shift; done
+  [[ "${1:-}" == -- ]] && shift
+  : > "$STUB_DIR/calls"
+  printf '%b' "$input" | script -qec "$(printf '%q ' env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
+      PATH="$T/bin:$PATH" STUB_DIR="$STUB_DIR" AB_CHECK_UPDATES=0 ${envs[@]+"${envs[@]}"} bash "$AB/run.sh" "$@")" /dev/null \
+      > "$T/out" 2>&1
+  RC=$?
+}
+
+test_login() {
+  command -v script >/dev/null || return 0
+  setup "${FUNCNAME[0]}"
+  : > "$STUB_DIR/secrets"
+  tty_run 'sk-ant-oat01-abc123\n' AB_LOGIN=1 --
+  assert_rc 0
+  assert_out "token stored as the podman secret claude_oauth"
+  grep -q 'podman run --rm -it .* localhost/agentbox setup-token' "$STUB_DIR/calls" || fail "setup-token not run"
+  assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abc123 "stored token"
+  grep -q '^podman run --rm -i .*--name ab-claude' "$STUB_DIR/calls" && fail "a session started"
+  # The browser's code is not the token: nothing stored.
+  tty_run 'Xy7_browser-code\n' AB_LOGIN=1 --
+  assert_rc 1
+  assert_out "that is not the token"
+  assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abc123 "token after a wrong paste"
+}
+
+test_first_start_offers_login() {
+  command -v script >/dev/null || return 0
+  setup "${FUNCNAME[0]}"
+  : > "$STUB_DIR/secrets"
+  tty_run 'y\nsk-ant-oat01-first\n' --
+  assert_rc 0
+  assert_out "no Claude Code token yet"
+  assert_eq "$(cat "$STUB_DIR/secret-claude_oauth" 2>/dev/null)" sk-ant-oat01-first "stored token"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start after the sign-in"
+  # Saying no stops with the usual error.
+  : > "$STUB_DIR/secrets"
+  tty_run 'n\n' --
+  assert_rc 1
+  assert_out "missing podman secrets: claude_oauth"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {

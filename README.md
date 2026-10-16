@@ -38,24 +38,13 @@ tar -xzf agentbox-$v.tar.gz && agentbox-$v/install.sh   # answer y to git-guard
 
 Then add `~/.local/bin` to the front of `PATH` and the `environment.d` file from [Git on the host](#git-on-the-host), and log in again.
 
-**2. Get a Claude token**, inside the box, so Claude Code is not needed on the host:
+**2. Sign in to Claude:**
 
 ```bash
-cd ~/.local/share/agentbox/current
-podman network create ab-egress
-podman build -t localhost/agentbox -f Containerfile .
-podman run --rm --network ab-egress --userns=keep-id:uid=1000,gid=1000 \
-  -v ab-claude-tools:/opt/claude --entrypoint npm localhost/agentbox \
-  install -g --prefix /opt/claude @anthropic-ai/claude-code@latest
-podman run --rm -it --network ab-egress --userns=keep-id:uid=1000,gid=1000 \
-  -v ab-claude-tools:/opt/claude:ro localhost/agentbox setup-token
+agentbox login
 ```
 
-Open the URL, sign in, paste the browser's code back; the terminal prints the token (`sk-ant-oat01-...`). Store it, one line at a time:
-
-```bash
-read -rsp 'Claude token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman secret create claude_oauth -; echo; unset T
-```
+It builds the image (a few minutes the first time), installs Claude Code in the box, and starts `claude setup-token` there: open the URL it prints, sign in, paste the browser's code back, then paste the token it prints (`sk-ant-oat01-...`) at the hidden prompt. The token is stored as the Podman secret `claude_oauth`. Run it again when the token expires; a first `agentbox` without a token offers it too.
 
 **3. Work:**
 
@@ -123,6 +112,8 @@ Only for the MCP servers you enable.
 - **Graylog:** create a dedicated user with a read-only role, then System → Users and Teams → *Tokens* → create an API token. Enable MCP in Graylog's settings.
 
 #### 3. Create networks, build the image, install Claude Code
+
+`agentbox login` does steps 3 and 4 and the `claude_oauth` part of step 5 for you, interactively. The manual way:
 
 ```bash
 podman network create --internal ab-internal
@@ -1021,7 +1012,7 @@ AB_RESTART=1 ./run.sh .
 
 | File | Purpose |
 |---|---|
-| `agentbox` | The command `install.sh` links into `~/.local/bin`: `agentbox [repo]`, `pi`, `shell`, `version`, `update`, `rollback`, `uninstall`. See [Releases](#releases) |
+| `agentbox` | The command `install.sh` links into `~/.local/bin`: `agentbox [repo]`, `pi`, `shell`, `login`, `version`, `update`, `rollback`, `uninstall`. See [Releases](#releases) |
 | `install.sh`, `release.sh` | Install an unpacked release; publish one (maintainers). See [Releases](#releases) |
 | `VERSION`, `CHANGELOG.md`, `release/allowed_signers` | The release version (written by `git archive`), the changes per release, the keys updates must be signed with |
 | `run.sh` | Entry point: the steps in order (config, image, updates, sidecars, session); the steps themselves are in `lib/` |

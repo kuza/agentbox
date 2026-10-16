@@ -5,6 +5,8 @@
 #   agentbox [repo-dir] [agent args...]   Claude Code in the box (run.sh)
 #   agentbox pi [repo-dir] [args...]      pi
 #   agentbox shell [repo-dir] [args...]   bash in the box instead of an agent
+#   agentbox login                        a Claude Code token (browser sign-in),
+#                                         stored as the claude_oauth secret
 #   agentbox version                      this version
 #   agentbox update [--yes]               the newest signed release, after
 #                                         showing its changes
@@ -23,6 +25,7 @@ source "$SCRIPT_DIR/lib/release.sh"
 case "${1:-}" in
   pi)       shift; exec env AB_AGENT=pi "$SCRIPT_DIR/run.sh" "$@" ;;
   shell)    shift; exec env AB_AGENT=shell "$SCRIPT_DIR/run.sh" "$@" ;;
+  login)    shift; exec env AB_LOGIN=1 "$SCRIPT_DIR/run.sh" "$@" ;;
   version)  agentbox_version ;;
   update)   shift; release_update "$@" ;;
   rollback) release_rollback ;;

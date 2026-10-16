@@ -53,14 +53,58 @@ agent_select() {
 }
 
 agent_check_secrets() {
-  local s missing=()
+  local s missing=() reply=""
   for s in ${AGENT_SECRETS[@]+"${AGENT_SECRETS[@]}"}; do
     podman secret inspect "$s" >/dev/null 2>&1 || missing+=("$s")
   done
-  if (( ${#missing[@]} )); then
-    echo "error: missing podman secrets: ${missing[*]} (see README.md, step 5)" >&2
+  (( ${#missing[@]} )) || return 0
+  # Only the Claude Code token is missing, and you are at a terminal: offer
+  # the sign-in (agent_login, after Claude Code is installed).
+  if [[ "${missing[*]}" == claude_oauth && -t 0 && -t 1 ]]; then
+    echo "agentbox: no Claude Code token yet (podman secret claude_oauth)" >&2
+    read -r -p "agentbox: get one now, with a sign-in in your browser? [Y/n] " reply || reply=n
+    if [[ "$reply" != [nN]* ]]; then
+      AGENT_NEEDS_LOGIN=1
+      return 0
+    fi
+  fi
+  echo "error: missing podman secrets: ${missing[*]} (agentbox login, or README, First-time setup)" >&2
+  exit 1
+}
+
+# A long-lived Claude Code token: `claude setup-token` in the box prints a
+# URL; you sign in in your browser and paste the code shown there back into
+# it; it prints the token, which you paste here (hidden). The browser's code
+# is not the token, hence the prefix check. Stored as claude_oauth, replacing
+# one that is there (also for a token that expired); running sessions keep
+# the old one until they restart.
+agent_login() {
+  local token=""
+  if [[ "$AGENT" != claude ]]; then
+    echo "error: agentbox login gets a Claude Code token; pi signs in inside its session (/login)" >&2
+    exit 2
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "error: agentbox login needs a terminal" >&2
+    exit 2
+  fi
+  echo "agentbox: open the URL below, sign in, and paste the code from the browser back here" >&2
+  if ! podman run --rm -it --network ab-egress --userns="$USERNS" \
+       -v "$AGENT_VOL:$AGENT_PREFIX:ro" "$IMAGE" setup-token; then
+    echo "error: claude setup-token failed; run agentbox login again and paste a fresh code" >&2
     exit 1
   fi
+  echo "agentbox: now paste the token printed above (it starts with sk-ant-oat01-; the input is hidden)" >&2
+  read -rsp "Claude token: " token || true
+  echo >&2
+  token="${token//[[:space:]]/}"
+  if [[ "$token" != sk-ant-oat01-* ]]; then
+    echo "error: that is not the token: it starts with sk-ant-oat01-, the code from the browser does not" \
+         "(README, Token not picked up); nothing stored" >&2
+    exit 1
+  fi
+  printf '%s' "$token" | podman secret create --replace claude_oauth - >/dev/null
+  echo "agentbox: token stored as the podman secret claude_oauth" >&2
 }
 
 # Runs in a short-lived container that HAS internet access but has neither the

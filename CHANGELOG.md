@@ -22,6 +22,8 @@ The first release.
 - Your files apart from the code, in `~/.config/agentbox/`.
 - `git-guard`: host git refuses repositories whose `.git` a session
   redirected (README, Git on the host).
+- `agentbox login`: the Claude Code token through a browser sign-in in the
+  box, also offered at the first start without one.
 - Installation and signed updates: `install.sh`, `agentbox update`,
   `agentbox rollback`; `agentbox uninstall` removes it all again.
 - Checks: `tests/run.sh` with a podman stand-in and real git attacks;
