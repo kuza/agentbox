@@ -50,16 +50,25 @@ jobs:
       - name: Build the image, start repo A's sidecars
         run: AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-a" -c true
 
-      - name: No rebuild without a change
+      - name: No rebuild or recreation without a change
         # The images carry their build fingerprint, and podman's label filter
-        # finds it: a second start builds nothing.
+        # finds it: a second start builds nothing. The sidecars run the
+        # images their tags name, and start_sidecar sees that on real podman:
+        # a second start keeps every sidecar container.
         run: |
           set -eu
           for i in localhost/agentbox localhost/agentbox-squid; do
             echo "$i: $(podman image inspect -f '{{index .Labels "agentbox.build"}}' "$i")"
           done
+          sidecars() { podman ps --format '{{.Names}} {{.ID}}' | grep '^ab-' | grep -v '^ab-claude-' | sort; }
+          sidecars | tee "$RUNNER_TEMP/sidecars.before"
           AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-a" -c true 2>&1 | tee "$RUNNER_TEMP/second.out"
           if grep -q 'rebuilding' "$RUNNER_TEMP/second.out"; then echo "rebuilt without a change"; exit 1; fi
+          sidecars > "$RUNNER_TEMP/sidecars.after"
+          if ! diff "$RUNNER_TEMP/sidecars.before" "$RUNNER_TEMP/sidecars.after"; then
+            echo "sidecars recreated without a change"; exit 1
+          fi
+          [[ -s "$RUNNER_TEMP/sidecars.before" ]] || { echo "no sidecars found"; exit 1; }
 
       - name: Escape checks from repo B
         run: |
