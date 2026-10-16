@@ -21,6 +21,14 @@ jobs:
           persist-credentials: false
       - name: Tests (podman stand-in)
         run: ./tests/run.sh
+      - name: Tests on a host with git-guard installed
+        # As release.sh runs them on a maintainer's host: git in PATH is
+        # git-guard, with a record of mounted repositories.
+        run: |
+          mkdir -p ~/.local/bin ~/.config/agentbox
+          install -m 755 git-guard ~/.local/bin/git
+          printf '%s\tnone\n' "$HOME/somewhere" > ~/.config/agentbox/mounted-repos
+          PATH="$HOME/.local/bin:$PATH" timeout 300 ./tests/run.sh
 
   shellcheck:
     runs-on: ubuntu-24.04

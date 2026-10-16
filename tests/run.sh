@@ -20,6 +20,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
 # Installed versions are read-only (releases tests): writable again first.
 trap 'chmod -R u+w -- "${WORK:?}" 2>/dev/null; rm -rf -- "${WORK:?}"' EXIT
+# The host may have git-guard installed as its git: the tests run the real
+# git, and put git-guard in front only where they test it.
+mkdir -p "$WORK/realgit"
+IFS=: read -ra path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  [[ -n "$d" && -x "$d/git" && ! -d "$d/git" ]] || continue
+  grep -qs 'agentbox git-guard' "$d/git" && continue
+  ln -s "$d/git" "$WORK/realgit/git"
+  break
+done
+[[ -e "$WORK/realgit/git" ]] || { echo "tests need git (besides git-guard) in PATH" >&2; exit 1; }
+PATH="$WORK/realgit:$PATH"
 FILTER="${1:-}"
 PASSED=0; FAILED=0; FAILURES=()
 
