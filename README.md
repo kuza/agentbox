@@ -214,6 +214,14 @@ Several sessions can run in parallel. Each gets its own `ab-claude-<pid>` contai
 
 The repo is mounted at `/work/<repo dir name>`, which is also the working directory. Claude Code keeps per-project state (memory, session history, `/resume`, project permissions) by that path, so each repo gets its own; two repos with the same directory name share it.
 
+#### Copying out of a session
+
+The box has no access to your desktop's clipboard (no X11 or Wayland socket, no `xclip` or `wl-copy`). Text reaches your clipboard only through your terminal: Claude Code sends it as an OSC 52 escape sequence (`/copy` for the last response, or a mouse selection in the session), and the terminal puts it into the clipboard, if it supports and allows that.
+
+- **kitty** works as it is: its default `clipboard_control` lets programs write the clipboard and asks before they read it. Hold **Shift** to select with kitty's own selection instead of Claude Code's.
+- **Other terminals:** check that the terminal supports OSC 52 and allows programs to write the clipboard; some need it switched on, some do not support it at all. Claude Code says "Copied to clipboard" either way, so try a paste.
+- **tmux or screen** in between must pass OSC 52 on to the terminal (tmux: `set-clipboard`).
+
 ## How it works
 
 ### Architecture
