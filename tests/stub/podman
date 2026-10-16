@@ -20,13 +20,14 @@
 # ("<network> <container>" per line) list what exists.
 #   image_labels  "<image> <agentbox.build fingerprint>" per line, written by
 #                 build; an image without a line counts as current
+#   image_pulled  "<image> <agentbox.pulled>" per line, written by build
 #   old_squid     exists: docker.io/ubuntu/squid:latest is there (else not)
 #   volumes_absent  volumes that do not exist, one per line (others do)
 #   STUB_OLD_PODMAN podman before 4.7: secret create has no --replace
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
-touch "$S/secrets" "$S/running" "$S/labels" "$S/image_labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
+touch "$S/secrets" "$S/running" "$S/labels" "$S/image_labels" "$S/image_pulled" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
       "$S/volumes" "$S/networks" "$S/netconns"
 drop() {  # <file> <first field>: remove its lines
   awk -v x="$2" '$1 != x' "$S/$1" > "$S/$1.new"; mv "$S/$1.new" "$S/$1"
@@ -76,13 +77,15 @@ case "$1 ${2:-}" in
   "network exists"|"container exists") exit 0 ;;
   "network create"|"network connect"|"start "*) exit 0 ;;
   "build "*)
-    tag=""; fp=""; prev=""
+    tag=""; fp=""; prev=""; pulled=""
     for a in "$@"; do
       [[ "$prev" == -t ]] && tag="$a"
       [[ "$prev" == --label && "$a" == agentbox.build=* ]] && fp="${a#agentbox.build=}"
+      [[ "$prev" == --label && "$a" == agentbox.pulled=* ]] && pulled="${a#agentbox.pulled=}"
       prev="$a"
     done
     drop image_labels "$tag"; echo "$tag $fp" >> "$S/image_labels"
+    drop image_pulled "$tag"; [[ -n "$pulled" ]] && echo "$tag $pulled" >> "$S/image_pulled"
     [[ -n "${STUB_BUILT_ID:-}" && "$tag" == localhost/agentbox ]] && echo "$STUB_BUILT_ID" > "$S/agentbox_id"
     exit 0 ;;
   "images -q")
@@ -100,10 +103,11 @@ case "$1 ${2:-}" in
     fi ;;
   "rmi "*)
     [[ " ${STUB_RMI_FAIL:-} " != *" $2 "* ]] || exit 1
-    [[ "$2" == docker.io/ubuntu/squid:latest ]] && rm -f "$S/old_squid"
+    [[ "$2" == docker.io/ubuntu/squid:latest || "$2" == id-docker.io/ubuntu/squid:latest ]] && rm -f "$S/old_squid"
     exit 0 ;;
   "image inspect")
     case "$*" in
+      *agentbox.pulled*) awk -v i="${*: -1}" '$1 == i { print $2 }' "$S/image_pulled" 2>/dev/null ;;
       *Created.Unix*) [[ -n "${STUB_IMAGE_CREATED:-}" ]] && echo "$STUB_IMAGE_CREATED" || echo x ;;
       *RepoDigests*) awk -v i="${*: -1}" '$1 == i { print "x@" $2 }' "$S/digests" ;;
       *) image_id "${*: -1}" ;;

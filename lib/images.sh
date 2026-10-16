@@ -29,8 +29,18 @@ build_squid_image() {  # [podman build options...]: the egress proxy
 build_local() {  # <image> <containerfile> <fingerprint> [podman build options...]
   local image="$1" file="$2" fp="$3" ctx rc=0
   shift 3
+  # When the base image was last pulled: a rebuild for a changed setting
+  # keeps the old base, and its date, for the update check's reminder.
+  local pulled=""
+  if [[ " $* " == *" --pull "* ]]; then
+    pulled="$(date +%s)"
+  else
+    pulled="$(podman image inspect -f '{{index .Labels "agentbox.pulled"}}' "$image" 2>/dev/null)" || pulled=""
+    [[ "$pulled" =~ ^[0-9]+$ ]] || pulled=""
+  fi
   ctx="$(mktemp -d)"
-  podman build --layers=false "$@" --label "agentbox.build=$fp" -t "$image" -f "$file" "$ctx" || rc=$?
+  podman build --layers=false "$@" --label "agentbox.build=$fp" ${pulled:+--label "agentbox.pulled=$pulled"} \
+    -t "$image" -f "$file" "$ctx" || rc=$?
   rmdir -- "$ctx"
   return "$rc"
 }
@@ -71,6 +81,16 @@ image_retire() {  # <image>
   printf '%s %s\n' "$1" "$id" >> "$RETIRED_IMAGES"
 }
 
+# Records <image> for removal by images_cleanup, tag and all: an image
+# agentbox no longer uses at all.
+image_drop() {  # <image>
+  local id
+  id="$(podman image inspect -f '{{.Id}}' "$1" 2>/dev/null)" || return 0
+  mkdir -p "$(dirname "$RETIRED_IMAGES")"
+  printf '%s %s\n' - "$id" >> "$RETIRED_IMAGES"
+  echo "agentbox: $1 is no longer used; removing it once ab-egress has moved off it" >&2
+}
+
 # Removes the recorded images that were replaced. Run after the sidecars are
 # recreated. podman refuses to remove an image a container still uses (an
 # open session on the old agentbox image); such an image stays recorded and
@@ -78,15 +98,11 @@ image_retire() {  # <image>
 # nothing new) is dropped from the list and kept.
 images_cleanup() {
   local img id keep=()
-  # Fails while a container still uses it (an ab-egress from before).
-  if [[ -n "${IMG_SQUID_OLD:-}" ]] && podman image exists "$IMG_SQUID_OLD" \
-     && podman rmi "$IMG_SQUID_OLD" >/dev/null 2>&1; then
-    echo "agentbox: removed $IMG_SQUID_OLD, replaced by $IMG_SQUID" >&2
-  fi
   [[ -s "$RETIRED_IMAGES" ]] || return 0
   while read -r img id; do
     [[ -n "$id" ]] || continue
-    [[ "$(podman image inspect -f '{{.Id}}' "$img" 2>/dev/null)" == "$id" ]] && continue
+    # "-": an image to remove although its tag still names it (image_drop).
+    [[ "$img" != - && "$(podman image inspect -f '{{.Id}}' "$img" 2>/dev/null)" == "$id" ]] && continue
     podman image exists "$id" || continue
     podman rmi "$id" >/dev/null 2>&1 || keep+=("$img $id")
   done < "$RETIRED_IMAGES"

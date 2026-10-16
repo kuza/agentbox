@@ -63,8 +63,9 @@ config_second_pass() {  # <module keys...>
 IMAGE="localhost/agentbox"
 # Built here from Containerfile.squid (Debian), not pulled.
 IMG_SQUID="localhost/agentbox-squid"
-# Pulled before agentbox built its own squid (up to v0.1.0); removed when
-# found (images_cleanup) and at uninstall.
+# Pulled before agentbox built its own squid; removed once, when an
+# ab-egress still on it is replaced (egress_start), never otherwise: it may
+# be yours too.
 IMG_SQUID_OLD="docker.io/ubuntu/squid:latest"
 IMG_NGINX="docker.io/library/nginx:alpine"
 # Map the host user to uid/gid 1000 (the "node" user in the image),

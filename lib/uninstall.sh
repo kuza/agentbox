@@ -48,6 +48,10 @@ agentbox_uninstall() {
   echo "  ${XDG_CACHE_HOME:-$HOME/.cache}/agentbox and its stamps"
   echo "  git-guard (~/.local/bin/git), ~/.config/environment.d/agentbox.conf"
   echo "  ~/.local/bin/agentbox, its bash completion and $INSTALL_DIR"
+  if [[ -n "$all" ]]; then
+    echo "  --all: the Podman secrets agentbox uses (tokens), and your files in $AB_HOME_DIR"
+    echo "    (config.env, env/ with passwords, skills)"
+  fi
   if ! ask "remove all this?"; then echo "agentbox: nothing removed"; return 0; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also the Podman secrets (tokens) agentbox uses?"; }; then secrets_too=1; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.env, env/ with passwords, skills)?"; }; then files_too=1; fi
@@ -72,7 +76,7 @@ agentbox_uninstall() {
   while read -r _ id; do
     [[ -n "${id:-}" ]] && podman rmi "$id" >/dev/null 2>&1 && echo "removed image $id (replaced earlier)"
   done < <(cat "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images" 2>/dev/null)
-  for v in "$IMAGE" "$IMG_SQUID" "$IMG_SQUID_OLD" "$IMG_NGINX" $(uninstall_names MCP_IMAGES); do
+  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES); do
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then

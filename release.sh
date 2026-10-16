@@ -85,7 +85,7 @@ if [[ "${AB_RELEASE_YES:-}" != 1 ]]; then
   read -r -p "release: push tag $v and publish the GitHub release? [y/N] " reply || true
   [[ "$reply" == [yY]* ]] || { echo "release: stopped"; exit 0; }
 fi
-pushed=1
 git push origin "$v"
+pushed=1
 gh release create "$v" "$tarball" "$tarball.sig" --title "agentbox $v" --notes-file "$dist/notes-$v.md"
 echo "release: $v published"

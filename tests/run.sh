@@ -1167,16 +1167,25 @@ test_squid_built_here() {
   grep -q 'pull .*squid' "$STUB_DIR/calls" && fail "squid pulled from a registry"
   ab_run AB_UPGRADE=1 --
   assert_rc 0
-  grep -q '^podman build --layers=false --pull --no-cache --label agentbox.build=[0-9a-f]* -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
+  grep -q '^podman build --layers=false --pull --no-cache --label agentbox.build=[0-9a-f]* --label agentbox.pulled=[0-9]* -t localhost/agentbox-squid -f .*/Containerfile.squid ' "$STUB_DIR/calls" \
     || fail "squid not rebuilt on AB_UPGRADE: $(grep 'podman build' "$STUB_DIR/calls")"
 }
 
+# The ubuntu/squid image goes only when agentbox's own ab-egress moves off
+# it; one that is just there may be yours.
 test_old_squid_image_removed() {
   setup "${FUNCNAME[0]}"
   touch "$STUB_DIR/old_squid"
   ab_run --
   assert_rc 0
-  assert_out "removed docker.io/ubuntu/squid:latest, replaced by localhost/agentbox-squid"
+  grep -q 'rmi .*ubuntu/squid' "$STUB_DIR/calls" && fail "an ubuntu/squid not used by agentbox removed"
+  # An ab-egress from before agentbox built its own squid.
+  sed -i 's#^ab-egress .*#ab-egress docker.io/ubuntu/squid:latest#' "$STUB_DIR/running"
+  ab_run --
+  assert_rc 0
+  assert_out "docker.io/ubuntu/squid:latest is no longer used"
+  run_line ab-egress | grep -q ' localhost/agentbox-squid$' || fail "ab-egress not moved to the local squid"
+  grep -qx 'podman rmi id-docker.io/ubuntu/squid:latest' "$STUB_DIR/calls" || fail "old squid image not removed"
   ab_run --
   assert_no_out "ubuntu/squid"
 }
@@ -1187,9 +1196,15 @@ test_updates_local_images_age() {
   # Built 40 days ago: a reminder; no registry is asked for a local image.
   env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
       STUB_IMAGE_CREATED="$(( $(date +%s) - 40 * 86400 ))" bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
-  assert_out "image localhost/agentbox-squid was built 40 days ago"
-  assert_out "image localhost/agentbox was built 40 days ago"
+  assert_out "image localhost/agentbox-squid was built on a base pulled 40 days ago"
+  assert_out "image localhost/agentbox was built on a base pulled 40 days ago"
   grep -q 'localhost' "$T/urls" 2>/dev/null && fail "registry asked about a local image"
+  # Rebuilt today for a setting, on a base pulled 40 days ago: still reminded.
+  echo "localhost/agentbox $(( $(date +%s) - 40 * 86400 ))" > "$STUB_DIR/image_pulled"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+      STUB_IMAGE_CREATED="$(date +%s)" bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_out "image localhost/agentbox was built on a base pulled 40 days ago"
+  assert_no_out "localhost/agentbox-squid was built"
   assert_no_out "could not check localhost"
 }
 
@@ -1205,9 +1220,13 @@ test_image_rebuilt_when_its_build_changes() {
   ab_run STUB_BUILT_ID=img-2 --
   assert_rc 0
   assert_out "localhost/agentbox was built from another Containerfile or build settings; rebuilding"
-  grep -q '^podman build --layers=false .*--build-arg WITH_TRIVY=1 --label agentbox.build=[0-9a-f]* -t localhost/agentbox ' "$STUB_DIR/calls" \
+  grep -q '^podman build --layers=false .*--build-arg WITH_TRIVY=1 --label agentbox.build=[0-9a-f]* .*-t localhost/agentbox ' "$STUB_DIR/calls" \
     || fail "not rebuilt with Trivy: $(grep 'podman build' "$STUB_DIR/calls")"
   grep -q '^podman build.*--pull' "$STUB_DIR/calls" && fail "a settings rebuild pulled"
+  # It keeps the date the base image was pulled, for the age reminder.
+  local pulled; pulled="$(awk '$1 == "localhost/agentbox" { print $2 }' "$STUB_DIR/image_pulled")"
+  grep -q "^podman build.*--label agentbox.pulled=$pulled -t localhost/agentbox " "$STUB_DIR/calls" \
+    || fail "pull date not kept: $(grep 'podman build' "$STUB_DIR/calls")"
   grep -q '^podman build.*agentbox-squid' "$STUB_DIR/calls" && fail "squid rebuilt for an agentbox setting"
   grep -q '^podman rmi img-1$' "$STUB_DIR/calls" || fail "old image not removed"
   : > "$STUB_DIR/calls"

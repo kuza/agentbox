@@ -111,6 +111,10 @@ acl allowed dstdomain .invalid
 egress_start() {
   local conf
   conf="$(sidecar_copy ab-egress "$SCRIPT_DIR/squid.conf")"
+  # An ab-egress from before agentbox built its own squid: its image goes.
+  if [[ "$(podman inspect -f '{{.ImageName}}' ab-egress 2>/dev/null)" == "$IMG_SQUID_OLD" ]]; then
+    image_drop "$IMG_SQUID_OLD"
+  fi
   start_sidecar ab-egress \
     --network ab-internal --network ab-egress \
     -v "$conf:/etc/squid/squid.conf:ro,Z" \

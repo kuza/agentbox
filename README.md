@@ -867,7 +867,7 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section, that 
 |---|---|---|
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 agentbox` / `AB_UPDATE=1 agentbox pi` to force |
 | Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never re-pulls an image on its own | Answer `y` at the prompt, or `AB_UPGRADE=1 agentbox` |
-| Base image (Debian packages, git, Python) and the squid image (Debian's squid, `Containerfile.squid`) | Built here, so only on request: a cached build never re-runs `apt-get`. The update check reminds you once an image is a month old | `AB_UPGRADE=1 agentbox` |
+| Base image (Debian packages, git, Python) and the squid image (Debian's squid, `Containerfile.squid`) | Built here, so only on request: a cached build never re-runs `apt-get`. The update check reminds you once the base image they were last built on was pulled a month ago | `AB_UPGRADE=1 agentbox` |
 | graphify | Pinned in `Containerfile` | Bump `GRAPHIFY_VERSION`; the next start rebuilds |
 | Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Bump `TRIVY_VERSION`; the next start rebuilds. `AB_UPDATE=1 agentbox` fetches the database now |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 agentbox` |

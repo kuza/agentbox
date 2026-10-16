@@ -183,15 +183,18 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
   fi
 fi
 
-# Images built here (the agentbox image, its squid) are as current as their
-# last build: a reminder once they are a month old. AB_UPGRADE=1 rebuilds them
-# with today's packages and security updates.
+# Images built here (the agentbox image, its squid) are as current as the
+# base image they were last built on: a reminder once that pull is a month
+# old (label agentbox.pulled; the build date for images without it).
+# AB_UPGRADE=1 rebuilds them with today's packages and security updates.
 for img in "$IMAGE" "$IMG_SQUID"; do
-  created="$(podman image inspect -f '{{.Created.Unix}}' "$img" 2>/dev/null)" || continue
+  created="$(podman image inspect -f '{{index .Labels "agentbox.pulled"}}' "$img" 2>/dev/null)" || continue
+  [[ "$created" =~ ^[0-9]+$ ]] \
+    || created="$(podman image inspect -f '{{.Created.Unix}}' "$img" 2>/dev/null)" || continue
   [[ "$created" =~ ^[0-9]+$ ]] || continue
   age=$(( ($(date +%s) - created) / 86400 ))
   if (( age > 30 )); then
-    say "image $img was built $age days ago; AB_UPGRADE=1 agentbox rebuilds it with current packages"
+    say "image $img was built on a base pulled $age days ago; AB_UPGRADE=1 agentbox rebuilds it with current packages"
   fi
 done
 
