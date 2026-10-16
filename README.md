@@ -210,6 +210,8 @@ Relative paths are resolved against **your** current directory. A first argument
 
 `agentbox` runs `run.sh` from the installed version; this README names `run.sh` where it describes what happens at a start. Settings in the environment go in front, as in `AB_UPGRADE=1 agentbox`.
 
+Tab completes agentbox's commands, the repo directory and the options of `update` and `uninstall` in bash. The installed version links its completion as `~/.local/share/bash-completion/completions/agentbox`, which the `bash-completion` package loads; a file of your own there is left alone.
+
 Several sessions can run in parallel. Each gets its own `ab-claude-<pid>` container, and they share the sidecars.
 
 The repo is mounted at `/work/<repo dir name>`, which is also the working directory. Claude Code keeps per-project state (memory, session history, `/resume`, project permissions) by that path, so each repo gets its own; two repos with the same directory name share it.
@@ -936,7 +938,7 @@ It lists what it removes and asks before removing anything:
 - agentbox's images: `localhost/agentbox`, `localhost/agentbox-squid` and the sidecar images;
 - the cache `~/.cache/agentbox` and its stamps;
 - git-guard (`~/.local/bin/git`, only if it is git-guard: your system git takes over again) and `~/.config/environment.d/agentbox.conf`;
-- the command `~/.local/bin/agentbox` and the installed versions in `~/.local/share/agentbox`.
+- the command `~/.local/bin/agentbox`, its bash completion and the installed versions in `~/.local/share/agentbox`.
 
 Then it asks two more questions, each answered no by default:
 
@@ -1082,6 +1084,7 @@ AB_RESTART=1 agentbox .
 | `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
+| `completions/agentbox.bash` | Tab completion for the `agentbox` command in bash, linked into `~/.local/share/bash-completion/completions/` at install and at every update |
 | `git-guard` | Host-side git wrapper, installed as `~/.local/bin/git`: refuses repositories whose `.git` a session redirected. See [Git on the host](#git-on-the-host) |
 | `sync-skills.sh` | Host-side: installs a skills repository into your `skills/` (flattened); run by `run.sh` for the sources in `AB_SKILLS` |
 | `check-updates.sh` | Host-side, run by `run.sh` at most every 6 hours: newer sidecar images and vendored skills, with an offer to update |

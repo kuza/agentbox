@@ -14,7 +14,10 @@ the steps a release needs from you, such as a rebuild.
 - git-guard skips any copy of itself when it looks for the real git: with
   two copies in PATH (an installed one and another) each called the other
   forever. Hit by `tests/run.sh` on a host with git-guard installed.
-- README: an Uninstall section; release, license and platform badges.
+- Tab completion for `agentbox` in bash (`completions/agentbox.bash`),
+  linked at install and at every update.
+- README: an Uninstall section; copying out of a session; release, license
+  and platform badges.
 
 Action: none. The first start after the update rebuilds the agentbox and
 squid images once (images from v0.1.0 have no fingerprint), a few minutes.

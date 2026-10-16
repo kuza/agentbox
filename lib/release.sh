@@ -68,6 +68,7 @@ release_switch() {
   mv -fT -- "$INSTALL_DIR/current.tmp" "$INSTALL_DIR/current"
   if [[ -n "$old" && "$old" != "$1" ]]; then echo "$old" > "$INSTALL_DIR/previous"; fi
   release_sync_git_guard
+  release_sync_completion
   echo "agentbox: now $1"
 }
 
@@ -78,6 +79,16 @@ release_sync_git_guard() {
     install -m 755 "$new" "$guard"
     echo "agentbox: updated git-guard in $guard"
   fi
+}
+
+# Tab completion in bash: a link into bash-completion's directory for your
+# own completions, to the current version's file, so that it follows every
+# switch. Made at the first switch with this code (install or update).
+COMPLETION_LINK="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions/agentbox"
+release_sync_completion() {
+  [[ -L "$COMPLETION_LINK" || ! -e "$COMPLETION_LINK" ]] || return 0  # your own file stays
+  mkdir -p "$(dirname "$COMPLETION_LINK")"
+  ln -sfn "$INSTALL_DIR/current/completions/agentbox.bash" "$COMPLETION_LINK"
 }
 
 release_update() {  # [--yes]

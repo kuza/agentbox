@@ -845,6 +845,9 @@ test_release_install() {
   [[ "$(readlink "$T/home/.local/bin/agentbox")" == "$T/home/.local/share/agentbox/current/agentbox" ]] || fail "command not linked"
   grep -q 'agentbox git-guard' "$T/home/.local/bin/git" || fail "git-guard not installed"
   [[ -f "$CFG/config.env" ]] || fail "config.env not created"
+  local comp="$T/home/.local/share/bash-completion/completions/agentbox"
+  [[ "$(readlink "$comp")" == "$T/home/.local/share/agentbox/current/completions/agentbox.bash" ]] || fail "completion not linked"
+  [[ -f "$comp" ]] || fail "completion link broken"
   ab_cmd agentbox version
   assert_eq "$(cat "$T/out")" v1.0.0 "version"
   # A clone is no release.
@@ -852,6 +855,42 @@ test_release_install() {
   ab_cmd bash "$T/rel/agentbox-v1.0.1/install.sh"
   assert_rc 2
   assert_out "is a clone, not a release"
+}
+
+# An update from a version without the completion links it; a file of your
+# own in its place stays.
+test_release_completion_link() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  local comp="$T/home/.local/share/bash-completion/completions/agentbox"
+  rm "$comp"
+  make_release v1.1.0
+  pack v1.1.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  [[ -f "$comp" ]] || fail "completion not linked by the update"
+  rm "$comp"; echo "# mine" > "$comp"
+  ab_cmd agentbox rollback
+  assert_eq "$(cat "$comp")" "# mine" "your completion file"
+}
+
+# What Tab offers, word by word.
+test_completion() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$T/cwd/proj" "$T/cwd/pics"
+  comp() {  # <words...>: COMPREPLY for the last word, sorted, on one line
+    (cd "$T/cwd" && bash -c '
+      source "$1"; shift
+      COMP_WORDS=("$@"); COMP_CWORD=$(( $# - 1 ))
+      _agentbox; printf "%s\n" "${COMPREPLY[@]}" | sort | paste -sd" "' _ "$ROOT/completions/agentbox.bash" "$@")
+  }
+  assert_eq "$(comp agentbox "")" "login pi pics proj rollback shell uninstall update version" "first word"
+  assert_eq "$(comp agentbox p)" "pi pics proj" "first word, p"
+  assert_eq "$(comp agentbox pi "")" "pics proj" "after pi"
+  assert_eq "$(comp agentbox uninstall --)" "--all --yes" "after uninstall"
+  assert_eq "$(comp agentbox update "")" "--yes" "after update"
+  assert_eq "$(comp agentbox version "")" "" "after version"
 }
 
 test_release_update_and_rollback() {
@@ -939,6 +978,7 @@ test_uninstall() {
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller mine" "secrets kept"
   [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
   [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
+  [[ -L "$T/home/.local/share/bash-completion/completions/agentbox" ]] && fail "completion left"
   [[ -e "$T/home/.cache/agentbox" ]] && fail "cache left"
   [[ -f "$CFG/config.env" ]] || fail "your files removed without --all"
   # --all: the secrets agentbox and its modules use, and your files.

@@ -9,7 +9,8 @@
 # your own containers attached to ab-services are only disconnected, never
 # removed), agentbox's images, the cache, git-guard (~/.local/bin/git, if it
 # is git-guard), ~/.config/environment.d/agentbox.conf, the agentbox command
-# and the installed versions. Secrets: those agentbox and its modules use.
+# with its bash completion, and the installed versions. Secrets: those
+# agentbox and its modules use.
 # Your files: <AB_HOME> (config.env, env/ with passwords, skills, ...).
 # Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh and IMG_* from lib/config.sh.
 
@@ -46,7 +47,7 @@ agentbox_uninstall() {
   echo "  images: localhost/agentbox and the sidecar images"
   echo "  ${XDG_CACHE_HOME:-$HOME/.cache}/agentbox and its stamps"
   echo "  git-guard (~/.local/bin/git), ~/.config/environment.d/agentbox.conf"
-  echo "  ~/.local/bin/agentbox and $INSTALL_DIR"
+  echo "  ~/.local/bin/agentbox, its bash completion and $INSTALL_DIR"
   if ! ask "remove all this?"; then echo "agentbox: nothing removed"; return 0; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also the Podman secrets (tokens) agentbox uses?"; }; then secrets_too=1; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.env, env/ with passwords, skills)?"; }; then files_too=1; fi
@@ -82,6 +83,7 @@ agentbox_uninstall() {
   fi
   rm -f -- "${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/agentbox.conf"
   [[ -L "$HOME/.local/bin/agentbox" ]] && rm -f -- "$HOME/.local/bin/agentbox"
+  [[ -L "$COMPLETION_LINK" ]] && rm -f -- "$COMPLETION_LINK"
   if [[ -d "$INSTALL_DIR" ]]; then
     chmod -R u+w -- "$INSTALL_DIR"
     rm -rf -- "${INSTALL_DIR:?}"
