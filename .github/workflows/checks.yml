@@ -35,5 +35,5 @@ jobs:
         run: |
           shellcheck --version
           shellcheck -s bash -x -S warning -e SC2034,SC2148,SC1091 \
-            run.sh pi.sh check-updates.sh sync-skills.sh git-guard lib/*.sh mcp/*/mcp.sh \
+            run.sh pi.sh agentbox install.sh release.sh check-updates.sh sync-skills.sh git-guard lib/*.sh mcp/*/mcp.sh \
             tests/escape.sh tests/stub/podman

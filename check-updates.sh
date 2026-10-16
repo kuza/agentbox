@@ -14,6 +14,9 @@
 #            ab-llm-*), compares the local digest of its image tag with the
 #            registry's (an anonymous HEAD request, no pull), and flags
 #            containers still running an older image than the local one.
+#   agentbox for an installed version (install.sh), whether a newer release
+#            exists; it says so and leaves the update to `agentbox update`,
+#            which verifies the release's signature first.
 #   Skills   for every record sync-skills.sh keeps in
 #            <skills>/.sources/<owner>__<repo> (skills directory: AB_SKILLS_DIR,
 #            default <script dir>/skills), compares the installed commit with
@@ -39,6 +42,8 @@ source "$SCRIPT_DIR/lib/images.sh"
 source "$SCRIPT_DIR/lib/paths.sh"
 # shellcheck source=lib/skills.sh
 source "$SCRIPT_DIR/lib/skills.sh"   # source_value, as run.sh reads the records
+# shellcheck source=lib/release.sh
+source "$SCRIPT_DIR/lib/release.sh"
 TIMEOUT=5
 EVERY="${AB_UPDATE_EVERY:-21600}"
 if [[ ! "$EVERY" =~ ^[0-9]+$ ]]; then
@@ -169,6 +174,15 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
   else
     outstanding=1
     interactive || pending=1
+  fi
+fi
+
+# --- agentbox itself ---------------------------------------------------------
+
+if release_installed; then
+  latest="$(RELEASE_TIMEOUT="$TIMEOUT" release_latest)"
+  if [[ -n "$latest" && "${latest%% *}" != "$(agentbox_version)" ]]; then
+    say "update available: agentbox $(agentbox_version) -> ${latest%% *}; run: agentbox update"
   fi
 fi
 

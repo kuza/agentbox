@@ -1,2 +1,5 @@
 # Local review notes.
 cr/
+
+# Release archives built by release.sh.
+dist/

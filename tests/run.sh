@@ -18,7 +18,8 @@ while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(AB_|SKILLS
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
-trap 'rm -rf -- "${WORK:?}"' EXIT
+# Installed versions are read-only (releases tests): writable again first.
+trap 'chmod -R u+w -- "${WORK:?}" 2>/dev/null; rm -rf -- "${WORK:?}"' EXIT
 FILTER="${1:-}"
 PASSED=0; FAILED=0; FAILURES=()
 
@@ -765,6 +766,171 @@ test_updates_read_records_like_run_sh() {
   echo "$new" > "$T/remote_head"
   cu_run
   assert_no_out "update available: skills"
+}
+
+# --- releases: install, update with real SSH signatures, rollback --------
+
+# KEY signs releases; $T/rel holds them; $T/api is a fake GitHub API.
+rel_setup() {
+  setup "$1"
+  KEY="$T/key"
+  ssh-keygen -q -t ed25519 -N '' -C test -f "$KEY"
+  mkdir -p "$T/rel" "$T/home/.local/bin"
+}
+# make_release <version> [allowed key]: the current code as a release tree
+# $T/rel/agentbox-<version>/, trusting KEY (or the given public key file).
+make_release() {
+  local v="$1" pubkey="${2:-$KEY.pub}" d="$T/rel/agentbox-$1"
+  mkdir -p "$d"
+  (cd "$ROOT" && git ls-files -co --exclude-standard -z | xargs -0 cp --parents -t "$d")
+  echo "$v" > "$d/VERSION"
+  printf 'test namespaces="agentbox-release" %s\n' "$(cut -d' ' -f1,2 "$pubkey")" > "$d/release/allowed_signers"
+  printf '## %s\n\n- changes of %s\n\n' "$v" "$v" > "$d/CHANGELOG.md"
+}
+# pack <version> [key]: archive and signature, and the API naming it latest.
+pack() {
+  local v="$1" key="${2:-$KEY}"
+  tar -czf "$T/rel/agentbox-$v.tar.gz" -C "$T/rel" "agentbox-$v"
+  rm -f "$T/rel/agentbox-$v.tar.gz.sig"
+  ssh-keygen -q -Y sign -f "$key" -n agentbox-release "$T/rel/agentbox-$v.tar.gz"
+  mkdir -p "$T/api/repos/kuza/agentbox/releases"
+  printf '{"tag_name": "%s", "assets": [{"browser_download_url": "file://%s"}, {"browser_download_url": "file://%s"}]}\n' \
+    "$v" "$T/rel/agentbox-$v.tar.gz" "$T/rel/agentbox-$v.tar.gz.sig" > "$T/api/repos/kuza/agentbox/releases/latest"
+}
+# ab_cmd <command> <args...>: with HOME in the scratch directory.
+ab_cmd() {
+  env HOME="$T/home" AB_RELEASE_API="file://$T/api" PATH="$T/home/.local/bin:$PATH" "$@" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+current_version() { basename "$(readlink "$T/home/.local/share/agentbox/current")"; }
+
+test_release_install() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
+  assert_rc 0
+  assert_eq "$(current_version)" v1.0.0 "current"
+  [[ -w "$T/home/.local/share/agentbox/versions/v1.0.0/run.sh" ]] && fail "installed version writable"
+  [[ "$(readlink "$T/home/.local/bin/agentbox")" == "$T/home/.local/share/agentbox/current/agentbox" ]] || fail "command not linked"
+  grep -q 'agentbox git-guard' "$T/home/.local/bin/git" || fail "git-guard not installed"
+  [[ -f "$CFG/config.env" ]] || fail "config.env not created"
+  ab_cmd agentbox version
+  assert_eq "$(cat "$T/out")" v1.0.0 "version"
+  # A clone is no release.
+  make_release v1.0.1; echo '$Format:%(describe:tags)$' > "$T/rel/agentbox-v1.0.1/VERSION"
+  ab_cmd bash "$T/rel/agentbox-v1.0.1/install.sh"
+  assert_rc 2
+  assert_out "is a clone, not a release"
+}
+
+test_release_update_and_rollback() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  make_release v1.1.0
+  pack v1.1.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  assert_out "v1.0.0 -> v1.1.0 \(signature verified\)"
+  assert_out "changes of v1.1.0"
+  assert_eq "$(current_version)" v1.1.0 "after update"
+  assert_eq "$(cat "$T/home/.local/share/agentbox/previous")" v1.0.0 "previous"
+  ab_cmd agentbox update --yes
+  assert_out "v1.1.0 is the latest release"
+  ab_cmd agentbox rollback
+  assert_rc 0
+  assert_eq "$(current_version)" v1.0.0 "after rollback"
+  # Without a terminal and without --yes nothing is installed.
+  ab_cmd agentbox update
+  assert_out "not installed"
+  assert_eq "$(current_version)" v1.0.0 "update without confirmation"
+}
+
+test_release_update_rejects_tampered_archive() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  make_release v1.1.0
+  pack v1.1.0
+  # Changed after signing: the signature no longer matches.
+  echo 'echo pwned' >> "$T/rel/agentbox-v1.1.0/run.sh"
+  tar -czf "$T/rel/agentbox-v1.1.0.tar.gz" -C "$T/rel" agentbox-v1.1.0
+  ab_cmd agentbox update --yes
+  assert_rc 1
+  assert_out "does not verify"
+  assert_eq "$(current_version)" v1.0.0 "current after a rejected update"
+  [[ -e "$T/home/.local/share/agentbox/versions/v1.1.0" ]] && fail "rejected release unpacked into versions/"
+}
+
+test_release_update_rejects_unknown_key() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  ssh-keygen -q -t ed25519 -N '' -C other -f "$T/other"
+  # The new release even names the other key as trusted: that counts only
+  # once a release signed by a trusted key brings it.
+  make_release v1.1.0 "$T/other.pub"
+  pack v1.1.0 "$T/other"
+  ab_cmd agentbox update --yes
+  assert_rc 1
+  assert_out "does not verify"
+  assert_eq "$(current_version)" v1.0.0 "current"
+}
+
+test_release_update_needs_installed_copy() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/agentbox" update --yes
+  assert_rc 2
+  assert_out "not an installed version"
+}
+
+test_uninstall() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
+  echo "AB_SERVICES=redis" >> "$CFG/config.env"
+  printf '%s\n' "ab-mcp-grafana x" "ab-claude-7 localhost/agentbox" "redis docker.io/library/redis:7" > "$STUB_DIR/running"
+  printf '%s\n' ab-claude-home ab-cache mydata > "$STUB_DIR/volumes"
+  printf '%s\n' ab-internal ab-services podman > "$STUB_DIR/networks"
+  printf '%s\n' "ab-services redis" "ab-services ab-claude-7" > "$STUB_DIR/netconns"
+  printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller mine > "$STUB_DIR/secrets"
+  mkdir -p "$T/home/.cache/agentbox"
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" PATH="$T/bin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 0
+  assert_eq "$(started)" "redis" "containers left"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/volumes")" "mydata" "volumes left"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/networks")" "podman" "networks left"
+  grep -qx 'podman network disconnect ab-services redis' "$STUB_DIR/calls" || fail "redis not disconnected"
+  grep -q '^podman network rm -f' "$STUB_DIR/calls" && fail "network rm -f would remove your containers"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller mine" "secrets kept"
+  [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
+  [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
+  [[ -e "$T/home/.cache/agentbox" ]] && fail "cache left"
+  [[ -f "$CFG/config.env" ]] || fail "your files removed without --all"
+  # --all: the secrets agentbox and its modules use, and your files.
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" PATH="$T/bin:$PATH" bash "$T/rel/agentbox-v1.0.0/agentbox" uninstall --yes --all > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "mine" "secrets after --all"
+  [[ -e "$CFG" ]] && fail "your files left after --all"
+}
+
+test_uninstall_asks() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  echo "ab-mcp-grafana x" > "$STUB_DIR/running"
+  # No terminal, no --yes: nothing goes.
+  env HOME="$T/home" PATH="$T/bin:$PATH" "$T/home/.local/bin/agentbox" uninstall > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 0
+  assert_out "nothing removed"
+  assert_eq "$(started)" "ab-mcp-grafana" "containers"
+  [[ -e "$T/home/.local/share/agentbox/current" ]] || fail "removed without confirmation"
 }
 
 # --- run.sh: other parts ---

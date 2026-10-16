@@ -1,0 +1,5 @@
+# Keys whose signatures `agentbox update` accepts on a release, in the format
+# of ssh-keygen ALLOWED SIGNERS: <principal> namespaces="agentbox-release" <key>
+# Change it only in a release signed by a key listed here already (README,
+# Releases).
+kuza namespaces="agentbox-release" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGUXjyDJluvnJbz14VtB4pBbNA29xyauZarIyDlEPSR2

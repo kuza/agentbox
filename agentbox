@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# agentbox: the command install.sh puts in ~/.local/bin (a link to the
+# current installed version). Also works from a clone.
+#
+#   agentbox [repo-dir] [agent args...]   Claude Code in the box (run.sh)
+#   agentbox pi [repo-dir] [args...]      pi
+#   agentbox shell [repo-dir] [args...]   bash in the box instead of an agent
+#   agentbox version                      this version
+#   agentbox update [--yes]               the newest signed release, after
+#                                         showing its changes
+#   agentbox rollback                     back to the version before
+#   agentbox uninstall [--yes] [--all]    remove agentbox from this host
+#                                         (lib/uninstall.sh)
+#
+# The words above are commands; a repository directory with such a name is
+# opened as ./pi, ./update and so on.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+# shellcheck source=lib/release.sh
+source "$SCRIPT_DIR/lib/release.sh"
+
+case "${1:-}" in
+  pi)       shift; exec env AB_AGENT=pi "$SCRIPT_DIR/run.sh" "$@" ;;
+  shell)    shift; exec env AB_AGENT=shell "$SCRIPT_DIR/run.sh" "$@" ;;
+  version)  agentbox_version ;;
+  update)   shift; release_update "$@" ;;
+  rollback) release_rollback ;;
+  uninstall)
+    shift
+    # shellcheck source=lib/paths.sh
+    source "$SCRIPT_DIR/lib/paths.sh"
+    # shellcheck source=lib/config.sh
+    source "$SCRIPT_DIR/lib/config.sh"
+    # shellcheck source=lib/uninstall.sh
+    source "$SCRIPT_DIR/lib/uninstall.sh"
+    agentbox_uninstall "$@" ;;
+  *)        exec "$SCRIPT_DIR/run.sh" "$@" ;;
+esac

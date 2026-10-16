@@ -15,10 +15,16 @@
 #   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
 #   STUB_NO_SOCAT   the agentbox image has no socat: run -d with it fails
 #   STUB_NETWORKS   networks a service container is on (default: podman ab-services)
+# For uninstall: volumes, networks ("<name>" per line) and netconns
+# ("<network> <container>" per line) list what exists.
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
-touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids"
+touch "$S/secrets" "$S/running" "$S/labels" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
+      "$S/volumes" "$S/networks" "$S/netconns"
+drop() {  # <file> <first field>: remove its lines
+  awk -v x="$2" '$1 != x' "$S/$1" > "$S/$1.new"; mv "$S/$1.new" "$S/$1"
+}
 printf '%s\n' "podman $*" >> "$S/calls"
 
 image_id() {  # <image>
@@ -33,6 +39,17 @@ image_id() {  # <image>
 
 case "$1 ${2:-}" in
   "secret inspect") grep -qx -- "$3" "$S/secrets" ;;
+  "secret rm") drop secrets "$3" ;;
+  "volume ls") cat "$S/volumes" ;;
+  "volume rm") drop volumes "$3" ;;
+  "network ls") cat "$S/networks" ;;
+  "network inspect") awk -v n="$3" '$1 == n { printf "%s ", $2 }' "$S/netconns" ;;
+  "network disconnect") awk -v n="$3" -v c="$4" '!($1 == n && $2 == c)' "$S/netconns" > "$S/nc.new"; mv "$S/nc.new" "$S/netconns" ;;
+  "network rm")
+    if [[ "$3" != -f ]] && awk -v n="$3" '$1 == n { f = 1 } END { exit !f }' "$S/netconns"; then
+      echo "Error: network $3 is in use" >&2; exit 2
+    fi
+    drop networks "${*: -1}" ;;
   "secret create") cat > /dev/null; echo "$3" >> "$S/secrets" ;;
   "network exists"|"image exists"|"container exists") exit 0 ;;
   "network create"|"network connect"|"start "*) exit 0 ;;

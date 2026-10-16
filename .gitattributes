@@ -1,0 +1,2 @@
+# git archive writes the release tag into VERSION (release.sh, install.sh).
+VERSION export-subst
