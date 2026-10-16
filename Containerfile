@@ -21,6 +21,9 @@ RUN apt-get update \
 #                     AB_PYTHON_VERSIONS from config.env
 # Interpreters land in /opt/uv-python (read-only for the agent) with
 # python3.X shims in /usr/local/bin. System python3 (Debian 13: 3.13) stays as is.
+# pip leaves the /opt/uv and /opt/graphify venvs once they are installed: it
+# is not used there afterwards, and its vendored libraries (urllib3, msgpack,
+# ...) only add findings to image scans.
 # ---------------------------------------------------------------------------
 ARG UV_VERSION=0.12.23
 ARG PYTHON_VERSIONS="3.12 3.13 3.14"
@@ -28,6 +31,7 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     UV_PYTHON_BIN_DIR=/usr/local/bin
 RUN python3 -m venv /opt/uv \
  && /opt/uv/bin/pip install --no-cache-dir "uv==${UV_VERSION}" \
+ && /opt/uv/bin/pip uninstall -y -q pip \
  && ln -s /opt/uv/bin/uv /opt/uv/bin/uvx /usr/local/bin/ \
  && uv python install ${PYTHON_VERSIONS} \
  && chmod -R a+rX /opt/uv-python
@@ -81,6 +85,7 @@ ARG GRAPHIFY_VERSION=0.9.79
 ARG GRAPHIFY_EXTRAS=""
 RUN python3 -m venv /opt/graphify \
  && /opt/graphify/bin/pip install --no-cache-dir "graphifyy${GRAPHIFY_EXTRAS}==${GRAPHIFY_VERSION}" \
+ && /opt/graphify/bin/pip uninstall -y -q pip \
  && ln -s /opt/graphify/bin/graphify /usr/local/bin/graphify
 
 # ---------------------------------------------------------------------------

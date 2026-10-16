@@ -45,5 +45,6 @@ trivy_update() {
     -e TRIVY_SKIP_VERSION_CHECK=true
     -e TRIVY_SKIP_VEX_REPO_UPDATE=true
     -e TRIVY_DISABLE_TELEMETRY=true
+    -e TRIVY_DISABLE_VEX_NOTICE=true
   )
 }

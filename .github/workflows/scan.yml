@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 40
     env:
       TRIVY_VERSION: "0.76.0"
+      TRIVY_DISABLE_VEX_NOTICE: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -45,14 +46,17 @@ jobs:
       - name: Scan
         run: |
           set -u
+          # The report goes to the run summary and to the log (readable
+          # through the API, which does not serve summaries).
           scan() {  # <title> <trivy image arguments...>
-            echo "### $1" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            "$RUNNER_TEMP/trivy" image --quiet --no-progress --scanners vuln \
-              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --format table \
-              --disable-telemetry --skip-version-check "${@:2}" \
-              >> "$GITHUB_STEP_SUMMARY" 2>&1 || echo "scan failed" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### $1"
+              echo '```'
+              "$RUNNER_TEMP/trivy" image --quiet --no-progress --scanners vuln \
+                --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 --format table \
+                --disable-telemetry --skip-version-check "${@:2}" 2>&1 || echo "scan failed"
+              echo '```'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           }
           scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
           for img in docker.io/ubuntu/squid:latest docker.io/library/nginx:alpine \
