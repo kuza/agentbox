@@ -7,8 +7,15 @@ MCP_URL="http://ab-mcp-graylog:8080/mcp"
 MCP_CONFIG=(GRAYLOG_URL)
 MCP_REQUIRED_CONFIG=(GRAYLOG_URL)
 MCP_SECRETS=(graylog_basic)
+MCP_SECRET_HELP=("graylog_basic: a Graylog API token of a read-only user (README, step 2)")
 MCP_CALLER_SECRET=graylog_mcp_caller
 MCP_IMAGES=("$IMG_NGINX")
+
+# The secret holds Graylog's basic auth for a token, base64("<token>:token");
+# agentbox setup asks for the token and stores this.
+mcp_secret_value() {  # <secret> <typed>
+  printf '%s:token' "$2" | base64 -w0
+}
 
 #   GRAYLOG_URL     base URL; nginx appends /api/mcp. A trailing slash, /api or
 #                   /api/mcp in the setting is stripped.

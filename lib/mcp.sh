@@ -10,6 +10,9 @@
 #   MCP_CONFIG=()        config.env keys the module reads
 #   MCP_REQUIRED_CONFIG=()  of those, the ones that must be set
 #   MCP_SECRETS=()       podman secrets that must exist (README, Setup in detail, step 5)
+#   MCP_SECRET_HELP=()   "<secret>: what to type for it", for agentbox setup
+#   mcp_secret_value()   optional: <secret> <what was typed> -> the secret's
+#                        value, when it is not stored as typed (graylog)
 #   MCP_OWN_SECRETS=()   podman secrets mcp_start creates itself; agentbox
 #                        uninstall --all removes them
 #   MCP_CALLER_SECRET    a caller token secret, generated on first use. The
@@ -37,9 +40,9 @@ MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 
 mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
   local d
-  unset -f mcp_start
+  unset -f mcp_start mcp_secret_value
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""
-  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
+  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   MCP_DIR=""
   for d in "${MCP_DIRS[@]}"; do
     if [[ -f "$d/$1/mcp.sh" ]]; then MCP_DIR="$d/$1"; break; fi

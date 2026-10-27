@@ -11,6 +11,9 @@
 #   agentbox update [--yes]               the newest signed release, after
 #                                         showing its changes
 #   agentbox rollback                     back to the version before
+#   agentbox setup                        a menu to edit config.env: MCP
+#                                         modules, skills, egress, settings
+#                                         (lib/setup.sh)
 #   agentbox uninstall [--yes] [--all]    remove agentbox from this host
 #                                         (lib/uninstall.sh)
 #
@@ -36,6 +39,17 @@ case "${1:-}" in
   version)  agentbox_version ;;
   update)   shift; release_update "$@" ;;
   rollback) release_rollback ;;
+  setup)
+    shift
+    # shellcheck source=lib/paths.sh
+    source "$SCRIPT_DIR/lib/paths.sh"
+    # shellcheck source=lib/config.sh
+    source "$SCRIPT_DIR/lib/config.sh"
+    for lib in sidecars mcp egress skills setup; do
+      # shellcheck source=/dev/null
+      source "$SCRIPT_DIR/lib/$lib.sh"
+    done
+    agentbox_setup "$@" ;;
   uninstall)
     shift
     # shellcheck source=lib/paths.sh

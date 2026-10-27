@@ -6,6 +6,7 @@ MCP_URL="http://ab-mcp-grafana:8000/mcp"
 MCP_CONFIG=(GRAFANA_URL)
 MCP_REQUIRED_CONFIG=(GRAFANA_URL)
 MCP_SECRETS=(grafana_sa)
+MCP_SECRET_HELP=("grafana_sa: a Grafana service account token, Viewer role (README, step 2)")
 MCP_CALLER_SECRET=grafana_mcp_caller
 MCP_IMAGES=(docker.io/grafana/mcp-grafana:latest)
 

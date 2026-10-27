@@ -62,7 +62,7 @@ cd ~/src/your-repo
 agentbox          # Claude Code in the box; agentbox pi for pi, agentbox shell for bash
 ```
 
-Next: MCP servers for Grafana, Graylog, GitHub or Tabularis ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Uninstall](#uninstall)).
+Then `agentbox setup` turns on what you need: MCP servers for Grafana, Graylog, GitHub or Tabularis, skill sources, the hosts the agent may reach, Trivy ([Setup menu](#setup-menu)). In more detail: MCP servers for Grafana, Graylog, GitHub or Tabularis ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Uninstall](#uninstall)).
 
 ### Requirements
 
@@ -199,6 +199,7 @@ Inside the session:
 agentbox [repo-dir] [claude args...]        Claude Code
 agentbox pi [repo-dir] [pi args...]         pi
 agentbox shell [repo-dir] [bash args...]    bash in the same box, no agent
+agentbox setup                              a menu for config.env (below)
 ```
 
 If the first argument is an existing directory, it is mounted as the repo. Otherwise the **current directory** is used and all arguments go to the agent. It prints which directory it mounts, and refuses to mount agentbox's own code, the installed versions, git-guard or your files in `~/.config/agentbox`.
@@ -210,7 +211,7 @@ agentbox --dangerously-skip-permissions          # current directory + claude fl
 agentbox ~/src/myrepo -p "say ok"                # explicit repo + claude args
 ```
 
-Relative paths are resolved against **your** current directory. A first argument that happens to be the name of a directory in your current directory is taken as the repo; for a claude subcommand with such a name, pass the repo explicitly: `agentbox . <subcommand>`. The words `pi`, `shell`, `login`, `version`, `update`, `rollback` and `uninstall` are agentbox's own commands; open a directory with such a name as `./pi`.
+Relative paths are resolved against **your** current directory. A first argument that happens to be the name of a directory in your current directory is taken as the repo; for a claude subcommand with such a name, pass the repo explicitly: `agentbox . <subcommand>`. The words `pi`, `shell`, `login`, `setup`, `version`, `update`, `rollback` and `uninstall` are agentbox's own commands; open a directory with such a name as `./pi`.
 
 `agentbox` runs `run.sh` from the installed version; this README names `run.sh` where it describes what happens at a start. Settings in the environment go in front, as in `AB_UPGRADE=1 agentbox`.
 
@@ -227,6 +228,38 @@ The box has no access to your desktop's clipboard (no X11 or Wayland socket, no 
 - **kitty** works as it is: its default `clipboard_control` lets programs write the clipboard and asks before they read it. Hold **Shift** to select with kitty's own selection instead of Claude Code's.
 - **Other terminals:** check that the terminal supports OSC 52 and allows programs to write the clipboard; some need it switched on, some do not support it at all. Claude Code says "Copied to clipboard" either way, so try a paste.
 - **tmux or screen** in between must pass OSC 52 on to the terminal (tmux: `set-clipboard`).
+
+#### Setup menu
+
+`agentbox setup` edits `~/.config/agentbox/config.env` (or `AB_CONFIG`) through a menu:
+
+```
+MCP servers (AB_MCP; context7 is always on)
+  1 [x] github         GitHub pull requests, issues, CI runs and repository contents
+        GH_TOOLSETS (default) · secret github_pat: stored · e 1
+  2 [x] grafana        Grafana dashboards, alerts and Prometheus/Loki queries (read-only)
+        GRAFANA_URL=https://grafana.example.internal · secret grafana_sa: stored · e 2
+  3 [x] graylog        Search and analyse logs in Graylog (read-only)
+        GRAYLOG_URL=https://graylog.example.internal · secret graylog_basic: MISSING · e 3
+...
+Hosts the agent may reach (AB_EGRESS)
+  6 [x] anthropic      api.anthropic.com platform.claude.com claude.ai
+  7 [ ] chatgpt        (yours) chatgpt.com
+...
+Other settings
+ 13 [ ]                AB_TRIVY: Trivy in the box (rebuilds the image)
+ 14                    AB_SERVICES=  (your dev containers the agent may reach, e.g. redis postgres)
+number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit
+```
+
+It lists every MCP module, skill source and egress group there is, shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"), with what is on, and the other settings. Under a module are its settings, with their values ("(default)" when unset, "NEEDED" when it cannot start without one, "(environment)" when your environment sets it), and its Podman secrets: stored, MISSING, or new (typed, not saved yet).
+
+- A number turns an entry on or off, or asks for a value: Enter keeps it, `-` unsets it.
+- Turning a module on asks for its settings and, hidden, for the secrets it lacks; the prompt says what to type, and the module turns that into the secret (Graylog's token becomes its basic-auth value). Turning it off again before saving drops what was typed for it.
+- `e <number>` asks for all settings and secrets of a module, on or off, without turning it on or off. For a secret that is stored, a new value replaces it and Enter keeps it: the way to put in a renewed token.
+- `s` saves: `config.env` is edited in place, keeping your comments and the order of its lines (a link stays a link; the file it points to is edited), the previous file is kept as `config.env.bak`, and the secrets are stored. `q` quits, asking first when something is not saved.
+
+Tokens never go into `config.env`. The menu only edits; the next `agentbox` start applies it: it starts or removes sidecars, changes squid's list, installs skills, rebuilds the image. Open sessions keep what they started with. A setting also set in your environment wins over the file; the menu names such settings.
 
 ## How it works
 
@@ -565,6 +598,8 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | `MCP_CONFIG=(...)` | `config.env` keys the module reads; `run.sh` accepts them only while the module is enabled |
 | `MCP_REQUIRED_CONFIG=(...)` | Of those, the ones that must be set |
 | `MCP_SECRETS=(...)` | Podman secrets that must exist, e.g. the service's API token |
+| `MCP_SECRET_HELP=(...)` | Optional: `"<secret>: what to type"` for each secret, shown when `agentbox setup` asks for it |
+| `mcp_secret_value()` | Optional: `<secret> <what was typed>` → the value to store, for a secret that is not stored as typed (`graylog` stores `base64("<token>:token")`) |
 | `MCP_OWN_SECRETS=(...)` | Podman secrets `mcp_start` creates itself; `agentbox uninstall --all` removes them |
 | `MCP_CALLER_SECRET` | Name of a caller token secret, generated on first use. The agents send `Authorization: Bearer <token>`, the sidecar checks it; in the session it is `AB_MCP_TOKEN_<NAME>` |
 | `MCP_EGRESS=(...)` | Hosts the agent itself connects to (remote servers); they are added to squid's allowlist |
@@ -1134,7 +1169,7 @@ AB_RESTART=1 agentbox .
 
 | File | Purpose |
 |---|---|
-| `agentbox` | The command `install.sh` links into `~/.local/bin`: `agentbox [repo]`, `pi`, `shell`, `login`, `version`, `update`, `rollback`, `uninstall`. See [Releases](#releases) |
+| `agentbox` | The command `install.sh` links into `~/.local/bin`: `agentbox [repo]`, `pi`, `shell`, `login`, `setup`, `version`, `update`, `rollback`, `uninstall`. See [Releases](#releases) |
 | `install.sh`, `release.sh` | Install an unpacked release; publish one (maintainers). See [Releases](#releases) |
 | `VERSION`, `CHANGELOG.md`, `release/allowed_signers` | The release version (written by `git archive`), the changes per release, the keys updates must be signed with |
 | `run.sh` | Entry point: the steps in order (config, image, updates, sidecars, session); the steps themselves are in `lib/` |

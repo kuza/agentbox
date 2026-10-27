@@ -47,6 +47,7 @@ image_id() {  # <image>
 case "$1 ${2:-}" in
   "secret inspect") grep -qx -- "$3" "$S/secrets" ;;
   "secret rm") drop secrets "$3" ;;
+  "secret ls") cat "$S/secrets" ;;
   "volume ls") cat "$S/volumes" ;;
   "volume rm") drop volumes "$3" ;;
   "network ls") cat "$S/networks" ;;

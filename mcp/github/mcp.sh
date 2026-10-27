@@ -9,6 +9,7 @@ MCP_DESCRIPTION="GitHub pull requests, issues, CI runs and repository contents"
 MCP_URL="http://ab-mcp-github:8080/mcp"
 MCP_CONFIG=(GH_TOOLSETS)
 MCP_SECRETS=(github_pat)
+MCP_SECRET_HELP=("github_pat: a fine-grained personal access token, read-only (README, GitHub (MCP))")
 MCP_CALLER_SECRET=github_mcp_caller
 MCP_IMAGES=(ghcr.io/github/github-mcp-server:latest "$IMG_NGINX")
 

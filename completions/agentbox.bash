@@ -12,7 +12,7 @@ _agentbox() {
   COMPREPLY=()
   if (( COMP_CWORD == 1 )); then
     compopt -o filenames 2>/dev/null
-    mapfile -t words < <(compgen -W "pi shell login version update rollback uninstall" -- "$cur"; compgen -d -- "$cur")
+    mapfile -t words < <(compgen -W "pi shell login setup version update rollback uninstall" -- "$cur"; compgen -d -- "$cur")
   else
     case "$first" in
       pi|shell)

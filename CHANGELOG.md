@@ -6,6 +6,14 @@ the steps a release needs from you, such as a rebuild.
 
 ## v0.1.5
 
+- `agentbox setup`: a menu for `config.env`. It turns MCP modules, skill
+  sources, egress groups and Trivy on and off, shows each module's settings
+  and secrets, asks for them (hidden for secrets, which `e <number>` also
+  replaces, for a renewed token), and edits the file in place (comments
+  kept, the old one as `config.env.bak`). Tab completes it too.
+- Modules can say what to type for a secret (`MCP_SECRET_HELP`) and how to
+  store it (`mcp_secret_value`); graylog turns the token into its basic-auth
+  value.
 - Tabularis bridge: supergateway and every package under it come from
   `mcp/tabularis/bridge/package-lock.json`, installed with
   `npm ci --ignore-scripts`: npm checks each package against its hash, and

@@ -1292,7 +1292,7 @@ test_completion() {
       COMP_WORDS=("$@"); COMP_CWORD=$(( $# - 1 ))
       _agentbox; printf "%s\n" "${COMPREPLY[@]}" | sort | paste -sd" "' _ "$ROOT/completions/agentbox.bash" "$@")
   }
-  assert_eq "$(comp agentbox "")" "login pi pics proj rollback shell uninstall update version" "first word"
+  assert_eq "$(comp agentbox "")" "login pi pics proj rollback setup shell uninstall update version" "first word"
   assert_eq "$(comp agentbox p)" "pi pics proj" "first word, p"
   assert_eq "$(comp agentbox pi "")" "pics proj" "after pi"
   assert_eq "$(comp agentbox uninstall --)" "--all --yes" "after uninstall"
@@ -1604,6 +1604,172 @@ test_image_rebuilt_when_its_build_changes() {
   ab_run --
   grep -q '^podman build.*-t localhost/agentbox-squid ' "$STUB_DIR/calls" || fail "squid not rebuilt after its Containerfile changed"
   grep -q '^podman build.*-t localhost/agentbox ' "$STUB_DIR/calls" && fail "agentbox rebuilt for a squid change"
+  return 0
+}
+
+# --- agentbox setup ---
+
+# setup_run <input>: agentbox setup with <input> on stdin; output in $T/out.
+setup_run() {
+  printf '%b' "$1" | env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+    bash "$AB/agentbox" setup > "$T/out" 2>&1
+  RC=$?
+}
+setup_entry() {  # <name>: its number in the menu
+  printf 'q\n' | env HOME="$T/home" PATH="$T/bin:$PATH" bash "$AB/agentbox" setup 2>/dev/null \
+    | awk -v n="$1" '$1 ~ /^[0-9]+$/ { for (i = 2; i <= NF; i++) if ($i == n || index($i, n ":") == 1 || index($i, n "=") == 1) { print $1; exit } }'
+}
+
+test_setup_edits_config() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  cp "$ROOT/config.env.example" "$AB/"
+  printf '%s\n' '# mine' 'AB_MCP=graylog # my note' 'GRAYLOG_URL=https://g.example' '#AB_TRIVY=1' > "$CFG/config.env"
+  # Under a module: its settings and secrets, and how to change them.
+  setup_run "q\n"
+  assert_out "GRAYLOG_URL=https://g.example · secret graylog_basic: MISSING · e [0-9]"
+  assert_out "GRAFANA_URL NEEDED · secret grafana_sa: MISSING · e [0-9]"
+  assert_out "TABULARIS_CMD \\(default\\) · TABULARIS_PORT \\(default\\) · e [0-9]"
+  secrets graylog_basic
+  local grafana trivy services
+  grafana="$(setup_entry grafana)"; trivy="$(setup_entry AB_TRIVY)"; services="$(setup_entry AB_SERVICES)"
+  [[ -n "$grafana" && -n "$trivy" && -n "$services" ]] || fail "entries not found: '$grafana' '$trivy' '$services'"
+  # grafana on: its URL (required) and its token; Trivy on; a value with " #".
+  setup_run "$grafana\n\nhttps://grafana.example\nsa-token\n$trivy\n$services\nredis # db\ns\n"
+  assert_rc 0
+  assert_out "GRAFANA_URL is needed"
+  assert_out "stored the Podman secret grafana_sa"
+  assert_eq "$(cat "$STUB_DIR/secret-grafana_sa")" sa-token "token"
+  assert_eq "$(cat "$CFG/config.env")" "# mine
+AB_MCP=graylog grafana # my note
+GRAYLOG_URL=https://g.example
+#AB_TRIVY=1
+AB_TRIVY=1
+AB_SERVICES=\"redis # db\"
+GRAFANA_URL=https://grafana.example" "config.env"
+  assert_eq "$(head -n2 "$CFG/config.env.bak" | tail -n1)" "AB_MCP=graylog # my note" "backup"
+  # run.sh reads it as written: grafana with its URL and secret, Trivy.
+  ab_run --
+  assert_rc 0
+  run_line ab-mcp-grafana | grep -q 'https://grafana.example' || fail "grafana not started from the saved settings"
+  session_args | grep -qx 'TRIVY_SKIP_DB_UPDATE=true' || fail "Trivy setting not read"
+  # Off again: the line stays, without grafana; Trivy commented out.
+  setup_run "$grafana\n$trivy\ns\n"
+  grep -qx 'AB_MCP=graylog # my note' "$CFG/config.env" || fail "grafana not removed: $(grep AB_MCP "$CFG/config.env")"
+  grep -qx '#AB_TRIVY=1' "$CFG/config.env" || fail "Trivy not off"
+  grep -qx 'AB_TRIVY=1' "$CFG/config.env" && fail "Trivy still on"
+  return 0
+}
+
+test_setup_quit_and_new_config() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  echo "AB_MCP=" > "$CFG/config.env"
+  local grafana; grafana="$(setup_entry grafana)"
+  # Changes, then q and yes: nothing written, no secret.
+  setup_run "$grafana\nhttps://grafana.example\nsa-token\nq\ny\n"
+  assert_eq "$(cat "$CFG/config.env")" "AB_MCP=" "config.env after quitting"
+  [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret created without saving"
+  # No config.env yet: made from the example, then edited.
+  rm "$CFG/config.env"
+  setup_run "$grafana\nhttps://grafana.example\n\ns\n"
+  assert_rc 0
+  grep -qx 'AB_MCP=grafana' "$CFG/config.env" || fail "AB_MCP not set in the new file"
+  grep -q '^# agentbox settings' "$CFG/config.env" || fail "not made from the example"
+}
+
+# Secrets through the menu: a module makes the value from what you type
+# (graylog: base64 of <token>:token); e replaces one that exists, Enter
+# keeps it; spaces inside stay.
+test_setup_secrets() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  echo "AB_MCP=" > "$CFG/config.env"
+  local graylog grafana
+  graylog="$(setup_entry graylog)"; grafana="$(setup_entry grafana)"
+  setup_run "$graylog\nhttps://g.example\n glt_abc \ns\n"
+  assert_rc 0
+  assert_out "a Graylog API token of a read-only user"
+  assert_eq "$(cat "$STUB_DIR/secret-graylog_basic")" "$(printf 'glt_abc:token' | base64 -w0)" "graylog secret"
+  # e: the stored secret is replaced only for a new value.
+  setup_run "e $graylog\n\n\ns\n"
+  assert_out "secret graylog_basic is stored; a new value replaces it"
+  assert_out "nothing to save"
+  setup_run "e $graylog\n\nglt new\ns\n"
+  assert_eq "$(cat "$STUB_DIR/secret-graylog_basic")" "$(printf 'glt new:token' | base64 -w0)" "replaced secret"
+  # On, settings and token typed, off again: none of it is saved.
+  setup_run "$grafana\nhttps://grafana.example\nsa-token\n$grafana\ns\n"
+  [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret of a module turned off stored"
+  grep -q GRAFANA_URL "$CFG/config.env" && fail "setting of a module turned off saved"
+  # e on an entry that is not a module changes nothing.
+  local anthropic; anthropic="$(setup_entry anthropic)"
+  setup_run "e $anthropic\ns\n"
+  assert_out "e is for MCP modules"
+  assert_out "nothing to save"
+  return 0
+}
+
+# A config.env that is a link stays one; a module setting in the
+# environment counts, and is named.
+test_setup_link_and_environment() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  mkdir -p "$T/dotfiles"
+  echo "AB_MCP=" > "$T/dotfiles/agentbox.env"
+  ln -sf "$T/dotfiles/agentbox.env" "$CFG/config.env"
+  local grafana; grafana="$(setup_entry grafana)"
+  printf '%b' "$grafana\n\n\ns\n" | env HOME="$T/home" PATH="$T/bin:$PATH" GRAFANA_URL=https://env.example \
+    bash "$AB/agentbox" setup > "$T/out" 2>&1
+  assert_out "GRAFANA_URL=https://env.example \\(environment\\)"
+  assert_out "Note: set in your environment, which wins over config.env: GRAFANA_URL"
+  assert_no_out "GRAFANA_URL is needed"
+  [[ -L "$CFG/config.env" ]] || fail "the link became a file"
+  grep -qx 'AB_MCP=grafana' "$T/dotfiles/agentbox.env" || fail "the linked file not edited"
+}
+
+# Values trimmed, a quoted value kept quoted; a name run.sh would reject
+# cannot be turned on; loose input is read right; a first save that fails
+# leaves no config.env.
+test_setup_values_names_input() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  echo "AB_MCP=" > "$CFG/config.env"
+  mkdir -p "$CFG/egress.local.d"; echo corp.example > "$CFG/egress.local.d/corp.net.conf"
+  local services forward corp graylog
+  services="$(setup_entry AB_SERVICES)"; forward="$(setup_entry AB_FORWARD)"
+  corp="$(setup_entry corp.net)"; graylog="$(setup_entry graylog)"
+  setup_run " $services \n  redis  \n$forward\n\"db=x:1\"\n$corp\ne 1 2\ns\n"
+  assert_out "corp.net .*cannot be used"
+  assert_out "'corp.net' cannot be used"
+  assert_out "a number, e <number>, s or q"
+  grep -qx 'AB_SERVICES=redis' "$CFG/config.env" || fail "value not trimmed: $(grep AB_SERVICES "$CFG/config.env")"
+  grep -qx "AB_FORWARD='\"db=x:1\"'" "$CFG/config.env" || fail "quoted value: $(grep AB_FORWARD "$CFG/config.env")"
+  grep -q corp "$CFG/config.env" && fail "a rejected name saved"
+  # Only a secret typed: the menu says so, and calls it not saved yet.
+  setup_run "e $graylog\nhttps://g.example\ntok\ne $graylog\n\n\nq\ny\n"
+  assert_out "(changed, not saved)"
+  assert_out "secret graylog_basic is entered, not saved yet"
+  # An unset AB_EGRESS toggled off and on again stays unset.
+  local openai; openai="$(setup_entry openai)"
+  setup_run "$openai\n$openai\ns\n"
+  assert_out "nothing to save"
+  grep -q '^AB_EGRESS' "$CFG/config.env" && fail "AB_EGRESS pinned"
+  # A file name with a space is one name, and cannot be used; a module that
+  # cannot be read cannot be turned on.
+  echo x > "$CFG/egress.local.d/my group.conf"
+  mkdir -p "$CFG/mcp.local/broken"; echo 'MCP_DESCRIPTION=x' > "$CFG/mcp.local/broken/mcp.sh"
+  local broken; broken="$(setup_entry broken)"
+  setup_run "$broken\ns\n"
+  assert_out "my group .*cannot be used"
+  assert_out "module broken cannot be read"
+  assert_out "nothing to save"
+  # No config.env and the directory not writable: nothing left behind.
+  rm "$CFG/config.env"*
+  chmod a-w "$CFG"
+  setup_run "$services\nredis\ns\nq\ny\n"
+  chmod u+w "$CFG"
+  assert_out "could not write"
+  [[ -e "$CFG/config.env" ]] && fail "config.env left by a failed save"
   return 0
 }
 
