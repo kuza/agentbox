@@ -14,7 +14,10 @@ set -uo pipefail
 # Nothing from the caller's environment may point the scripts at real files:
 # agentbox's settings, sync-skills.sh's, and the XDG directories (with
 # XDG_CONFIG_HOME set, AB_HOME would be the caller's own ~/.config/agentbox).
-while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(AB_|SKILLS_|XDG_)')
+# Nor change what git does: agentbox's environment.d file switches
+# core.fsmonitor off for the whole login session (GIT_CONFIG_*), which would
+# stop the attacks the git-guard tests first run on plain git.
+while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(AB_|SKILLS_|XDG_|GIT_CONFIG)')
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
