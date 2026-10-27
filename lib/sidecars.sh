@@ -90,7 +90,10 @@ random_token() {  # prints 32 random bytes as base64 letters and digits
 
 secret_store() {  # <secret name>: create or replace it with stdin
   # --replace came with podman 4.7; before, the old secret goes first.
-  if podman secret create --help 2>/dev/null | grep -q -- '--replace'; then
+  # Only for an existing secret: podman 4.7-4.9 fail --replace on a new
+  # name ("deleting secret : : no secret data with ID").
+  if podman secret inspect "$1" >/dev/null 2>&1 \
+     && podman secret create --help 2>/dev/null | grep -q -- '--replace'; then
     podman secret create --replace "$1" - >/dev/null
   else
     podman secret rm "$1" >/dev/null 2>&1 || true
