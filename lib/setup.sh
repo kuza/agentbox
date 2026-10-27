@@ -46,11 +46,12 @@ setup_file_value() {  # <key>
 # config.env for agentbox's keys and every module's, and the secrets there
 # are. Run at the start and after a save.
 setup_prime() {
-  local n info keys=("${CONFIG_KEYS[@]}") k line
+  local n info keys=("${CONFIG_KEYS[@]}") more=() k line
   while IFS= read -r n; do
     info="$(setup_module_info "$n")" || { SETUP_INFO[$n]="!"; continue; }
     SETUP_INFO[$n]="$info"
-    keys+=($(sed -n 2p <<<"$info"))
+    read -ra more <<<"$(sed -n 2p <<<"$info")"
+    keys+=(${more[@]+"${more[@]}"})
   done < <(setup_names mcp "${MCP_DIRS[@]}")
   while IFS= read -r line; do
     SETUP_FILE[${line%%$'\t'*}]="${line#*$'\t'}"
@@ -308,7 +309,7 @@ setup_entries() {
 }
 
 setup_show() {
-  local i=0 kind name section="" mcp skills egress mark text status entry key env="" keys=()
+  local i=0 kind name section="" mcp skills egress mark text status entry key env="" keys=() more=()
   mcp="$(setup_get AB_MCP)"; mcp="${mcp//,/ }"
   skills="$(setup_get AB_SKILLS)"; skills="${skills//,/ }"
   egress="$(setup_get AB_EGRESS "$EGRESS_DEFAULT")"; egress="${egress//,/ }"
@@ -333,7 +334,8 @@ setup_show() {
            if text="$(setup_module_line "$name" 1)" && setup_module_info "$name" >/dev/null; then
              [[ -f "$USER_MCP_DIR/$name/mcp.sh" ]] && text="(yours) $text"
              status="$(setup_module_status "$name" "$i")"
-             keys+=($(setup_module_line "$name" 2))
+             read -ra more <<<"$(setup_module_line "$name" 2)"
+             keys+=(${more[@]+"${more[@]}"})
            else
              text="(cannot be read)"
            fi ;;
