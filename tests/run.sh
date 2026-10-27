@@ -522,16 +522,29 @@ test_github_nginx_follows_its_server() {
 
 # tab_setup <test name>: the tabularis module enabled, with stand-ins for
 # npx, Tabularis and ss on the host. The stub systemd has no cgroups, so ss
-# never shows the bridge as the one listening.
+# never shows the bridge as the one listening: the module would take any
+# listener for another program. TAB_PORT and TAB_PORT2 are ports nothing
+# listens on, not the default one, where a real bridge may run.
 tab_setup() {
   setup "$1"
-  config "AB_MCP=tabularis"
+  TAB_PORT="$(free_port 47900)"
+  TAB_PORT2="$(free_port $((TAB_PORT + 1)))"
+  config "AB_MCP=tabularis" "TABULARIS_PORT=$TAB_PORT"
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/npx"
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/tabularis"
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/ss"
   chmod +x "$T/bin/npx" "$T/bin/tabularis" "$T/bin/ss"
 }
 bridge_line() { grep '^systemd-run ' "$STUB_DIR/calls"; }
+tab_port() {  # <port>: TABULARIS_PORT in config.env, replacing the one there
+  sed -i '/^TABULARIS_PORT=/d' "$CFG/config.env"
+  config "TABULARIS_PORT=$1"
+}
+free_port() {  # <first>: the first port from <first> on that nobody listens on
+  local p="$1"
+  while (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null; do p=$((p + 1)); done
+  echo "$p"
+}
 
 test_tabularis_wiring() {
   tab_setup "${FUNCNAME[0]}"
@@ -539,7 +552,7 @@ test_tabularis_wiring() {
   assert_rc 0
   assert_eq "$(started)" "ab-egress ab-mcp-tabularis ab-mcp-tabularis-relay" "sidecars"
   assert_out "created the tabularis bridge key"
-  assert_out "the tabularis bridge does not answer on 127.0.0.1:47821"
+  assert_out "the tabularis bridge does not answer on 127.0.0.1:$TAB_PORT"
   local key; key="$(cache tabularis/bridge.key)"
   [[ -s "$key" ]] || fail "no bridge key file"
   assert_eq "$(stat -c %a "$key")" 600 "key file mode"
@@ -550,12 +563,12 @@ test_tabularis_wiring() {
   [[ "$b" == *" --unit=agentbox-mcp-tabularis "* ]] || fail "unit name: $b"
   [[ "$b" == *" supergateway@"[0-9]* ]] || fail "supergateway not pinned: $b"
   [[ "$b" == *" --stdio tabularis --mcp 2>/dev/null "* ]] || fail "stdio command: $b"
-  [[ "$b" == *" --stateful --host 127.0.0.1 --port 47821 --apiKeyFile $key --logLevel none" ]] || fail "options: $b"
+  [[ "$b" == *" --stateful --host 127.0.0.1 --port $TAB_PORT --apiKeyFile $key --logLevel none" ]] || fail "options: $b"
   [[ "$b" == *" --setenv=PATH=$T/bin:$T/bin:"* ]] || fail "PATH: $b"
   [[ "$b" == *" --setenv=npm_config_update_notifier=false --setenv=npm_config_prefer_offline=true "* ]] || fail "npm settings: $b"
   [[ "$b" == *" --property=StartLimitIntervalSec=60 --property=StartLimitBurst=3 "* ]] || fail "no start limit: $b"
   # The relay on the host network, nginx on ab-internal only.
-  run_line ab-mcp-tabularis-relay | grep -q -- '--network host .*TCP:127.0.0.1:47821$' || fail "relay: $(run_line ab-mcp-tabularis-relay)"
+  run_line ab-mcp-tabularis-relay | grep -q -- "--network host .*TCP:127.0.0.1:$TAB_PORT\$" || fail "relay: $(run_line ab-mcp-tabularis-relay)"
   local n; n="$(run_line ab-mcp-tabularis)"
   [[ "$n" == *"--network ab-internal "* && "$n" != *ab-egress* ]] || fail "nginx networks: $n"
   [[ "$n" == *"tabularis_bridge_key,type=env,target=TABULARIS_BRIDGE_KEY"* ]] || fail "nginx lacks the key"
@@ -573,10 +586,10 @@ test_tabularis_changes_restart() {
   tab_setup "${FUNCNAME[0]}"
   ab_run AB_TABULARIS_WAIT=0 --
   # Another port: the bridge and the relay follow, nginx stays.
-  config "TABULARIS_PORT=50000"
+  tab_port "$TAB_PORT2"
   ab_run AB_TABULARIS_WAIT=0 --
-  bridge_line | grep -q -- '--port 50000 ' || fail "bridge not restarted for the port"
-  run_line ab-mcp-tabularis-relay | grep -q 'TCP:127.0.0.1:50000$' || fail "relay not recreated"
+  bridge_line | grep -q -- "--port $TAB_PORT2 " || fail "bridge not restarted for the port"
+  run_line ab-mcp-tabularis-relay | grep -q "TCP:127.0.0.1:$TAB_PORT2\$" || fail "relay not recreated"
   run_line ab-mcp-tabularis && fail "nginx recreated for the port"
   # The key file gone (cache cleaned): a new key for both sides.
   local old; old="$(cat "$STUB_DIR/secret-tabularis_bridge_key")"
@@ -663,7 +676,7 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen()
 print(s.getsockname()[1], flush=True); time.sleep(30)' > "$T/port" &
   local pid=$! i
   for (( i = 0; i < 50; i++ )); do [[ -s "$T/port" ]] && break; sleep 0.1; done
-  config "TABULARIS_PORT=$(cat "$T/port")"
+  tab_port "$(cat "$T/port")"
   ab_run AB_TABULARIS_WAIT=0 --
   kill "$pid" 2>/dev/null
   assert_rc 1
