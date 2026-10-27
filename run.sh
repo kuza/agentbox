@@ -185,6 +185,7 @@ mcp_start_all
 openai_start
 forward_start
 sidecars_cleanup
+host_units_cleanup
 forward_cleanup
 images_cleanup
 

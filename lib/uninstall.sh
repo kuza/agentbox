@@ -7,12 +7,14 @@
 #
 # Removed: containers, volumes and networks named ab-* (open sessions end;
 # your own containers attached to ab-services are only disconnected, never
-# removed), agentbox's images, the cache, git-guard (~/.local/bin/git, if it
-# is git-guard), ~/.config/environment.d/agentbox.conf, the agentbox command
-# with its bash completion, and the installed versions. Secrets: those
+# removed), the host services modules started (agentbox-*), agentbox's
+# images, the cache, git-guard (~/.local/bin/git, if it is git-guard),
+# ~/.config/environment.d/agentbox.conf, the agentbox command with its bash
+# completion, and the installed versions. Secrets: those
 # agentbox and its modules use.
 # Your files: <AB_HOME> (config.env, env/ with passwords, skills, ...).
-# Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh and IMG_* from lib/config.sh.
+# Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh, IMG_* from lib/config.sh and
+# lib/sidecars.sh.
 
 # Values of an MCP_ variable in all modules, read as text, not run: names
 # like grafana_sa or images like ghcr.io/x/y:tag ("$IMG_NGINX" is left out,
@@ -44,6 +46,7 @@ agentbox_uninstall() {
   echo "agentbox uninstall removes:"
   echo "  containers, volumes, networks named ab-* (open sessions end; Claude Code and pi"
   echo "    logins, session history and caches go with the volumes)"
+  echo "  host services of MCP modules (systemd user services agentbox-*)"
   echo "  images: localhost/agentbox and the sidecar images"
   echo "  ${XDG_CACHE_HOME:-$HOME/.cache}/agentbox and its stamps"
   echo "  git-guard (~/.local/bin/git), ~/.config/environment.d/agentbox.conf"
@@ -56,6 +59,11 @@ agentbox_uninstall() {
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also the Podman secrets (tokens) agentbox uses?"; }; then secrets_too=1; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.env, env/ with passwords, skills)?"; }; then files_too=1; fi
 
+  if command -v systemctl >/dev/null; then
+    for c in $(host_units_list); do
+      systemctl --user stop "$c" >/dev/null 2>&1 && echo "stopped host service $c"
+    done
+  fi
   # Containers first: networks and volumes in use cannot go.
   for c in $(podman ps -a --format '{{.Names}}' 2>/dev/null | awk '{ print $1 }' | grep '^ab-'); do
     podman rm -f -v "$c" >/dev/null && echo "removed container $c"
@@ -80,7 +88,7 @@ agentbox_uninstall() {
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then
-    for v in claude_oauth openai_api_key llm_openai_caller $(uninstall_names MCP_SECRETS) $(uninstall_names MCP_CALLER_SECRET); do
+    for v in claude_oauth openai_api_key llm_openai_caller $(uninstall_names MCP_SECRETS) $(uninstall_names MCP_OWN_SECRETS) $(uninstall_names MCP_CALLER_SECRET); do
       podman secret inspect "$v" >/dev/null 2>&1 && podman secret rm "$v" >/dev/null && echo "removed secret $v"
     done
   fi

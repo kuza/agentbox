@@ -10,16 +10,16 @@
 Run [Claude Code](https://code.claude.com/docs), or the [pi](https://pi.dev) coding agent with OpenAI models (ChatGPT subscription or API key), in an isolated rootless Podman container that can reach only:
 
 - the model API (Anthropic for Claude Code; OpenAI for pi),
-- MCP servers for **Context7** (library documentation) and, each optional, **Grafana** (with **Prometheus** via Grafana), **Graylog** and **GitHub**.
+- MCP servers for **Context7** (library documentation) and, each optional, **Grafana** (with **Prometheus** via Grafana), **Graylog**, **GitHub** and **Tabularis** (your databases through the Tabularis desktop app).
 
-No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub) live only in sidecar containers that the agent cannot read. `git push` is done on the host.
+No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub) live only in sidecar containers that the agent cannot read; database passwords stay with Tabularis on the host. `git push` is done on the host.
 
 ## Contents
 
 - **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [Setup in detail](#setup-in-detail) · [Daily usage](#daily-usage)
 - **[How it works](#how-it-works):** [Architecture](#architecture) · [Security model](#security-model) · [Git on the host](#git-on-the-host) · [Egress](#egress)
 - **[Agents](#agents):** [pi (OpenAI)](#pi-openai) · [Memory and personal instructions](#memory-and-personal-instructions) · [Status line](#status-line) · [Skills](#skills)
-- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Documentation (Context7)](#documentation-context7)
+- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
 - **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
@@ -62,7 +62,7 @@ cd ~/src/your-repo
 agentbox          # Claude Code in the box; agentbox pi for pi, agentbox shell for bash
 ```
 
-Next: MCP servers for Grafana, Graylog or GitHub ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Uninstall](#uninstall)).
+Next: MCP servers for Grafana, Graylog, GitHub or Tabularis ([MCP servers](#mcp-servers)), skills ([Skills](#skills)), your test databases ([Test servers](#test-servers)). `agentbox update` brings new releases, `agentbox uninstall` removes it all ([Uninstall](#uninstall)).
 
 ### Requirements
 
@@ -239,9 +239,12 @@ The box has no access to your desktop's clipboard (no X11 or Wayland socket, no 
  │ repo mounted │     ├──► ab-mcp-grafana ──────► Grafana (+ Prometheus datasources)
  │ no secrets*  │     ├──► ab-mcp-graylog ──────► Graylog /api/mcp
  └──────────────┘     │    (nginx, injects auth)
-                      └──► ab-mcp-github ───► ab-mcp-github-srv ──► api.github.com
-                           (nginx, caller auth,   (github-mcp-server,
-                            injects PAT)           ab-egress only)
+                      ├──► ab-mcp-github ───► ab-mcp-github-srv ──► api.github.com
+                      │    (nginx, caller auth,   (github-mcp-server,
+                      │     injects PAT)           ab-egress only)
+                      └──► ab-mcp-tabularis ──► ab-mcp-tabularis-relay ──► supergateway ──► tabularis --mcp
+                           (nginx, caller auth,  (socat, host network,     (host service,
+                            unix socket)          unix socket → loopback)   127.0.0.1)
 ```
 
 | Container | Networks | Holds secrets | Purpose |
@@ -253,6 +256,10 @@ The box has no access to your desktop's clipboard (no X11 or Wayland socket, no 
 | `ab-mcp-github` | `ab-internal`, `ab-egress` | GitHub PAT | nginx: checks the caller token, injects the PAT, pins toolsets and lockdown mode. Module `github` |
 | `ab-llm-openai` | `ab-internal`, `ab-egress` | OpenAI API key | nginx: checks the caller token, injects the API key, forwards to `api.openai.com` with certificate verification. Only for pi in API-key mode |
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Module `github` |
+| `ab-mcp-tabularis` | `ab-internal` **only** | Tabularis bridge key | nginx: checks the caller token, replaces it with the bridge key, forwards to the relay's unix socket. Module `tabularis` |
+| `ab-mcp-tabularis-relay` | host network | none | socat: the unix socket in the volume `ab-mcp-tabularis-sock`, forwarded to supergateway on `127.0.0.1`. Not reachable from the agent. Module `tabularis` |
+
+The `tabularis` module also runs a program on the host, outside any container: the systemd user service `agentbox-mcp-tabularis` (see [Tabularis (MCP)](#tabularis-mcp)).
 
 Volumes:
 
@@ -284,7 +291,7 @@ Each agent has its own home volume, so neither can read the other's credentials 
 
 - **The rest of `.git` is writable, and git on the host trusts it.** The agent can write `.git/commondir`, or point a worktree's `.git` file at a directory it made, so that git on the host uses that directory's config and hooks; the next `git status`, including the one your editor runs by itself, then runs its command outside the box. **Install [git-guard](#git-on-the-host)**, which refuses such a repository before git runs. Without it this path is open.
 - The repository is mounted read-write. The agent can change any file in it. Review diffs before running anything from the repo on the host (`Makefile`, scripts, `.envrc`, CI config, editor tasks).
-- MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2).
+- MCP tools act with the permissions of their service accounts. **Isolation does not limit what the tokens can do**, so make them read-only (see step 2). The same goes for Tabularis: the agent runs SQL with your saved connections, limited only by Tabularis's own read-only mode and approvals.
 - Squid filters by hostname and does not inspect TLS. A broad allowlist entry (e.g. a whole git hosting service) is a potential exfiltration path.
 - The kernel is shared with the host, as in any container. The session has no capabilities and a seccomp filter, but it can still create new user namespaces (`unshare -Ur`), which some kernel privilege-escalation exploits rely on; podman cannot switch that off per container without a custom seccomp profile. Keep the host kernel updated. `tests/escape.sh` reports it as a WARN.
 - "No credentials in the box" stops the agent from using **your** accounts, not someone else's. Every allowlisted API that accepts writes with a bearer token (`api.anthropic.com`, `api.openai.com`, and `storage.googleapis.com` or `github.com` if you enable them) could be used with a token planted through prompt injection to upload data to an attacker's account. Keep the allowlist to what you actually use.
@@ -542,7 +549,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 | Directory | |
 |---|---|
-| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github` |
+| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `tabularis` |
 | `mcp.local/<name>/` | Your own modules, in [your files](#your-files). A name that also exists in `mcp/` replaces that module |
 
 `AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
@@ -558,10 +565,11 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 | `MCP_CONFIG=(...)` | `config.env` keys the module reads; `run.sh` accepts them only while the module is enabled |
 | `MCP_REQUIRED_CONFIG=(...)` | Of those, the ones that must be set |
 | `MCP_SECRETS=(...)` | Podman secrets that must exist, e.g. the service's API token |
+| `MCP_OWN_SECRETS=(...)` | Podman secrets `mcp_start` creates itself; `agentbox uninstall --all` removes them |
 | `MCP_CALLER_SECRET` | Name of a caller token secret, generated on first use. The agents send `Authorization: Bearer <token>`, the sidecar checks it; in the session it is `AB_MCP_TOKEN_<NAME>` |
 | `MCP_EGRESS=(...)` | Hosts the agent itself connects to (remote servers); they are added to squid's allowlist |
 | `MCP_IMAGES=(...)` | Images `AB_UPGRADE` pulls |
-| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. Name them `ab-mcp-<something>`: `run.sh` removes containers with that prefix that no enabled module started. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use. Mount the module's files as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read) |
+| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. Name them `ab-mcp-<something>`: `run.sh` removes containers with that prefix that no enabled module started. `$MCP_DIR` is the module's directory, `$IMG_NGINX` the nginx image the shipped modules use. Mount the module's files as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read). A program that has to run on the host goes through `start_host_unit agentbox-mcp-<something> [VAR=value...] -- <command...>`: a transient systemd user service, restarted when its command changes and stopped once no enabled module asks for it (see `mcp/tabularis/`) |
 
 A remote server needs three lines, like `mcp/context7/mcp.sh`:
 
@@ -650,6 +658,52 @@ What it does and does not change:
 - **Main risk is inbound.** Public repositories, issues and READMEs are arbitrary third-party text and code: a prompt injection source and a supply-chain source, like PyPI. Weigh this against what the agent can read in the box: your code, and whatever the MCP servers return, such as logs.
 
 Leaving it off and asking the agent to read public repositories through the GitHub MCP tools (the PAT can read public repositories) is the more contained alternative.
+
+### Tabularis (MCP)
+
+Optional: the `tabularis` module (`AB_MCP=... tabularis`). [Tabularis](https://tabularis.dev) is a desktop database client with a built-in MCP server. With the module, the agent sees the connections you saved in Tabularis and can list tables, read schemas and run SQL through them. **Database passwords stay on the host**, in Tabularis and your system keychain; the agent container gets neither them nor a route to the databases.
+
+#### How it is wired
+
+Tabularis's MCP server (`tabularis --mcp`) speaks only stdio and needs what the app has on the host: the saved connections, the keychain, and the open app window where writes are approved. So it runs on the host, and a chain of three parts connects it to the box:
+
+- **`agentbox-mcp-tabularis`**, a transient systemd user service that agentbox starts and restarts by itself (`systemd-run --user`; no unit file, gone when you log out). It runs [supergateway](https://github.com/supercorp-ai/supergateway), pinned to one version and fetched by `npx`, which
+  - listens on `127.0.0.1:TABULARIS_PORT` only, never on the network;
+  - requires the bridge key (`tabularis_bridge_key`, generated; its file is `~/.cache/agentbox/tabularis/bridge.key`, mode 600), so other users on the host cannot use it while it runs;
+  - starts one `tabularis --mcp` per MCP session (`--stateful`): Tabularis handles one request at a time, so a write waiting for approval in one session does not block the others.
+- **`ab-mcp-tabularis-relay`**, socat on the host network: it holds a unix socket in the volume `ab-mcp-tabularis-sock` and forwards it to `127.0.0.1:TABULARIS_PORT`. A container holds the socket because SELinux does not let containers connect to a socket a host process holds. It has no secrets and the agent cannot reach it.
+- **`ab-mcp-tabularis`** (nginx, `mcp/tabularis/nginx.conf.template`), on `ab-internal` only: it rejects requests without the caller token (`tabularis_mcp_caller`), replaces that token with the bridge key and forwards to the socket.
+
+Tabularis writes every query and its result to stderr. The module sends that to `/dev/null` and runs supergateway with `--logLevel none`, so no data from your databases ends up in the journal.
+
+#### Setup
+
+1. Install Tabularis on the host and save your connections in it. The command `tabularis` must be in `PATH`, or set `TABULARIS_CMD` in `config.env`, e.g. `TABULARIS_CMD=flatpak run <app id>` (`--mcp` is appended).
+2. Install Node.js (`npx`) on the host. The first start downloads supergateway with it. `ss` (iproute2) must be there too, as it is on Fedora; agentbox uses it to check that the program on `TABULARIS_PORT` is its bridge.
+3. In Tabularis, under Settings → MCP, decide what the agent may do:
+   - **Read-only mode**, per connection (off by default), for every connection the agent needs only to read: Tabularis refuses anything but `SELECT` there.
+   - **Approval mode**: by default every write waits until you approve it in the Tabularis window (120 s, then it is refused), and with Tabularis not running (quit, not just its window closed) writes are refused at once. Approving every query, reads included, is the stricter setting; turning approvals off leaves only read-only mode between the agent and your data.
+4. Add `tabularis` to `AB_MCP`. The next start creates the secrets, starts the service and the two sidecars, and waits for supergateway to listen; check with `/mcp` in a session.
+
+Keep Tabularis running while you work if the agent should write: approvals need the app.
+
+#### Things to watch
+
+- **This is your access to your databases.** Isolation does not limit what Tabularis does with a query it accepts. Read-only mode and approvals in Tabularis are the boundary, so set them before you enable the module, and leave out connections the agent has no business with.
+- **Query results are third-party text.** Data from a database can carry prompt injection like any other content.
+- **A program of agentbox runs on your host.** supergateway comes from npm and runs with your user, like `run.sh`. Its own version is pinned in `mcp/tabularis/mcp.sh`; its dependencies are whatever npm resolves when `npx` first installs it, and npx reuses that install afterwards.
+- **On a host shared with other users** the bridge's port is an ordinary TCP port on `127.0.0.1`. agentbox checks at every start that the bridge holds it, but while the bridge is down (stopped, failed, or after you log out) another local user could take the port and receive the agent's requests, bridge key included. supergateway cannot listen on a unix socket, which would close this. On a machine only you use, this does not apply.
+- `TABULARIS_PORT` (default `47821`) must be free on the host: if another program listens there, agentbox stops with an error rather than send the agent's requests and the bridge key to it. If `/mcp` shows the server as failed, see `systemctl --user status agentbox-mcp-tabularis`. A bridge that fails three times within a minute (no network for `npx`, say) stays down until the next agentbox start. supergateway logs nothing on purpose; to see an error, run it by hand with the command shown there, without `--logLevel none`.
+
+#### Disable
+
+Remove `tabularis` from `AB_MCP`. The next start stops the service and removes the sidecars. The secrets, the socket volume and the key file stay until you remove them (or `agentbox uninstall` does):
+
+```bash
+podman secret rm tabularis_mcp_caller tabularis_bridge_key
+podman volume rm ab-mcp-tabularis-sock
+rm -r ~/.cache/agentbox/tabularis
+```
 
 ### Documentation (Context7)
 
@@ -945,6 +999,7 @@ agentbox uninstall
 It lists what it removes and asks before removing anything:
 
 - containers, volumes and networks named `ab-*`. Open sessions end; Claude Code and pi with their logins, session history and caches go with the volumes. Your own containers on `ab-services` ([Local services](#local-services)) are only disconnected, never removed;
+- the host services MCP modules started (systemd user services `agentbox-*`, such as the [Tabularis](#tabularis-mcp) bridge);
 - agentbox's images: `localhost/agentbox`, `localhost/agentbox-squid` and the sidecar images;
 - the cache `~/.cache/agentbox` and its stamps;
 - git-guard (`~/.local/bin/git`, only if it is git-guard: your system git takes over again) and `~/.config/environment.d/agentbox.conf`;
@@ -1053,6 +1108,8 @@ agentbox . -p "say ok"
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | Setting of the `github` module: toolsets, enforced by nginx |
+| `TABULARIS_CMD` | `tabularis` | Setting of the `tabularis` module: the command that runs Tabularis on the host; `--mcp` is appended. Letters, digits, spaces and `_./:=+-` only |
+| `TABULARIS_PORT` | `47821` | Setting of the `tabularis` module: supergateway's port on `127.0.0.1` |
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | Personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | graphify extras baked into the image, e.g. `[terraform]`. A change rebuilds the image at the next start. See [Graphify](#graphify) |
@@ -1160,5 +1217,3 @@ These parts are assembled from documentation and tests against fake upstreams, b
 - pi through the OpenAI sidecar against the real OpenAI API. The chain pi → nginx (caller check, key injection) → upstream was tested with a fake upstream.
 - pi's *Sign in with ChatGPT* through squid with the pasted callback URL, and token refresh with `PI_OFFLINE=1` set.
 - Context7 through squid from pi (it works from Claude Code).
-- github-mcp-server honouring `X-MCP-Toolsets` and `X-MCP-Lockdown` as set by nginx.
-- Claude Code expanding `${AB_MCP_TOKEN_*}` in the headers of the `--mcp-config` file. Documented for `.mcp.json`; if it does not happen, grafana and github fail with 401 in `/mcp`.

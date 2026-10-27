@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Stand-in for systemctl and systemd-run (as a link with that name) in the
+# tests, so they never touch your real user services. Every call is appended
+# to $STUB_DIR/calls. State:
+#   units   running transient services: "<name>.service <description>" per line
+# Environment:
+#   STUB_RUN_RACE  systemd-run starts the unit but fails, as when a parallel
+#                  start took the name first
+#   STUB_RUN_FAIL  systemd-run fails and starts nothing
+#   STUB_RUN_DIES  systemd-run succeeds, but the unit dies at once (and is
+#                  collected)
+#   STUB_STOP_FAIL stop fails
+set -u
+S="${STUB_DIR:?}"
+touch "$S/units"
+printf '%s\n' "$(basename "$0") $*" >> "$S/calls"
+
+if [[ "$(basename "$0")" == systemd-run ]]; then
+  [[ -n "${STUB_RUN_FAIL:-}" ]] && exit 1
+  [[ -n "${STUB_RUN_DIES:-}" ]] && exit 0
+  unit="" desc=""
+  for a in "$@"; do
+    case "$a" in
+      --unit=*) unit="${a#--unit=}" ;;
+      --description=*) desc="${a#--description=}" ;;
+      --) break ;;
+    esac
+  done
+  awk -v x="$unit.service" '$1 != x' "$S/units" > "$S/units.new"; mv "$S/units.new" "$S/units"
+  echo "$unit.service $desc" >> "$S/units"
+  [[ -n "${STUB_RUN_RACE:-}" ]] && { echo "Failed to start transient service unit: Unit $unit.service was already loaded" >&2; exit 1; }
+  exit 0
+fi
+
+[[ "${1:-}" == --user ]] && shift
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  is-active)
+    quiet=""
+    [[ "${1:-}" == --quiet ]] && { quiet=1; shift; }
+    if grep -q "^$1 " "$S/units"; then
+      [[ -n "$quiet" ]] || echo active
+    else
+      [[ -n "$quiet" ]] || echo inactive
+      exit 3
+    fi ;;
+  show)
+    # show -p Description --value <unit>
+    unit="${*: -1}"
+    sed -n "s/^${unit//./\\.} //p" "$S/units" ;;
+  stop)
+    [[ -n "${STUB_STOP_FAIL:-}" ]] && exit 1
+    grep -q "^$1 " "$S/units" || exit 5
+    awk -v x="$1" '$1 != x' "$S/units" > "$S/units.new"; mv "$S/units.new" "$S/units" ;;
+  list-units)
+    awk '{ print $1 " loaded active running" }' "$S/units" ;;
+  *) exit 0 ;;
+esac

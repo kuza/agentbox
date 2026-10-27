@@ -60,6 +60,15 @@ setup() {
   cp "$ROOT/claude/statusline.py" "$AB/claude/" 2>/dev/null || true
   cp "$ROOT/tests/stub/podman" "$T/bin/podman"
   chmod +x "$T/bin/podman"
+  # Never the real systemd: tests on a host must not stop its user
+  # services. In bin/ with the podman stub, and alone in sysbin/ for the
+  # agentbox command (ab_cmd), which runs the real podman.
+  mkdir -p "$T/sysbin"
+  cp "$ROOT/tests/stub/systemctl" "$T/sysbin/systemctl"
+  chmod +x "$T/sysbin/systemctl"
+  ln -s systemctl "$T/sysbin/systemd-run"
+  ln -s ../sysbin/systemctl "$T/bin/systemctl"
+  ln -s ../sysbin/systemctl "$T/bin/systemd-run"
   printf '%s\n' claude_oauth > "$STUB_DIR/secrets"
   : > "$CFG/config.env"
   export STUB_DIR
@@ -511,6 +520,187 @@ test_github_nginx_follows_its_server() {
   run_line ab-mcp-github >/dev/null || fail "nginx kept the old server's address"
 }
 
+# tab_setup <test name>: the tabularis module enabled, with stand-ins for
+# npx, Tabularis and ss on the host. The stub systemd has no cgroups, so ss
+# never shows the bridge as the one listening.
+tab_setup() {
+  setup "$1"
+  config "AB_MCP=tabularis"
+  printf '#!/bin/sh\nexit 0\n' > "$T/bin/npx"
+  printf '#!/bin/sh\nexit 0\n' > "$T/bin/tabularis"
+  printf '#!/bin/sh\nexit 0\n' > "$T/bin/ss"
+  chmod +x "$T/bin/npx" "$T/bin/tabularis" "$T/bin/ss"
+}
+bridge_line() { grep '^systemd-run ' "$STUB_DIR/calls"; }
+
+test_tabularis_wiring() {
+  tab_setup "${FUNCNAME[0]}"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress ab-mcp-tabularis ab-mcp-tabularis-relay" "sidecars"
+  assert_out "created the tabularis bridge key"
+  assert_out "the tabularis bridge does not answer on 127.0.0.1:47821"
+  local key; key="$(cache tabularis/bridge.key)"
+  [[ -s "$key" ]] || fail "no bridge key file"
+  assert_eq "$(stat -c %a "$key")" 600 "key file mode"
+  assert_eq "$(cat "$STUB_DIR/secret-tabularis_bridge_key")" "$(cat "$key")" "secret and key file"
+  # The bridge: supergateway, pinned, one Tabularis per session, loopback
+  # only, with the key, Tabularis's stderr dropped.
+  local b; b="$(bridge_line)"
+  [[ "$b" == *" --unit=agentbox-mcp-tabularis "* ]] || fail "unit name: $b"
+  [[ "$b" == *" supergateway@"[0-9]* ]] || fail "supergateway not pinned: $b"
+  [[ "$b" == *" --stdio tabularis --mcp 2>/dev/null "* ]] || fail "stdio command: $b"
+  [[ "$b" == *" --stateful --host 127.0.0.1 --port 47821 --apiKeyFile $key --logLevel none" ]] || fail "options: $b"
+  [[ "$b" == *" --setenv=PATH=$T/bin:$T/bin:"* ]] || fail "PATH: $b"
+  [[ "$b" == *" --setenv=npm_config_update_notifier=false --setenv=npm_config_prefer_offline=true "* ]] || fail "npm settings: $b"
+  [[ "$b" == *" --property=StartLimitIntervalSec=60 --property=StartLimitBurst=3 "* ]] || fail "no start limit: $b"
+  # The relay on the host network, nginx on ab-internal only.
+  run_line ab-mcp-tabularis-relay | grep -q -- '--network host .*TCP:127.0.0.1:47821$' || fail "relay: $(run_line ab-mcp-tabularis-relay)"
+  local n; n="$(run_line ab-mcp-tabularis)"
+  [[ "$n" == *"--network ab-internal "* && "$n" != *ab-egress* ]] || fail "nginx networks: $n"
+  [[ "$n" == *"tabularis_bridge_key,type=env,target=TABULARIS_BRIDGE_KEY"* ]] || fail "nginx lacks the key"
+  session_args | grep -qx 'tabularis_mcp_caller,type=env,target=AB_MCP_TOKEN_TABULARIS' || fail "caller token not passed"
+  assert_file_has "$(cache mcp-claude.json)" '"tabularis": \{ "type": "http", "url": "http://ab-mcp-tabularis:8080/mcp"'
+  # Nothing changed: nothing restarted.
+  ab_run AB_TABULARIS_WAIT=0 --
+  bridge_line >/dev/null && fail "bridge restarted without a change"
+  run_line ab-mcp-tabularis && fail "nginx recreated without a change"
+  assert_no_out "created the tabularis bridge key"
+  return 0
+}
+
+test_tabularis_changes_restart() {
+  tab_setup "${FUNCNAME[0]}"
+  ab_run AB_TABULARIS_WAIT=0 --
+  # Another port: the bridge and the relay follow, nginx stays.
+  config "TABULARIS_PORT=50000"
+  ab_run AB_TABULARIS_WAIT=0 --
+  bridge_line | grep -q -- '--port 50000 ' || fail "bridge not restarted for the port"
+  run_line ab-mcp-tabularis-relay | grep -q 'TCP:127.0.0.1:50000$' || fail "relay not recreated"
+  run_line ab-mcp-tabularis && fail "nginx recreated for the port"
+  # The key file gone (cache cleaned): a new key for both sides.
+  local old; old="$(cat "$STUB_DIR/secret-tabularis_bridge_key")"
+  rm "$(cache tabularis/bridge.key)"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_out "created the tabularis bridge key"
+  [[ "$(cat "$STUB_DIR/secret-tabularis_bridge_key")" != "$old" ]] || fail "secret not replaced"
+  bridge_line >/dev/null || fail "bridge not restarted for the new key"
+  run_line ab-mcp-tabularis >/dev/null || fail "nginx not recreated for the new key"
+  # AB_RESTART restarts the bridge too.
+  ab_run AB_TABULARIS_WAIT=0 AB_RESTART=1 --
+  bridge_line >/dev/null || fail "bridge not restarted with AB_RESTART"
+}
+
+test_tabularis_disabled_stops_bridge() {
+  tab_setup "${FUNCNAME[0]}"
+  ab_run AB_TABULARIS_WAIT=0 --
+  echo "agentbox-mine.service my own service" >> "$STUB_DIR/units"
+  : > "$CFG/config.env"
+  ab_run --
+  assert_rc 0
+  assert_out "stopped agentbox-mcp-tabularis.service, no longer enabled"
+  assert_eq "$(awk '{ print $1 }' "$STUB_DIR/units")" "agentbox-mine.service" "units left"
+  assert_eq "$(started)" "ab-egress" "sidecars"
+}
+
+# A parallel start that took the unit name first is fine; a real failure
+# stops the start. A host service that will not stop does not.
+test_tabularis_host_unit_failures() {
+  tab_setup "${FUNCNAME[0]}"
+  ab_run AB_TABULARIS_WAIT=0 STUB_RUN_RACE=1 --
+  assert_rc 0
+  : > "$STUB_DIR/units"
+  ab_run AB_TABULARIS_WAIT=0 STUB_RUN_FAIL=1 --
+  assert_rc 1
+  assert_out "could not start the host service agentbox-mcp-tabularis"
+  ab_run AB_TABULARIS_WAIT=0 --
+  : > "$CFG/config.env"
+  ab_run STUB_STOP_FAIL=1 --
+  assert_rc 0
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "session did not start"
+}
+
+# A bridge that died is not waited for.
+test_tabularis_dead_bridge_not_waited_for() {
+  tab_setup "${FUNCNAME[0]}"
+  local t0=$SECONDS
+  ab_run AB_TABULARIS_WAIT=30 STUB_RUN_DIES=1 --
+  assert_rc 0
+  (( SECONDS - t0 < 10 )) || fail "waited $((SECONDS - t0)) s for a dead bridge"
+  assert_out "the tabularis bridge does not answer"
+}
+
+# A key file that is there but empty, with a mode others can read: made anew
+# with mode 600.
+test_tabularis_key_file_mode() {
+  tab_setup "${FUNCNAME[0]}"
+  mkdir -p "$(cache tabularis)"
+  : > "$(cache tabularis/bridge.key)"
+  chmod 644 "$(cache tabularis/bridge.key)"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  [[ -s "$(cache tabularis/bridge.key)" ]] || fail "key not written"
+  assert_eq "$(stat -c %a "$(cache tabularis/bridge.key)")" 600 "key file mode"
+  # The secret is written only when needed: not on every start, again when
+  # it is missing, and from the file with AB_RESTART=1.
+  ab_run AB_TABULARIS_WAIT=0 --
+  grep -q '^podman secret create .*tabularis_bridge_key' "$STUB_DIR/calls" && fail "secret rewritten without a reason"
+  grep -vx tabularis_bridge_key "$STUB_DIR/secrets" > "$STUB_DIR/s"; mv "$STUB_DIR/s" "$STUB_DIR/secrets"
+  ab_run AB_TABULARIS_WAIT=0 --
+  grep -qx tabularis_bridge_key "$STUB_DIR/secrets" || fail "missing secret not written again"
+  echo other > "$STUB_DIR/secret-tabularis_bridge_key"
+  ab_run AB_TABULARIS_WAIT=0 AB_RESTART=1 --
+  assert_eq "$(cat "$STUB_DIR/secret-tabularis_bridge_key")" "$(cat "$(cache tabularis/bridge.key)")" "secret after AB_RESTART=1"
+}
+
+# Another program on the port: no bridge, no sidecars, an error.
+test_tabularis_port_taken() {
+  command -v python3 >/dev/null || return 0
+  tab_setup "${FUNCNAME[0]}"
+  python3 -I -c '
+import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen()
+print(s.getsockname()[1], flush=True); time.sleep(30)' > "$T/port" &
+  local pid=$! i
+  for (( i = 0; i < 50; i++ )); do [[ -s "$T/port" ]] && break; sleep 0.1; done
+  config "TABULARIS_PORT=$(cat "$T/port")"
+  ab_run AB_TABULARIS_WAIT=0 --
+  kill "$pid" 2>/dev/null
+  assert_rc 1
+  assert_out "TABULARIS_PORT $(cat "$T/port") on 127.0.0.1 is in use by another program"
+  grep -q '^systemd-run' "$STUB_DIR/calls" && fail "bridge started on a taken port"
+  assert_eq "$(started)" "ab-egress" "sidecars"
+}
+
+test_tabularis_errors() {
+  tab_setup "${FUNCNAME[0]}"
+  config 'TABULARIS_CMD=tabularis $(touch x)'
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 2
+  assert_out "TABULARIS_CMD may hold only"
+  local p
+  for p in 80 08080 70000; do
+    : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_PORT=$p"
+    ab_run AB_TABULARIS_WAIT=0 --
+    assert_rc 2
+    assert_out "TABULARIS_PORT must be a port from 1024 to 65535, got '$p'"
+  done
+  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=./bin/tabularis"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 2
+  assert_out "give the command by name or as an absolute path, got './bin/tabularis'"
+  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD= tabularis"
+  ab_run AB_TABULARIS_WAIT=0 TABULARIS_CMD=" tabularis" --
+  assert_rc 2
+  assert_out "starts with the command"
+  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=no-such-tabularis"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 1
+  assert_out "'no-such-tabularis' not found"
+  grep -q '^systemd-run' "$STUB_DIR/calls" && fail "bridge started despite the error"
+  return 0
+}
+
 test_skill_sources_same_repository() {
   ss_setup "${FUNCNAME[0]}"
   src_conf skills.d a "URL=$SRC" "ONLY=tdd"
@@ -838,7 +1028,7 @@ pack() {
 }
 # ab_cmd <command> <args...>: with HOME in the scratch directory.
 ab_cmd() {
-  env HOME="$T/home" AB_RELEASE_API="file://$T/api" PATH="$T/home/.local/bin:$PATH" "$@" > "$T/out" 2>&1 < /dev/null
+  env HOME="$T/home" AB_RELEASE_API="file://$T/api" PATH="$T/home/.local/bin:$T/sysbin:$PATH" "$@" > "$T/out" 2>&1 < /dev/null
   RC=$?
 }
 current_version() { basename "$(readlink "$T/home/.local/share/agentbox/current")"; }
@@ -1105,7 +1295,8 @@ test_uninstall() {
   printf '%s\n' ab-claude-home ab-cache mydata > "$STUB_DIR/volumes"
   printf '%s\n' ab-internal ab-services podman > "$STUB_DIR/networks"
   printf '%s\n' "ab-services redis" "ab-services ab-claude-7" > "$STUB_DIR/netconns"
-  printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller mine > "$STUB_DIR/secrets"
+  printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine > "$STUB_DIR/secrets"
+  printf '%s\n' "agentbox-mcp-tabularis.service agentbox host service [abc]" "agentbox-mine.service my own" > "$STUB_DIR/units"
   mkdir -p "$T/home/.cache/agentbox"
   echo "localhost/agentbox old-image-id" > "$T/home/.cache/agentbox/retired-images"
   : > "$STUB_DIR/calls"
@@ -1118,7 +1309,8 @@ test_uninstall() {
   grep -qx 'podman network disconnect ab-services redis' "$STUB_DIR/calls" || fail "redis not disconnected"
   grep -q '^podman network rm -f' "$STUB_DIR/calls" && fail "network rm -f would remove your containers"
   grep -qx 'podman rmi old-image-id' "$STUB_DIR/calls" || fail "replaced image left behind"
-  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller mine" "secrets kept"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine" "secrets kept"
+  assert_eq "$(awk '{ print $1 }' "$STUB_DIR/units")" "agentbox-mine.service" "host services left"
   [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
   [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
   [[ -L "$T/home/.local/share/bash-completion/completions/agentbox" ]] && fail "completion left"

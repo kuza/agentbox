@@ -42,6 +42,8 @@ case "${1:-}" in
     source "$SCRIPT_DIR/lib/paths.sh"
     # shellcheck source=lib/config.sh
     source "$SCRIPT_DIR/lib/config.sh"
+    # shellcheck source=lib/sidecars.sh
+    source "$SCRIPT_DIR/lib/sidecars.sh"
     # shellcheck source=lib/uninstall.sh
     source "$SCRIPT_DIR/lib/uninstall.sh"
     agentbox_uninstall "$@" ;;

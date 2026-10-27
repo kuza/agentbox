@@ -10,6 +10,8 @@
 #   MCP_CONFIG=()        config.env keys the module reads
 #   MCP_REQUIRED_CONFIG=()  of those, the ones that must be set
 #   MCP_SECRETS=()       podman secrets that must exist (README, Setup in detail, step 5)
+#   MCP_OWN_SECRETS=()   podman secrets mcp_start creates itself; agentbox
+#                        uninstall --all removes them
 #   MCP_CALLER_SECRET    a caller token secret, generated on first use. The
 #                        agents send it as "Authorization: Bearer <token>";
 #                        the sidecar checks it. Inside the session it is the
@@ -21,7 +23,9 @@
 #                        it has any. MCP_DIR is the module's directory. Mount
 #                        its files through sidecar_copy, never directly. Name
 #                        the sidecars ab-mcp-*: run.sh removes such containers
-#                        that no enabled module started.
+#                        that no enabled module started. A program that must
+#                        run on the host goes through start_host_unit
+#                        (lib/sidecars.sh), named agentbox-mcp-*.
 #
 # Sourced by run.sh. Provides mcp_init, mcp_check_secrets, mcp_write_configs,
 # mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,
@@ -35,7 +39,7 @@ mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
   local d
   unset -f mcp_start
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""
-  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
+  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   MCP_DIR=""
   for d in "${MCP_DIRS[@]}"; do
     if [[ -f "$d/$1/mcp.sh" ]]; then MCP_DIR="$d/$1"; break; fi

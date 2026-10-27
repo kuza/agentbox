@@ -4,6 +4,17 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.4
+
+- New MCP module `tabularis`: the database connections saved in the
+  Tabularis desktop app, through its built-in MCP server. Passwords stay on
+  the host; Tabularis's read-only mode and write approvals apply. It runs a
+  bridge on the host (supergateway, as a transient systemd user service) and
+  needs Node.js there. See README, Tabularis (MCP).
+- Modules can run a program on the host with `start_host_unit`, and name
+  secrets they create in `MCP_OWN_SECRETS`. `agentbox uninstall` stops such
+  services and, with `--all`, removes those secrets.
+
 ## v0.1.3
 
 - With git-guard, agentbox writes `~/.config/environment.d/agentbox.conf`
