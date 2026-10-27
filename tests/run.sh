@@ -524,7 +524,7 @@ test_github_nginx_follows_its_server() {
 }
 
 # tab_setup <test name>: the tabularis module enabled, with stand-ins for
-# npx, Tabularis and ss on the host. The stub systemd has no cgroups, so ss
+# node, npm, Tabularis and ss on the host. The stub systemd has no cgroups, so ss
 # never shows the bridge as the one listening: the module would take any
 # listener for another program. TAB_PORT and TAB_PORT2 are ports nothing
 # listens on, not the default one, where a real bridge may run.
@@ -533,10 +533,19 @@ tab_setup() {
   TAB_PORT="$(free_port 47900)"
   TAB_PORT2="$(free_port $((TAB_PORT + 1)))"
   config "AB_MCP=tabularis" "TABULARIS_PORT=$TAB_PORT"
-  printf '#!/bin/sh\nexit 0\n' > "$T/bin/npx"
+  printf '#!/bin/sh\nexit 0\n' > "$T/bin/node"
+  # npm ci: records the call and installs a stand-in supergateway, or fails
+  # with STUB_NPM_FAIL.
+  cat > "$T/bin/npm" <<'NPM'
+#!/bin/sh
+echo "npm $* (in $PWD)" >> "$STUB_DIR/npm-calls"
+[ "$1" = ci ] || exit 0
+[ -z "${STUB_NPM_FAIL:-}" ] || exit 1
+mkdir -p node_modules/.bin && printf '#!/bin/sh\n' > node_modules/.bin/supergateway && chmod +x node_modules/.bin/supergateway
+NPM
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/tabularis"
   printf '#!/bin/sh\nexit 0\n' > "$T/bin/ss"
-  chmod +x "$T/bin/npx" "$T/bin/tabularis" "$T/bin/ss"
+  chmod +x "$T/bin/node" "$T/bin/npm" "$T/bin/tabularis" "$T/bin/ss"
 }
 bridge_line() { grep '^systemd-run ' "$STUB_DIR/calls"; }
 tab_port() {  # <port>: TABULARIS_PORT in config.env, replacing the one there
@@ -564,11 +573,14 @@ test_tabularis_wiring() {
   # only, with the key, Tabularis's stderr dropped.
   local b; b="$(bridge_line)"
   [[ "$b" == *" --unit=agentbox-mcp-tabularis "* ]] || fail "unit name: $b"
-  [[ "$b" == *" supergateway@"[0-9]* ]] || fail "supergateway not pinned: $b"
+  local bridge; bridge="$(cache tabularis)/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  [[ "$b" == *" -- $bridge/node_modules/.bin/supergateway "* ]] || fail "supergateway not from the lock file's install: $b"
+  [[ "$b" != *npx* ]] || fail "npx used: $b"
+  grep -q "^npm ci --ignore-scripts --omit=dev .*(in $(cache tabularis)/\.install\." "$STUB_DIR/npm-calls" \
+    || fail "not installed with npm ci --ignore-scripts: $(cat "$STUB_DIR/npm-calls" 2>/dev/null)"
   [[ "$b" == *" --stdio tabularis --mcp 2>/dev/null "* ]] || fail "stdio command: $b"
   [[ "$b" == *" --stateful --host 127.0.0.1 --port $TAB_PORT --apiKeyFile $key --logLevel none" ]] || fail "options: $b"
   [[ "$b" == *" --setenv=PATH=$T/bin:$T/bin:"* ]] || fail "PATH: $b"
-  [[ "$b" == *" --setenv=npm_config_update_notifier=false --setenv=npm_config_prefer_offline=true "* ]] || fail "npm settings: $b"
   [[ "$b" == *" --property=StartLimitIntervalSec=60 --property=StartLimitBurst=3 "* ]] || fail "no start limit: $b"
   # The relay on the host network, nginx on ab-internal only.
   run_line ab-mcp-tabularis-relay | grep -q -- "--network host .*TCP:127.0.0.1:$TAB_PORT\$" || fail "relay: $(run_line ab-mcp-tabularis-relay)"
@@ -577,12 +589,60 @@ test_tabularis_wiring() {
   [[ "$n" == *"tabularis_bridge_key,type=env,target=TABULARIS_BRIDGE_KEY"* ]] || fail "nginx lacks the key"
   session_args | grep -qx 'tabularis_mcp_caller,type=env,target=AB_MCP_TOKEN_TABULARIS' || fail "caller token not passed"
   assert_file_has "$(cache mcp-claude.json)" '"tabularis": \{ "type": "http", "url": "http://ab-mcp-tabularis:8080/mcp"'
-  # Nothing changed: nothing restarted.
+  # Nothing changed: nothing restarted, nothing installed again.
+  : > "$STUB_DIR/npm-calls"
   ab_run AB_TABULARIS_WAIT=0 --
   bridge_line >/dev/null && fail "bridge restarted without a change"
+  [[ -s "$STUB_DIR/npm-calls" ]] && fail "installed again without a change"
   run_line ab-mcp-tabularis && fail "nginx recreated without a change"
   assert_no_out "created the tabularis bridge key"
   return 0
+}
+
+# A new lock file (or new overrides): a new install, the bridge restarted
+# on it. Installs unused for 30 days go; recent ones stay, another agentbox
+# copy may use them. A failed install stops the start. Leftovers of
+# interrupted installs go, a half install is replaced.
+test_tabularis_bridge_install() {
+  tab_setup "${FUNCNAME[0]}"
+  local base; base="$(cache tabularis)"
+  ab_run AB_TABULARIS_WAIT=0 --
+  local old; old="$(ls -d "$base"/bridge-*)"
+  sed -i 's/"private": true/"private": true /' "$AB/mcp/tabularis/bridge/package.json"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  local new; new="$base/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  bridge_line | grep -qF -- "$new/node_modules" || fail "bridge not restarted on the new install: $(bridge_line)"
+  [[ -e "$old" ]] || fail "a recent install removed"
+  touch -d '40 days ago' "$old" "$new"
+  ab_run AB_TABULARIS_WAIT=0 --
+  [[ -e "$old" ]] && fail "an install unused for 40 days kept"
+  [[ -e "$new" ]] || fail "the install in use removed"
+  # npm ci fails: the start stops and says so.
+  echo " " >> "$AB/mcp/tabularis/bridge/package-lock.json"
+  ab_run AB_TABULARIS_WAIT=0 STUB_NPM_FAIL=1 --
+  assert_rc 1
+  assert_out "could not install the tabularis bridge: npm ci failed"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "session started without its enabled module"
+  ls -d "$base"/.install.* 2>/dev/null && fail "failed install left"
+  # A leftover older than an hour goes; a half install is replaced.
+  mkdir -p "$base/.install.old"; touch -d '2 hours ago' "$base/.install.old"
+  local half; half="$base/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  mkdir -p "$half/node_modules/express"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  [[ -e "$base/.install.old" ]] && fail "old leftover kept"
+  [[ -x "$half/node_modules/.bin/supergateway" ]] || fail "half install not replaced"
+  [[ -e "$half/node_modules/express" ]] && fail "half install's files kept"
+  return 0
+}
+
+test_tabularis_bridge_files_missing() {
+  tab_setup "${FUNCNAME[0]}"
+  rm "$AB/mcp/tabularis/bridge/package-lock.json"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 1
+  assert_out "lacks bridge/package.json or bridge/package-lock.json"
 }
 
 test_tabularis_changes_restart() {

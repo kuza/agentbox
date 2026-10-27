@@ -1,0 +1,13 @@
+{
+  "name": "agentbox-tabularis-bridge",
+  "private": true,
+  "description": "supergateway for agentbox's tabularis module, installed by mcp/tabularis/mcp.sh with npm ci --ignore-scripts from package-lock.json",
+  "dependencies": {
+    "supergateway": "4.2.1"
+  },
+  "overrides": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "@modelcontextprotocol/server": "2.3.0",
+    "@modelcontextprotocol/client": "2.3.0"
+  }
+}

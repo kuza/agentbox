@@ -5,7 +5,7 @@
 # app window, where writes are approved. So it runs on the host:
 #
 #   agentbox-mcp-tabularis  host service (start_host_unit): supergateway,
-#                           pinned below and run through npx, serves
+#                           installed from bridge/package-lock.json, serves
 #                           Streamable HTTP on 127.0.0.1:TABULARIS_PORT,
 #                           starts one `tabularis --mcp` per MCP session and
 #                           requires the bridge key
@@ -27,18 +27,21 @@ MCP_OWN_SECRETS=(tabularis_bridge_key)
 MCP_CALLER_SECRET=tabularis_mcp_caller
 MCP_IMAGES=("$IMG_NGINX")
 
-TABULARIS_SUPERGATEWAY="supergateway@4.2.1"
+# supergateway and every package under it, at the versions and hashes of
+# bridge/package-lock.json: npm ci checks each package against its hash and
+# runs no install scripts. One directory per lock file in the cache;
+# maintainers update the lock with
+#   cd mcp/tabularis/bridge && npm install --package-lock-only --ignore-scripts
 
 #   TABULARIS_CMD      runs Tabularis, --mcp is appended (default: tabularis)
 #   TABULARIS_PORT     supergateway's port on 127.0.0.1 (default: 47821)
-#   AB_TABULARIS_WAIT  seconds to wait for supergateway to listen (default:
-#                      60; the first start downloads it)
+#   AB_TABULARIS_WAIT  seconds to wait for supergateway to listen (default: 60)
 # Both settings end up in a systemd command line, which expands $ and %:
 # only plain characters are accepted.
 mcp_start() {
   local cmd="${TABULARIS_CMD:-tabularis}" port="${TABULARIS_PORT:-47821}"
   local wait="${AB_TABULARIS_WAIT:-60}" plain='^[A-Za-z0-9_./:=+ -]+$'
-  local npx tab key image_id i state
+  local node npm tab key bridge image_id i state
   if [[ ! "$cmd" =~ $plain || "$cmd" == " "* ]]; then
     echo "error: TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'" >&2
     exit 2
@@ -66,8 +69,8 @@ mcp_start() {
     echo "error: the tabularis module needs ss (iproute2) on the host, to see who listens on TABULARIS_PORT" >&2
     exit 1
   fi
-  if ! npx="$(command -v npx)"; then
-    echo "error: the tabularis module needs Node.js (npx) on the host (README, Tabularis (MCP))" >&2
+  if ! node="$(command -v node)" || ! npm="$(command -v npm)"; then
+    echo "error: the tabularis module needs Node.js (node and npm) on the host (README, Tabularis (MCP))" >&2
     exit 1
   fi
   if ! tab="$(command -v "${cmd%% *}")"; then
@@ -80,8 +83,13 @@ mcp_start() {
   # into the secret when the key is new, the secret is missing, or with
   # AB_RESTART=1 (after you changed the secret by hand).
   key="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/tabularis/bridge.key"
-  if [[ ! "$key$npx$tab" =~ $plain ]]; then
-    echo "error: the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $npx, $tab)" >&2
+  if [[ ! -f "$MCP_DIR/bridge/package.json" || ! -f "$MCP_DIR/bridge/package-lock.json" ]]; then
+    echo "error: the tabularis module lacks bridge/package.json or bridge/package-lock.json in $MCP_DIR" >&2
+    exit 1
+  fi
+  bridge="$(tabularis_bridge_dir)"
+  if [[ ! "$key$node$tab$bridge" =~ $plain ]]; then
+    echo "error: the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $node, $tab, $bridge)" >&2
     exit 2
   fi
   if [[ ! -s "$key" ]] && tabularis_new_key "$key"; then
@@ -93,15 +101,22 @@ mcp_start() {
 
   tabularis_fail_if_taken "$port"
 
-  # npm: no update check, and the cached supergateway when there is one,
-  # so a restart works offline.
-  start_host_unit agentbox-mcp-tabularis "PATH=${npx%/*}:${tab%/*}:/usr/local/bin:/usr/bin:/bin" \
-    npm_config_update_notifier=false npm_config_prefer_offline=true -- \
-    "$npx" -y "$TABULARIS_SUPERGATEWAY" \
+  if [[ ! -x "$bridge/node_modules/.bin/supergateway" ]] && ! tabularis_install_bridge "$npm" "$bridge"; then
+    echo "error: could not install the tabularis bridge: npm ci failed (see above; it needs the npm" \
+         "registry). Remove tabularis from AB_MCP to start without it (README, Tabularis (MCP))." >&2
+    exit 1
+  fi
+  # In use: its date keeps it from tabularis_prune_bridges.
+  touch -- "$bridge"
+
+  # supergateway's command starts with #!/usr/bin/env node: node in PATH.
+  start_host_unit agentbox-mcp-tabularis "PATH=${node%/*}:${tab%/*}:/usr/local/bin:/usr/bin:/bin" -- \
+    "$bridge/node_modules/.bin/supergateway" \
     --stdio "$cmd --mcp 2>/dev/null" \
     --outputTransport streamableHttp --stateful \
     --host 127.0.0.1 --port "$port" \
     --apiKeyFile "$key" --logLevel none
+  tabularis_prune_bridges
 
   # The sidecars only once supergateway listens, or with a warning when it
   # does not yet: then the agent's requests fail, but go nowhere else.
@@ -111,7 +126,7 @@ mcp_start() {
     tabularis_fail_if_taken "$port"
     state="$(systemctl --user is-active agentbox-mcp-tabularis.service 2>/dev/null || true)"
     [[ "$state" == active || "$state" == activating ]] || break
-    (( i == 2 )) && echo "agentbox: waiting for the tabularis bridge (its first start downloads supergateway)" >&2
+    (( i == 2 )) && echo "agentbox: waiting for the tabularis bridge" >&2
     sleep 1
   done
   if ! tabularis_listening "$port"; then
@@ -140,6 +155,52 @@ mcp_start() {
     -v ab-mcp-tabularis-sock:/run/tabularis \
     -v "$(sidecar_copy ab-mcp-tabularis "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"
+}
+
+# Where the bridge of this package.json and package-lock.json is installed:
+# both decide what npm ci installs (the overrides are in package.json).
+tabularis_bridge_dir() {
+  echo "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/tabularis/bridge-$(cat -- "$MCP_DIR/bridge/package.json" "$MCP_DIR/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+}
+
+# Installs the lock file's packages into <dir>; 1 if that fails. It works
+# in a directory of its own, moved into place once complete, so that an
+# interrupted install leaves nothing that looks done; such leftovers go
+# after an hour.
+tabularis_install_bridge() {  # <npm> <dir>
+  local base="${2%/*}" tmp
+  echo "agentbox: installing the tabularis bridge (supergateway, from mcp/tabularis/bridge/package-lock.json)" >&2
+  mkdir -p "$base" || return 1
+  find "$base" -maxdepth 1 -name '.install.*' -mmin +60 -exec rm -rf {} + 2>/dev/null
+  tmp="$(mktemp -d "$base/.install.XXXXXX")" || return 1   # not bridge-*
+  if ! cp -- "$MCP_DIR/bridge/package.json" "$MCP_DIR/bridge/package-lock.json" "$tmp/"; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  # npm's summary on stdout is dropped; its errors still show.
+  if ! (cd "$tmp" || exit 1; "$1" ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel=error) >/dev/null \
+     || [[ ! -x "$tmp/node_modules/.bin/supergateway" ]]; then
+    rm -rf -- "$tmp"
+    return 1
+  fi
+  # Another start may have finished the same install meanwhile: that one
+  # stays. A target without supergateway (left half done) is replaced.
+  if ! mv -T -- "$tmp" "$2" 2>/dev/null; then
+    if [[ -x "$2/node_modules/.bin/supergateway" ]]; then
+      rm -rf -- "$tmp"
+    elif ! { rm -rf -- "$2" && mv -T -- "$tmp" "$2"; }; then
+      rm -rf -- "$tmp"
+      return 1
+    fi
+  fi
+}
+
+# Removes the installs no start has used for 30 days: those of earlier lock
+# files. One another agentbox copy still uses (a clone next to an installed
+# release) stays, as its starts keep it fresh.
+tabularis_prune_bridges() {
+  find "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/tabularis" -mindepth 1 -maxdepth 1 \
+       -name 'bridge-*' -mtime +30 -exec rm -rf {} + 2>/dev/null || true
 }
 
 # A new key in <file>, made with mode 600 and linked into place: of two

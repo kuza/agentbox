@@ -4,6 +4,23 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.5
+
+- Tabularis bridge: supergateway and every package under it come from
+  `mcp/tabularis/bridge/package-lock.json`, installed with
+  `npm ci --ignore-scripts`: npm checks each package against its hash, and
+  no package's install script runs on your host. Before, `npx` resolved the
+  dependencies itself at the first start.
+- The MCP SDK packages supergateway pins are replaced with releases that
+  fix vulnerabilities, two of them in serving several sessions at once.
+- If the install fails (no npm registry, say), the start stops and says to
+  take `tabularis` out of `AB_MCP` to start without it.
+
+Action: none needed. The first start with `tabularis` installs the bridge
+(Node.js with npm on the host, and the npm registry once) and restarts it.
+`npx` is no longer used: its cache of the old, unpinned tree can go with
+`rm -rf ~/.npm/_npx`.
+
 ## v0.1.4
 
 - New MCP module `tabularis`: the database connections saved in the

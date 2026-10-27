@@ -114,8 +114,8 @@ host_units_available() {  # 0 if systemd user services can be started here
   command -v systemd-run >/dev/null && systemctl --user show-environment >/dev/null 2>&1
 }
 
-# How systemd runs a host service. A program that keeps failing (no
-# network for npx, say) gets three tries a minute, then stays down until the
+# How systemd runs a host service. A program that keeps failing (a crash
+# on start, say) gets three tries a minute, then stays down until the
 # next agentbox start.
 HOST_UNIT_PROPERTIES=(
   --property=Restart=on-failure --property=RestartSec=5
