@@ -1179,7 +1179,7 @@ AB_RESTART=1 agentbox .
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | pi configuration: model endpoint for API-key mode; a copy, made at each start in `~/.cache/agentbox/session/pi/`, is mounted read-only |
 | `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
-| `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
+| `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, fd, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `Containerfile.squid` | The egress proxy's image: Debian's squid, built here like the base image |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
 | `egress.d/<name>.conf` | Egress groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |

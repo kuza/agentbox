@@ -88,6 +88,9 @@ jobs:
           AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \
             -c "ESCAPE_FORBIDDEN='$forbidden' ESCAPE_REACHABLE='fb:80' bash tests/escape.sh"
 
+      - name: Tools in the session
+        run: AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" -c 'fd --version && rg --version >/dev/null'
+
       - name: Trivy in the session, offline, read-only database
         run: |
           AB_AGENT=shell ./run.sh "$RUNNER_TEMP/repo-b" \

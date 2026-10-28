@@ -5,12 +5,14 @@ FROM docker.io/library/node:24-trixie-slim
 
 # make runs project Makefiles; gcc and libc6-dev give Go cgo, which
 # `go test -race` needs (Go enables cgo only when it finds a C compiler).
-# socat runs the AB_FORWARD sidecars (lib/forward.sh).
+# socat runs the AB_FORWARD sidecars (lib/forward.sh). Debian names fd
+# "fdfind"; pi looks for "fd", and would try to download it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git ca-certificates curl ripgrep less openssh-client python3 python3-venv \
+      git ca-certificates curl ripgrep fd-find less openssh-client python3 python3-venv \
       make gcc libc6-dev socat \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -s /usr/bin/fdfind /usr/local/bin/fd
 
 # ---------------------------------------------------------------------------
 # Python for development: uv plus preinstalled interpreters.

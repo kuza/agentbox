@@ -6,6 +6,8 @@ the steps a release needs from you, such as a rebuild.
 
 ## v0.1.6
 
+- `fd` in the image (Debian's `fd-find`): pi uses it for file search and
+  warned "fd not found" at every start.
 - pi in API-key mode failed in an installed version with "EACCES ... models.json",
   and Claude Code's status line was not shown: both files were mounted from
   the read-only installed code, which podman cannot relabel for SELinux.
@@ -16,6 +18,9 @@ the steps a release needs from you, such as a rebuild.
 - `agentbox update` shows the changes of every release it brings, skipped
   ones included, newest first. (The update to v0.1.6 itself still runs the
   older code and shows only this section.)
+
+Action: none. The first start after the update rebuilds the agentbox image
+once, a few minutes.
 
 ## v0.1.5
 
