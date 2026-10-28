@@ -4,6 +4,22 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.7
+
+- pi with a ChatGPT subscription stopped with "EACCES ... models.json" when
+  it had once run with an API key: the mount of models.json had left an
+  empty, root-owned file in pi's home volume, which pi then read in its
+  place. The files a session may get (pi's models.json and AGENTS.md,
+  Claude Code's CLAUDE.md and status line) are now always mounted, a
+  neutral one when there is nothing to put there (models.json without
+  overrides, an empty AGENTS.md), so no leftover is ever read.
+  Without `~/.config/agentbox/AGENTS.md`, Claude Code's `~/.claude/CLAUDE.md`
+  in its volume (written by `/memory` or `#` notes) is now covered by an
+  empty read-only file, and so is a `models.json` in pi's volume in
+  subscription mode: instructions for every session go in AGENTS.md.
+  agentbox warns at each start while such a file of yours is there, with
+  the commands to read and remove it.
+
 ## v0.1.6
 
 - `fd` in the image (Debian's `fd-find`): pi uses it for file search and

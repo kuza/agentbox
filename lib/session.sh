@@ -123,7 +123,8 @@ session_env_file() {
 # caller tokens are environment variables (MCP_SESSION_ARGS), which the
 # generated configs reference as ${AB_MCP_TOKEN_<NAME>}.
 session_agent_args() {
-  local copy
+  local f models agents_md=""
+  [[ -f "$USER_AGENTS_MD" ]] && agents_md="$USER_AGENTS_MD"
   AGENT_ARGS=(${MCP_SESSION_ARGS[@]+"${MCP_SESSION_ARGS[@]}"})
   [[ -n "$AGENT_VOL" ]] && AGENT_ARGS+=(-v "$AGENT_VOL:$AGENT_PREFIX:ro")
   AGENT_CMD=()
@@ -159,14 +160,14 @@ session_agent_args() {
       # Personal instructions for every repo, shared with pi (agents/AGENTS.md).
       # From the host and read-only for the same reason as skills: written in
       # ab-claude-home by the agent, they would persist into every future session.
-      if [[ -f "$USER_AGENTS_MD" ]]; then
-        AGENT_ARGS+=(-v "$USER_AGENTS_MD:/home/node/.claude/CLAUDE.md:ro,z")
-      fi
-      if [[ -n "$STATUSLINE" ]]; then
-        # A copy: the code's own file may not be relabelled (cache_copy).
-        copy="$(cache_copy session/claude "$SCRIPT_DIR/claude/statusline.py")" || exit 1
-        AGENT_ARGS+=(-v "$copy:/home/node/.claude/statusline.py:ro,z")
-      fi
+      # Always mounted, an empty file when there is nothing to put there:
+      # a single-file mount leaves an empty, root-owned mount point in the
+      # home volume, which a later session without the mount would read and
+      # fail on (session_optional_file).
+      f="$(session_optional_file claude CLAUDE.md "$agents_md" "")" || exit 1
+      AGENT_ARGS+=(-v "$f:/home/node/.claude/CLAUDE.md:ro,z")
+      f="$(session_optional_file claude statusline.py "${STATUSLINE:+$SCRIPT_DIR/claude/statusline.py}" "")" || exit 1
+      AGENT_ARGS+=(-v "$f:/home/node/.claude/statusline.py:ro,z")
       ;;
     pi)
       # PI_OFFLINE, PI_SKIP_VERSION_CHECK, PI_TELEMETRY: no model catalog refresh,
@@ -186,18 +187,18 @@ session_agent_args() {
         -v "$MCP_PI_JSON:/home/node/.pi/agent/mcp.json:ro,z"
         -v "$USER_PI_EXTENSIONS:/home/node/.pi/agent/extensions:ro,z"
       )
-      # API-key mode only (openai_api_key secret exists): pi/models.json points
-      # the openai provider at the ab-llm-openai sidecar. In subscription mode it
-      # must NOT be mounted, or "Sign in with ChatGPT" requests would go to the
-      # sidecar instead of api.openai.com.
+      # API-key mode (openai_api_key secret exists): pi/models.json points the
+      # openai provider at the ab-llm-openai sidecar. In subscription mode
+      # pi's own providers must stay, or "Sign in with ChatGPT" requests would
+      # go to the sidecar: a models.json without overrides.
+      models=""
       if podman secret inspect openai_api_key >/dev/null 2>&1 \
          && podman secret inspect llm_openai_caller >/dev/null 2>&1; then
-        copy="$(cache_copy session/pi "$SCRIPT_DIR/pi/models.json")" || exit 1
-        AGENT_ARGS+=(
-          --secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN"
-          -v "$copy:/home/node/.pi/agent/models.json:ro,z"
-        )
+        models="$SCRIPT_DIR/pi/models.json"
+        AGENT_ARGS+=(--secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN")
       fi
+      f="$(session_optional_file pi models.json "$models" '{ "providers": {} }')" || exit 1
+      AGENT_ARGS+=(-v "$f:/home/node/.pi/agent/models.json:ro,z")
       if [[ -n "$SKILLS_SRC" ]]; then
         AGENT_ARGS+=(-v "$SKILLS_SRC:/home/node/.pi/agent/skills:ro,z")
         # pi's own graphify skill over the shared (Claude Code) one; after the
@@ -208,11 +209,30 @@ session_agent_args() {
       fi
       # Personal instructions, the same file Claude Code gets as CLAUDE.md. pi
       # reads AGENTS.md from its agent directory as global context.
-      if [[ -f "$USER_AGENTS_MD" ]]; then
-        AGENT_ARGS+=(-v "$USER_AGENTS_MD:/home/node/.pi/agent/AGENTS.md:ro,z")
-      fi
+      f="$(session_optional_file pi AGENTS.md "$agents_md" "")" || exit 1
+      AGENT_ARGS+=(-v "$f:/home/node/.pi/agent/AGENTS.md:ro,z")
       ;;
   esac
+}
+
+# The file to mount at a path that is always mounted: <file> if there is
+# one (your AGENTS.md is mounted as it is; a file of agentbox's code as a
+# copy, see cache_copy), else a copy of <fallback> text. Mounted always,
+# because a single-file mount leaves an empty, root-owned mount point in the
+# agent's home volume: a later session without the mount found it in place
+# of the file and failed on it (pi: "EACCES ... models.json"). 1 when the
+# file cannot be made.
+session_optional_file() {  # <agent> <name> <file or ""> <fallback text>
+  if [[ -z "$3" ]]; then
+    cache_text "session/$1" "$2.none" "$4"
+  elif [[ "$3" == "$SCRIPT_DIR"/* ]]; then
+    cache_copy "session/$1" "$3" "$2"
+  elif [[ -f "$3" ]]; then
+    printf '%s\n' "$3"
+  else
+    echo "error: $3 is missing" >&2
+    return 1
+  fi
 }
 
 # SELinux labels for host directories used by sessions: lowercase ":z" (shared)

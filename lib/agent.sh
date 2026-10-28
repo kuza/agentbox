@@ -164,10 +164,12 @@ agent_update() {
 #    - statusLine running claude/statusline.py, when that file exists.
 #    An unreadable settings file is left alone.
 agent_prepare_home() {
-  local home_dirs=()
+  local home_dirs=() covered=""
+  # covered: the files every session mounts over (session_optional_file),
+  # so a file of the agent's or yours in the volume there is never seen.
   case "$AGENT" in
-    claude) home_dirs=(.claude) ;;
-    pi)     home_dirs=(.pi .pi/agent) ;;
+    claude) home_dirs=(.claude); covered=".claude/CLAUDE.md .claude/statusline.py" ;;
+    pi)     home_dirs=(.pi .pi/agent); covered=".pi/agent/models.json .pi/agent/AGENTS.md" ;;
   esac
   STATUSLINE=""
   [[ -f "$SCRIPT_DIR/claude/statusline.py" ]] && STATUSLINE=1
@@ -175,6 +177,8 @@ agent_prepare_home() {
     -e AGENT="$AGENT" \
     -e AB_STATUSLINE="$STATUSLINE" \
     -e AB_MCP_MANAGED="$MCP_MANAGED" \
+    -e AB_COVERED="$covered" \
+    -e AB_HOME_VOLUME="$AGENT_HOME" \
     -v "$AGENT_HOME:/home/node" \
     --entrypoint sh "$IMAGE" -c '
       set -eu
@@ -182,6 +186,16 @@ agent_prepare_home() {
       for d in "$@"; do
         mkdir -p "$d"
         chown node:node "$d"
+      done
+      # A real file under a mount (not an empty, root-owned mount point)
+      # is hidden from every session: say so, leave it as it is.
+      for f in $AB_COVERED; do
+        if [ -f "$f" ] && [ -s "$f" ] && [ "$(stat -c %u "$f")" != 0 ]; then
+          echo "agentbox: warning: ~/$f in the volume $AB_HOME_VOLUME is hidden by the file agentbox mounts there." \
+               "Instructions belong in ~/.config/agentbox/AGENTS.md (README, Memory and personal instructions)." \
+               "Read it: podman run --rm -v $AB_HOME_VOLUME:/h --entrypoint cat localhost/agentbox /h/$f;" \
+               "then remove it: the same with rm -f instead of cat" >&2
+        fi
       done
       if [ "$AGENT" = claude ]; then
         node -e "

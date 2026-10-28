@@ -1283,6 +1283,40 @@ test_session_mounts_no_code_files() {
   assert_out "pi/models.json is missing"
 }
 
+# The single files a session may get are always mounted, a neutral one when
+# there is nothing to put there: a mount leaves an empty, root-owned mount
+# point in the home volume, which a session without it found in place of the
+# file (pi without an API key stopped on models.json with EACCES).
+test_session_optional_files_always_mounted() {
+  setup "${FUNCNAME[0]}"
+  local m
+  optional_mount_of() { session_args | grep -- ":$1:ro,z\$" | cut -d: -f1; }
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  m="$(optional_mount_of /home/node/.pi/agent/models.json)"
+  [[ -n "$m" ]] || fail "models.json not mounted in subscription mode"
+  assert_eq "$(cat "$m")" '{ "providers": {} }' "models.json without overrides"
+  m="$(optional_mount_of /home/node/.pi/agent/AGENTS.md)"
+  [[ -n "$m" && ! -s "$m" ]] || fail "AGENTS.md not mounted empty: '$m'"
+  # A real file of the agent's under those mounts: a warning, as the home
+  # is prepared (non-empty, not root's; the file stays).
+  local calls; calls="$(tr '\n' ' ' < "$STUB_DIR/calls")"
+  [[ "$calls" == *"-e AB_COVERED=.pi/agent/models.json .pi/agent/AGENTS.md "* ]] || fail "covered files not checked"
+  [[ "$calls" == *'[ -s "$f" ] && [ "$(stat -c %u "$f")" != 0 ]'* ]] || fail "not limited to real files"
+  ab_run --
+  assert_rc 0
+  m="$(optional_mount_of /home/node/.claude/CLAUDE.md)"
+  [[ -n "$m" && ! -s "$m" ]] || fail "CLAUDE.md not mounted empty: '$m'"
+  [[ -n "$(optional_mount_of /home/node/.claude/statusline.py)" ]] || fail "status line not mounted"
+  # With your AGENTS.md and an API key: those.
+  echo "# rules" > "$CFG/AGENTS.md"
+  secrets openai_api_key llm_openai_caller
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_eq "$(optional_mount_of /home/node/.pi/agent/AGENTS.md)" "$CFG/AGENTS.md" "your AGENTS.md"
+  assert_eq "$(cat "$(optional_mount_of /home/node/.pi/agent/models.json)")" "$(cat "$AB/pi/models.json")" "models.json of API-key mode"
+}
+
 test_banner_of_a_release() {
   setup "${FUNCNAME[0]}"
   echo v1.0.0 > "$AB/VERSION"

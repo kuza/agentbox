@@ -74,14 +74,29 @@ sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
 # need write access) and the container could not read them. Written anew and
 # renamed into place: a container already running keeps the copy it mounted
 # (its bind mount holds the old file), even when sessions share one path.
-cache_copy() {  # <subdir> <file>: prints the path of the copy; 1 on failure
+cache_copy() {  # <subdir> <file> [name]: prints the path of the copy; 1 on failure
   local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
-  dst="$dir/$(basename "$2")"
+  dst="$dir/${3:-$(basename "$2")}"
   [[ -f "$2" ]] || { echo "error: $2 is missing" >&2; return 1; }
   mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
   if ! { cp -- "$2" "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
     rm -f -- "$tmp"
     echo "error: cannot copy $2 to $dst" >&2
+    return 1
+  fi
+  printf '%s\n' "$dst"
+}
+
+# A file in the cache, under <subdir>, holding <text>, written like
+# cache_copy's copies: for a session path that is always mounted, with
+# nothing of the user's to put there.
+cache_text() {  # <subdir> <name> <text>: prints the path; 1 on failure
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
+  dst="$dir/$2"
+  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  if ! { printf '%s' "$3" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
+    rm -f -- "$tmp"
+    echo "error: cannot write $dst" >&2
     return 1
   fi
   printf '%s\n' "$dst"
