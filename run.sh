@@ -72,6 +72,10 @@ for lib in config release images agent sidecars mcp egress forward services skil
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
 
+# Which agentbox runs: the release, or a clone and where it is.
+RUNNING_VERSION="$(agentbox_version)"
+if [[ "$RUNNING_VERSION" == dev ]]; then echo "agentbox dev ($SCRIPT_DIR)" >&2; else echo "agentbox $RUNNING_VERSION" >&2; fi
+
 # ---------------------------------------------------------------------------
 # Arguments. If the first argument is an existing directory, it is the repo;
 # otherwise the repo is the current directory and ALL arguments go to the

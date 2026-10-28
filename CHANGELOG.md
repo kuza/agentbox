@@ -4,6 +4,11 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.6
+
+- Every start prints which agentbox runs: `agentbox v0.1.6`, or
+  `agentbox dev (<path>)` from a clone.
+
 ## v0.1.5
 
 - `agentbox setup`: a menu for `config.env`. It turns MCP modules, skill

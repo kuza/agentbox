@@ -1905,6 +1905,11 @@ test_session_basics() {
   echo "# rules" > "$CFG/AGENTS.md"
   ab_run --
   assert_rc 0
+  assert_eq "$(head -n1 "$T/out")" "agentbox dev ($AB)" "banner from a clone"
+  echo v1.0.0 > "$AB/VERSION"
+  ab_run --
+  assert_eq "$(head -n1 "$T/out")" "agentbox v1.0.0" "banner of a release"
+  rm "$AB/VERSION"
   local args; args="$(session_args)"
   grep -qx -- "$REPO:/work/repo:z" <<<"$args" || fail "repo not mounted at /work/repo"
   grep -qx -- "$REPO/.git/hooks:/work/repo/.git/hooks:ro,z" <<<"$args" || fail ".git/hooks not read-only"
