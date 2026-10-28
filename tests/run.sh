@@ -509,6 +509,84 @@ test_services_network_name_exact() {
   grep -q '^podman network connect' "$STUB_DIR/calls" && fail "attached again although already on ab-services"
 }
 
+# Woodpecker: the token only in nginx, the server read-only and without a
+# way out, nginx letting the server read only; the URL and CA checked.
+test_mcp_woodpecker() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example/api/"
+  secrets woodpecker_token
+  ab_run --
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress ab-mcp-woodpecker ab-mcp-woodpecker-srv" "sidecars"
+  assert_out "created secret woodpecker_bridge_key"
+  local srv nginx t="$ROOT/mcp/woodpecker/nginx.conf.template"
+  srv="$(run_line ab-mcp-woodpecker-srv)"; nginx="$(run_line ab-mcp-woodpecker)"
+  [[ "$srv" == *"--network ab-mcp-woodpecker --dns 127.0.0.1 "* ]] || fail "server network: $srv"
+  [[ "$srv" != *ab-internal* && "$srv" != *ab-egress* ]] || fail "the server sees squid or the outside: $srv"
+  [[ "$srv" == *"-e WOODPECKER_MCP_READ_ONLY=true "* ]] || fail "server not read-only: $srv"
+  [[ "$srv" == *"-e WOODPECKER_SERVER=http://ab-mcp-woodpecker:8081 "* ]] || fail "server not behind nginx: $srv"
+  [[ "$srv" != *woodpecker_token* ]] || fail "the server has the Woodpecker token"
+  [[ "$srv" == *" ghcr.io/rtuszik/woodpecker-mcp:"[0-9]* ]] || fail "server image not pinned: $srv"
+  [[ "$nginx" == *"--network ab-internal --network ab-egress --network ab-mcp-woodpecker "* ]] || fail "nginx networks: $nginx"
+  assert_file_has "$ROOT/mcp/woodpecker/mcp.sh" 'podman network create --internal ab-mcp-woodpecker'
+  [[ "$nginx" == *"-e WOODPECKER_URL=https://ci.example "* ]] || fail "URL not normalised: $nginx"
+  [[ "$nginx" == *"-e WOODPECKER_CA_FILE=/etc/ssl/certs/ca-certificates.crt "* ]] || fail "default CA: $nginx"
+  [[ "$nginx" == *"woodpecker_token,type=env,target=WP_TOKEN"* ]] || fail "nginx lacks the token"
+  session_args | grep -qx 'woodpecker_mcp_caller,type=env,target=AB_MCP_TOKEN_WOODPECKER' || fail "caller token not passed"
+  # A renewed token (agentbox setup): nginx, which holds it, is recreated.
+  ab_run --
+  run_line ab-mcp-woodpecker && fail "recreated without a change"
+  echo new-token > "$STUB_DIR/secret-woodpecker_token"
+  ab_run --
+  run_line ab-mcp-woodpecker >/dev/null || fail "nginx kept the old token"
+  run_line ab-mcp-woodpecker-srv && fail "the server recreated for the token"
+  # Both forms of --secret count.
+  local ids
+  ids="$(PATH="$T/bin:$PATH" bash -c 'source "$1/lib/sidecars.sh"; secret_ids --secret woodpecker_token,type=env --secret=woodpecker_bridge_key,type=env' _ "$ROOT")"
+  assert_eq "$(cut -d' ' -f2 <<<"$ids" | paste -sd' ')" "woodpecker_token woodpecker_bridge_key" "secret_ids"
+  # The daily scan covers the pinned image.
+  local image; image="$(sed -n 's/^WOODPECKER_MCP_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/woodpecker/mcp.sh")"
+  grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
+  # The template: bridge key towards the server, GET and HEAD only and the token
+  # towards Woodpecker, its certificate verified.
+  assert_file_has "$t" 'proxy_set_header Authorization "Bearer \$\{WP_BRIDGE_KEY\}";'
+  assert_file_has "$t" 'if \(\$http_authorization != "Bearer \$\{WP_BRIDGE_KEY\}"\)'
+  assert_file_has "$t" 'limit_except GET \{'
+  assert_file_has "$t" 'proxy_set_header Authorization "Bearer \$\{WP_TOKEN\}";'
+  assert_file_has "$t" 'proxy_ssl_verify on;'
+  # A CA of your own is mounted; a missing one or a bad URL stops the start.
+  echo "-----BEGIN CERTIFICATE-----" > "$T/ca.pem"
+  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/ca.pem"
+  ab_run --
+  assert_rc 0
+  run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_CA_FILE=/etc/nginx/woodpecker-ca.pem .*:/etc/nginx/woodpecker-ca.pem:ro,Z" \
+    || fail "own CA not mounted: $(run_line ab-mcp-woodpecker)"
+  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
+  ab_run --
+  assert_rc 1
+  assert_out "missing.pem is missing"
+  local bad
+  for bad in ci.example 'https://ci.example/;}server{' 'https://ci.example/$host' 'https://ci.example/#x' 'https://u:p@ci.example'; do
+    : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=$bad"
+    ab_run --
+    assert_rc 2
+    assert_out "WOODPECKER_URL must be an http:// or https:// URL"
+  done
+  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=http://ci.example"
+  ab_run --
+  assert_rc 0
+  assert_out "WOODPECKER_URL is http://: the Woodpecker token"
+  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example//api//"
+  ab_run --
+  run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_URL=https://ci.example " || fail "slashes kept: $(run_line ab-mcp-woodpecker)"
+  # A network of that name without --internal is not used.
+  ab_run STUB_NET_INTERNAL=false --
+  assert_rc 1
+  assert_out "ab-mcp-woodpecker is not --internal"
+  run_line ab-mcp-woodpecker-srv && fail "server started on a network with a way out"
+  return 0
+}
+
 test_github_nginx_follows_its_server() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=github"

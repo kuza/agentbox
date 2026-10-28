@@ -10,16 +10,16 @@
 Run [Claude Code](https://code.claude.com/docs), or the [pi](https://pi.dev) coding agent with OpenAI models (ChatGPT subscription or API key), in an isolated rootless Podman container that can reach only:
 
 - the model API (Anthropic for Claude Code; OpenAI for pi),
-- MCP servers for **Context7** (library documentation) and, each optional, **Grafana** (with **Prometheus** via Grafana), **Graylog**, **GitHub** and **Tabularis** (your databases through the Tabularis desktop app).
+- MCP servers for **Context7** (library documentation) and, each optional, **Grafana** (with **Prometheus** via Grafana), **Graylog**, **GitHub**, **Woodpecker CI** (read-only) and **Tabularis** (your databases through the Tabularis desktop app).
 
-No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub) live only in sidecar containers that the agent cannot read; database passwords stay with Tabularis on the host. `git push` is done on the host.
+No host credentials are mounted into the agent container, and all service tokens (Grafana, Graylog, GitHub, Woodpecker) live only in sidecar containers that the agent cannot read; database passwords stay with Tabularis on the host. `git push` is done on the host.
 
 ## Contents
 
 - **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [Setup in detail](#setup-in-detail) · [Daily usage](#daily-usage)
 - **[How it works](#how-it-works):** [Architecture](#architecture) · [Security model](#security-model) · [Git on the host](#git-on-the-host) · [Egress](#egress)
 - **[Agents](#agents):** [pi (OpenAI)](#pi-openai) · [Memory and personal instructions](#memory-and-personal-instructions) · [Status line](#status-line) · [Skills](#skills)
-- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [Documentation (Context7)](#documentation-context7)
+- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
 - **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
@@ -275,6 +275,9 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
                       ├──► ab-mcp-github ───► ab-mcp-github-srv ──► api.github.com
                       │    (nginx, caller auth,   (github-mcp-server,
                       │     injects PAT)           ab-egress only)
+                      ├──► ab-mcp-woodpecker ──► ab-mcp-woodpecker-srv ──► ab-mcp-woodpecker:8081 ──► Woodpecker
+                      │    (nginx, caller auth)   (woodpecker-mcp,           (same nginx: GET/HEAD
+                      │                            read-only, own network)    only, injects the token)
                       └──► ab-mcp-tabularis ──► ab-mcp-tabularis-relay ──► supergateway ──► tabularis --mcp
                            (nginx, caller auth,  (socat, host network,     (host service,
                             unix socket)          unix socket → loopback)   127.0.0.1)
@@ -289,6 +292,8 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
 | `ab-mcp-github` | `ab-internal`, `ab-egress` | GitHub PAT | nginx: checks the caller token, injects the PAT, pins toolsets and lockdown mode. Module `github` |
 | `ab-llm-openai` | `ab-internal`, `ab-egress` | OpenAI API key | nginx: checks the caller token, injects the API key, forwards to `api.openai.com` with certificate verification. Only for pi in API-key mode |
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Module `github` |
+| `ab-mcp-woodpecker` | `ab-internal`, `ab-egress`, `ab-mcp-woodpecker` | Woodpecker token, bridge key | nginx: on `:8080` checks the caller token and sends the bridge key on to the server; on `:8081` lets the server read Woodpecker (GET and HEAD only, bridge key checked, token injected, certificate verified). Module `woodpecker` |
+| `ab-mcp-woodpecker-srv` | `ab-mcp-woodpecker` **only** (`--internal`, no outside DNS) | none | `rtuszik/woodpecker-mcp` in read-only mode; sees nginx and nothing else, not even squid. Not reachable from the agent. Module `woodpecker` |
 | `ab-mcp-tabularis` | `ab-internal` **only** | Tabularis bridge key | nginx: checks the caller token, replaces it with the bridge key, forwards to the relay's unix socket. Module `tabularis` |
 | `ab-mcp-tabularis-relay` | host network | none | socat: the unix socket in the volume `ab-mcp-tabularis-sock`, forwarded to supergateway on `127.0.0.1`. Not reachable from the agent. Module `tabularis` |
 
@@ -582,7 +587,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 | Directory | |
 |---|---|
-| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `tabularis` |
+| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis` |
 | `mcp.local/<name>/` | Your own modules, in [your files](#your-files). A name that also exists in `mcp/` replaces that module |
 
 `AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
@@ -693,6 +698,37 @@ What it does and does not change:
 - **Main risk is inbound.** Public repositories, issues and READMEs are arbitrary third-party text and code: a prompt injection source and a supply-chain source, like PyPI. Weigh this against what the agent can read in the box: your code, and whatever the MCP servers return, such as logs.
 
 Leaving it off and asking the agent to read public repositories through the GitHub MCP tools (the PAT can read public repositories) is the more contained alternative.
+
+### Woodpecker (MCP)
+
+Optional: the `woodpecker` module (`AB_MCP=... woodpecker`). The agent reads [Woodpecker CI](https://woodpecker-ci.org/): repositories, pipelines and their status, step logs, pipeline configs, the queue. **Read only**: it cannot start, restart, cancel or approve anything.
+
+Woodpecker has no official MCP server. The module runs [`rtuszik/woodpecker-mcp`](https://github.com/rtuszik/woodpecker-mcp), pinned to one release in `mcp/woodpecker/mcp.sh` and scanned daily with the other images.
+
+#### How it is wired
+
+Woodpecker's personal access tokens have no scopes: a token can do all its user can, including starting pipelines that get the CI's secrets. So the token never reaches the MCP server, and writing is refused below it:
+
+- **`ab-mcp-woodpecker-srv`** runs woodpecker-mcp with its write tools removed (`WOODPECKER_MCP_READ_ONLY`), only on the `--internal` network `ab-mcp-woodpecker` and without DNS for outside names: it sees nginx and nothing else, not even squid on `ab-internal`, and the agent cannot reach it. Its "Woodpecker" is nginx's port 8081, and the token it forwards there is a bridge key, not Woodpecker's.
+- **`ab-mcp-woodpecker`** (nginx, `mcp/woodpecker/nginx.conf.template`):
+  - on `:8080`, for the agent: checks the caller token (`woodpecker_mcp_caller`) and sends the bridge key (`woodpecker_bridge_key`, generated) on to the server;
+  - on `:8081`, for the server: checks the bridge key, lets **GET and HEAD only** through, puts in the Woodpecker token and verifies Woodpecker's certificate. Whatever the server's code does, nothing but reading reaches Woodpecker.
+
+#### Setup
+
+1. In Woodpecker, log in as a user for the agent that can only read the repositories it needs: Woodpecker takes permissions from your forge (Gitea, GitHub, GitLab, ...), so read access there is enough. Your own user works too, with all your rights behind the token, but the GET-only proxy still keeps it to reading.
+2. Under your user's settings, copy the personal access token.
+3. `agentbox setup`: turn `woodpecker` on, enter `WOODPECKER_URL` (e.g. `https://ci.example.internal`) and the token, which is stored as the Podman secret `woodpecker_token`. By hand: `WOODPECKER_URL=...` in `config.env`, `woodpecker` in `AB_MCP`, and `read -rsp 'Woodpecker token: ' T && printf '%s' "$T" | podman secret create woodpecker_token -; echo; unset T`.
+4. For an https Woodpecker signed by your own CA, set `WOODPECKER_CA` to the CA certificate file on the host.
+
+#### Things to watch
+
+- **Step logs are third-party text.** Woodpecker masks the values of its secrets in logs, but anything else a step prints reaches the agent, and can carry prompt injection like any other content.
+- `/mcp` shows the server failing with 401 from Woodpecker: the token is wrong or expired; `e <number>` in `agentbox setup` replaces it.
+
+#### Disable
+
+Remove `woodpecker` from `AB_MCP`. The next start removes the sidecars. The secrets stay until you remove them (or `agentbox uninstall --all` does): `podman secret rm woodpecker_token woodpecker_bridge_key woodpecker_mcp_caller`.
 
 ### Tabularis (MCP)
 
@@ -972,7 +1008,7 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section, that 
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. Both set in `Containerfile` | `AB_UPGRADE=1 agentbox` |
 | uv, Python interpreters | Pinned in `Containerfile` | Bump `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`; the next start rebuilds. Which patch release of each version gets installed is decided by the uv version, so bump `UV_VERSION` to get newer patch releases |
 | Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
-| Tokens (Claude, Grafana, Graylog, GitHub) | Expire on their own schedule | Recreate the Podman secret, then `AB_RESTART=1 agentbox` |
+| Tokens (Claude, Grafana, Graylog, GitHub, Woodpecker) | Expire on their own schedule | `agentbox login` for Claude Code; for a module, `e <number>` in `agentbox setup` (or recreate the Podman secret). The next start recreates the sidecars that hold it |
 
 `AB_UPGRADE=1` does everything in one go: pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not touch volumes, secrets or MCP registrations. Running it every week or two is a reasonable rhythm; it takes a few minutes because of the full rebuild.
 
@@ -1069,7 +1105,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
 | `go: go.mod requires go >= 1.X (running go 1.Y; GOTOOLCHAIN=local)` | The image's Go is older than the project needs. `AB_UPGRADE=1 agentbox` (or raise a pinned `AB_GO_VERSION`). |
 | `go` fails to fetch a module with a git or 410/404 error | Private module, or a module not on the public proxy. Vendor it on the host (`go mod vendor`). If the squid log shows `DENIED` for another host, the proxy redirected there; add it deliberately. |
-| pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, `AB_RESTART=1 agentbox pi`. |
+| pi (API key): `OpenAI API error (401)` | Either the API key in `openai_api_key` is invalid, or the sidecar rejected the caller token: `podman logs ab-llm-openai` shows a 401 without an upstream request. If `llm_openai_caller` was recreated, the session was started before that: start a new one. |
 | pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` missing from `AB_EGRESS`. The squid log shows the denied host. |
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | Expected, the callback listener is inside the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | `pi/models.json`, which points pi at the sidecar, is used only when the `openai_api_key` secret exists; otherwise pi gets a `models.json` without overrides. If you switched from API key to subscription, `podman secret rm openai_api_key`. |
@@ -1084,7 +1120,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | nginx sidecar exits on start | nginx resolves `GRAYLOG_URL` at startup. Fix DNS, or use an IP and check TLS/SNI. |
 | Context7 fails in `/mcp` or its tools return proxy errors | Squid did not get the modules' hosts: `podman exec ab-egress cat /etc/squid/agentbox-allow.conf` should list `mcp.context7.com`. `AB_RESTART=1 agentbox` recreates squid. |
 | Context7 tools return 429 | Anonymous rate limit. Wait, or add an API key through a sidecar (see [Documentation (Context7)](#documentation-context7)). |
-| github in `/mcp` fails with 401 | The sidecar has an older `github_mcp_caller` than the session (secret recreated while the sidecar ran): `AB_RESTART=1 agentbox`. |
+| github in `/mcp` fails with 401 | The session has an older `github_mcp_caller` than the sidecar (secret recreated after the session started): start a new session. |
 | github in `/mcp` fails with 502 | nginx cannot reach `ab-mcp-github-srv`: check `podman ps` and its logs. If that container was restarted on its own, restart both with `AB_RESTART=1` (nginx caches its IP). |
 | GitHub tools fail with 403 / 404 | The PAT lacks the permission, the repository is not selected in it, or an org-owned token is pending approval. Writes to code are expected to fail: Contents is read-only. |
 | `git fetch` / `git push` fail inside the box | Expected: GitHub is not reachable from the agent. Run them on the host. |
@@ -1144,6 +1180,8 @@ agentbox . -p "say ok"
 | `AB_UPDATE_EVERY` | `21600` | Seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | Setting of the `github` module: toolsets, enforced by nginx |
 | `TABULARIS_CMD` | `tabularis` | Setting of the `tabularis` module: the command that runs Tabularis on the host; `--mcp` is appended. Letters, digits, spaces and `_./:=+-` only |
+| `WOODPECKER_URL` | unset | Setting of the `woodpecker` module: Woodpecker's base URL, without `/api` (needs the `woodpecker_token` secret) |
+| `WOODPECKER_CA` | unset | Setting of the `woodpecker` module: a CA certificate file for an https Woodpecker signed by your own CA |
 | `TABULARIS_PORT` | `47821` | Setting of the `tabularis` module: supergateway's port on `127.0.0.1` |
 | `AB_SKILLS` | unset | Skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | Personal skills directory, mounted read-only |
@@ -1156,10 +1194,10 @@ agentbox . -p "say ok"
 | `AB_ENV_DIR` | `<AB_HOME>/env` | Per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (what `agentbox pi` sets). `shell` runs bash in the same box instead of an agent, with its own home volume `ab-shell-home`; arguments go to bash: none for an interactive shell, a script, or `-c '...'` |
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
-| `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag or mounted files (nginx templates, `squid.conf`, egress hosts) change. Needed after recreating a Podman secret |
+| `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag, mounted files (nginx templates, `squid.conf`, egress hosts) or Podman secrets change |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
-Sidecars are started once and reused. The next start recreates a sidecar whose settings, image tag or mounted files changed, and removes those of modules no longer in `AB_MCP`. A recreated Podman secret is not visible to `run.sh`; after one:
+Sidecars are started once and reused. The next start recreates a sidecar whose settings, image tag, mounted files or Podman secrets (a secret made anew, such as a renewed token) changed, and removes those of modules no longer in `AB_MCP`. To recreate them all anyway:
 
 ```bash
 AB_RESTART=1 agentbox .

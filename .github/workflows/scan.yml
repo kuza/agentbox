@@ -63,6 +63,7 @@ jobs:
           scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
           scan "agentbox-squid (from Containerfile.squid)" --input "$RUNNER_TEMP/squid.tar"
           for img in docker.io/library/nginx:alpine \
-                     docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest; do
+                     docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest \
+                     ghcr.io/rtuszik/woodpecker-mcp:0.5.3; do
             scan "$img" "$img"
           done

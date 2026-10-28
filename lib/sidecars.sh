@@ -1,8 +1,9 @@
 # Sidecars. Started once and reused across sessions, so several sessions can
 # run in parallel. A sidecar is recreated when what it is started with
-# changes: its podman run arguments (settings, labels, image tag) or the
-# content of the files it mounts. Changes nobody can see from here, such as
-# a rotated podman secret, need AB_RESTART=1.
+# changes: its podman run arguments (settings, labels, image tag), the
+# content of the files it mounts, or the Podman secrets it holds (their IDs).
+# Changes nobody can see from here, such as a server that restarted on its
+# own and got a new address, need AB_RESTART=1.
 
 SIDECARS_WANTED=()
 
@@ -20,11 +21,28 @@ config_hash() {  # <arguments...>
   } | sha256sum | cut -c1-16
 }
 
+# The IDs of the Podman secrets in <podman run arguments>: a secret made
+# anew (a renewed token through agentbox setup) has a new ID, and the
+# sidecar holding the old value is recreated.
+secret_ids() {  # <podman run arguments...>
+  local prev="" arg name
+  for arg in "$@"; do
+    name=""
+    if [[ "$prev" == --secret ]]; then name="${arg%%,*}"
+    elif [[ "$arg" == --secret=* ]]; then name="${arg#--secret=}"; name="${name%%,*}"
+    fi
+    if [[ -n "$name" ]]; then
+      printf 'secret %s %s\n' "$name" "$(podman secret inspect "$name" --format '{{.ID}}' 2>/dev/null)"
+    fi
+    prev="$arg"
+  done
+}
+
 start_sidecar() {  # <name> <podman run arguments...>
   local name="$1" hash
   shift
   SIDECARS_WANTED+=("$name")
-  hash="$(config_hash "$@")"
+  hash="$(config_hash "$@" "$(secret_ids "$@")")"
   if [[ "${AB_RESTART:-}" != 1 ]] \
      && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]] \
      && [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.config"}}' "$name" 2>/dev/null)" == "$hash" ]] \

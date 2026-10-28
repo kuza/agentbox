@@ -1,0 +1,56 @@
+# nginx template, rendered by the official nginx image's envsubst entrypoint.
+# Only variables defined in the environment are substituted:
+#   WP_CALLER_TOKEN     the caller token the agent sends (woodpecker_mcp_caller)
+#   WP_BRIDGE_KEY       the key between nginx and woodpecker-mcp
+#                       (woodpecker_bridge_key)
+#   WP_TOKEN            the Woodpecker personal access token (woodpecker_token)
+#   WOODPECKER_URL      Woodpecker's base URL, WOODPECKER_CA_FILE the CAs to
+#                       verify it with
+# nginx's own variables ($http_authorization, $proxy_host) are left untouched.
+
+# The agent's side: caller token in, bridge key on to the server.
+server {
+    listen 8080;
+
+    location = /mcp {
+        if ($http_authorization != "Bearer ${WP_CALLER_TOKEN}") {
+            return 401;
+        }
+        proxy_pass http://ab-mcp-woodpecker-srv:8000/mcp;
+        proxy_set_header Authorization "Bearer ${WP_BRIDGE_KEY}";
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location / { return 404; }
+}
+
+# The server's side: the bridge key in, reading only (GET and HEAD), the
+# token on to Woodpecker. The agent reaches this port too, but has no
+# bridge key.
+server {
+    listen 8081;
+
+    location /api/ {
+        if ($http_authorization != "Bearer ${WP_BRIDGE_KEY}") {
+            return 401;
+        }
+        limit_except GET {
+            deny all;
+        }
+        proxy_pass ${WOODPECKER_URL}/api/;
+        proxy_set_header Authorization "Bearer ${WP_TOKEN}";
+        proxy_set_header Host $proxy_host;
+        proxy_set_header Cookie "";
+        proxy_ssl_server_name on;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 4;
+        proxy_ssl_trusted_certificate ${WOODPECKER_CA_FILE};
+        proxy_read_timeout 120s;
+    }
+
+    location / { return 404; }
+}

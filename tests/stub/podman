@@ -45,13 +45,20 @@ image_id() {  # <image>
 }
 
 case "$1 ${2:-}" in
-  "secret inspect") grep -qx -- "$3" "$S/secrets" ;;
+  "secret inspect")
+    grep -qx -- "$3" "$S/secrets" || exit 1
+    # --format '{{.ID}}': an ID that changes with the secret's value.
+    [[ " $* " == *" --format "* ]] && echo "id-$({ cksum < "$S/secret-$3"; } 2>/dev/null | cut -d' ' -f1)"
+    exit 0 ;;
   "secret rm") drop secrets "$3" ;;
   "secret ls") cat "$S/secrets" ;;
   "volume ls") cat "$S/volumes" ;;
   "volume rm") drop volumes "$3" ;;
   "network ls") cat "$S/networks" ;;
-  "network inspect") awk -v n="$3" '$1 == n { printf "%s ", $2 }' "$S/netconns" ;;
+  "network inspect")
+    # --format '{{.Internal}}': STUB_NET_INTERNAL, default true.
+    [[ " $* " == *"{{.Internal}}"* ]] && { echo "${STUB_NET_INTERNAL:-true}"; exit 0; }
+    awk -v n="$3" '$1 == n { printf "%s ", $2 }' "$S/netconns" ;;
   "network disconnect") awk -v n="$3" -v c="$4" '!($1 == n && $2 == c)' "$S/netconns" > "$S/nc.new"; mv "$S/nc.new" "$S/netconns" ;;
   "network rm")
     if [[ "$3" != -f ]] && awk -v n="$3" '$1 == n { f = 1 } END { exit !f }' "$S/netconns"; then

@@ -6,6 +6,15 @@ the steps a release needs from you, such as a rebuild.
 
 ## v0.1.7
 
+- New MCP module `woodpecker`: Woodpecker CI's repositories, pipelines,
+  step logs and configs, read only, through `rtuszik/woodpecker-mcp`. The
+  Woodpecker token stays in nginx, which lets the server read only (GET
+  and HEAD); the server is on an --internal network of its own with nginx,
+  without squid or outside DNS. See README, Woodpecker (MCP).
+- A sidecar is recreated when a Podman secret it holds is made anew: a
+  token renewed with `e <number>` in `agentbox setup` takes effect at the
+  next start, without `AB_RESTART=1`. The first start after the update
+  recreates every sidecar that holds a secret once.
 - pi with a ChatGPT subscription stopped with "EACCES ... models.json" when
   it had once run with an API key: the mount of models.json had left an
   empty, root-owned file in pi's home volume, which pi then read in its
