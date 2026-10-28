@@ -123,6 +123,7 @@ session_env_file() {
 # caller tokens are environment variables (MCP_SESSION_ARGS), which the
 # generated configs reference as ${AB_MCP_TOKEN_<NAME>}.
 session_agent_args() {
+  local copy
   AGENT_ARGS=(${MCP_SESSION_ARGS[@]+"${MCP_SESSION_ARGS[@]}"})
   [[ -n "$AGENT_VOL" ]] && AGENT_ARGS+=(-v "$AGENT_VOL:$AGENT_PREFIX:ro")
   AGENT_CMD=()
@@ -162,7 +163,9 @@ session_agent_args() {
         AGENT_ARGS+=(-v "$USER_AGENTS_MD:/home/node/.claude/CLAUDE.md:ro,z")
       fi
       if [[ -n "$STATUSLINE" ]]; then
-        AGENT_ARGS+=(-v "$SCRIPT_DIR/claude/statusline.py:/home/node/.claude/statusline.py:ro,z")
+        # A copy: the code's own file may not be relabelled (cache_copy).
+        copy="$(cache_copy session/claude "$SCRIPT_DIR/claude/statusline.py")" || exit 1
+        AGENT_ARGS+=(-v "$copy:/home/node/.claude/statusline.py:ro,z")
       fi
       ;;
     pi)
@@ -189,9 +192,10 @@ session_agent_args() {
       # sidecar instead of api.openai.com.
       if podman secret inspect openai_api_key >/dev/null 2>&1 \
          && podman secret inspect llm_openai_caller >/dev/null 2>&1; then
+        copy="$(cache_copy session/pi "$SCRIPT_DIR/pi/models.json")" || exit 1
         AGENT_ARGS+=(
           --secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN"
-          -v "$SCRIPT_DIR/pi/models.json:/home/node/.pi/agent/models.json:ro,z"
+          -v "$copy:/home/node/.pi/agent/models.json:ro,z"
         )
       fi
       if [[ -n "$SKILLS_SRC" ]]; then

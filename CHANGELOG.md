@@ -6,6 +6,11 @@ the steps a release needs from you, such as a rebuild.
 
 ## v0.1.6
 
+- pi in API-key mode failed in an installed version with "EACCES ... models.json",
+  and Claude Code's status line was not shown: both files were mounted from
+  the read-only installed code, which podman cannot relabel for SELinux.
+  Sessions now mount copies from `$XDG_CACHE_HOME/agentbox/session/`
+  (default `~/.cache`).
 - Every start prints which agentbox runs: `agentbox v0.1.6`, or
   `agentbox dev (<path>)` from a clone.
 - `agentbox update` shows the changes of every release it brings, skipped

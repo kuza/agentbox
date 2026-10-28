@@ -496,7 +496,7 @@ Both agents get the same file, **read-only**: Claude Code as `~/.claude/CLAUDE.m
 
 `claude/statusline.py` draws Claude Code's status line: model, repo directory and git branch, context window use, the 5-hour and weekly subscription limits with their reset times, and the session cost. Percentages turn yellow from 50% and red from 80%. A part whose data Claude Code does not send (limits with an API key, context before the first reply) is left out.
 
-The script is mounted read-only as `~/.claude/statusline.py`. `run.sh` adds the `statusLine` setting to `~/.claude/settings.json` only when that key is absent, so your own status line there is kept and replaces this one; to switch to this one, delete the key and start a new session. Times use the host's time zone: `run.sh` passes it to the session as `TZ`.
+A copy of the script, made at each start in `~/.cache/agentbox/session/claude/` (an installed version's own files cannot be relabelled for SELinux), is mounted read-only as `~/.claude/statusline.py`; edit `claude/statusline.py` in a clone, not the copy. `run.sh` adds the `statusLine` setting to `~/.claude/settings.json` only when that key is absent, so your own status line there is kept and replaces this one; to switch to this one, delete the key and start a new session. Times use the host's time zone: `run.sh` passes it to the session as `TZ`.
 
 **About `--dangerously-skip-permissions`.** Inside this box it is a reasonable choice: the worst case is modified files in the repo (recoverable via git), read access to Grafana and Graylog within Viewer rights, and requests to allowlisted hosts. It is only reasonable if the service accounts are really read-only.
 
@@ -1062,7 +1062,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 
 | Symptom | Likely cause / fix |
 |---|---|
-| The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars mount copies of their config files from the cache, so they do not cause this |
+| The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars and sessions mount copies of agentbox's files from the cache, so they do not cause this; an installed version's files are read-only and could not be relabelled anyway |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. For an MCP module enabled in `config.env`: step 5 of [Setup in detail](#setup-in-detail). |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host in a group in `egress.local.d/` (see [Egress](#egress)); the next start recreates squid. |
@@ -1177,14 +1177,14 @@ AB_RESTART=1 agentbox .
 | `mcp/<name>/` | MCP server modules, enabled with `AB_MCP`: `mcp.sh` plus files such as nginx templates. See [MCP servers](#mcp-servers) |
 | `config.env.example` | Settings template; copy to `~/.config/agentbox/config.env` |
 | `pi.sh` | Same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
-| `pi/models.json` | pi configuration, mounted read-only: model endpoint for API-key mode |
+| `pi/models.json` | pi configuration: model endpoint for API-key mode; a copy, made at each start in `~/.cache/agentbox/session/pi/`, is mounted read-only |
 | `pi/llm-openai.conf.template` | nginx config for the OpenAI sidecar (pi with an API key): caller auth, API key injection |
 | `Containerfile` | Base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `Containerfile.squid` | The egress proxy's image: Debian's squid, built here like the base image |
 | `squid.conf` | Egress proxy settings and access rules. The allowed hosts come from a generated file it includes |
 | `egress.d/<name>.conf` | Egress groups (PyPI, Go modules, ...), enabled with `AB_EGRESS`. See [Egress](#egress) |
 | `agents/AGENTS.md.example` | Template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
-| `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only; used unless you set your own `statusLine`. See [Status line](#status-line) |
+| `claude/statusline.py` | Claude Code status line (context use, subscription limits, cost), mounted read-only as a copy from `~/.cache/agentbox/session/claude/`; used unless you set your own `statusLine`. See [Status line](#status-line) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), enabled with `AB_SKILLS`. See [Skills](#skills) |
 | `completions/agentbox.bash` | Tab completion for the `agentbox` command in bash, linked into `~/.local/share/bash-completion/completions/` at install and at every update |
 | `git-guard` | Host-side git wrapper, installed as `~/.local/bin/git`: refuses repositories whose `.git` a session redirected. See [Git on the host](#git-on-the-host) |

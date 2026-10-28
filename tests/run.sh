@@ -1257,6 +1257,32 @@ test_release_older_latest_not_offered() {
   assert_eq "$(current_version)" v1.1.0 "after update"
 }
 
+# No session mounts a file of agentbox's code itself: an installed version's
+# files are read-only, podman cannot relabel them, and the agent could not
+# read them (pi stopped on models.json). Copies from the cache instead.
+test_session_mounts_no_code_files() {
+  setup "${FUNCNAME[0]}"
+  local agent src
+  secrets openai_api_key llm_openai_caller
+  for agent in claude pi; do
+    ab_run AB_AGENT=$agent --
+    assert_rc 0
+    while IFS= read -r src; do
+      [[ "$src" == "$AB"/* ]] && fail "$agent mounts $src from the code"
+    done < <(session_args | awk 'prev == "-v" { split($0, a, ":"); print a[1] } { prev = $0 }')
+  done
+  session_args | grep -q "^$(cache session/pi)/models.json:/home/node/.pi/agent/models.json:ro,z\$" \
+    || fail "pi's models.json not a copy from the cache"
+  ab_run --
+  session_args | grep -q "^$(cache session/claude)/statusline.py:/home/node/.claude/statusline.py:ro,z\$" \
+    || fail "the status line not mounted from a copy"
+  # A file of the code missing: the start stops and says so.
+  rm "$AB/pi/models.json"
+  ab_run AB_AGENT=pi --
+  assert_rc 1
+  assert_out "pi/models.json is missing"
+}
+
 test_banner_of_a_release() {
   setup "${FUNCNAME[0]}"
   echo v1.0.0 > "$AB/VERSION"

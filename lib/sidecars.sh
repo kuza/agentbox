@@ -60,19 +60,30 @@ sidecars_cleanup() {
   done
 }
 
-# Config files reach sidecars as copies in the cache, never from the repo.
-# A sidecar mounts its files with ":Z", a label private to that container; on
-# the repo's own file that label would lock out agent sessions and git in
-# them (README, Troubleshooting). Each container gets its own copy, written
-# anew and renamed, so a running sidecar keeps the version it mounted.
+# Config files reach sidecars as copies in the cache, never from the repo:
+# a sidecar mounts its files with ":Z", a label private to that container,
+# which on the repo's own file would lock out agent sessions and git in them
+# (README, Troubleshooting). Each container gets a copy of its own.
 sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$1" dst tmp
+  cache_copy "sidecars/$1" "$2"
+}
+
+# A fresh copy of <file> in the cache, under <subdir>: what a container
+# mounts instead of a file of agentbox's code. An installed version's files
+# are read-only, so podman cannot relabel them for SELinux (":z" and ":Z"
+# need write access) and the container could not read them. Written anew and
+# renamed into place: a container already running keeps the copy it mounted
+# (its bind mount holds the old file), even when sessions share one path.
+cache_copy() {  # <subdir> <file>: prints the path of the copy; 1 on failure
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
   dst="$dir/$(basename "$2")"
-  mkdir -p "$dir"
-  tmp="$(mktemp "$dst.XXXXXX")"
-  cp -- "$2" "$tmp"
-  chmod 644 "$tmp"
-  mv -f -- "$tmp" "$dst"
+  [[ -f "$2" ]] || { echo "error: $2 is missing" >&2; return 1; }
+  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  if ! { cp -- "$2" "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
+    rm -f -- "$tmp"
+    echo "error: cannot copy $2 to $dst" >&2
+    return 1
+  fi
   printf '%s\n' "$dst"
 }
 
