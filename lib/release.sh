@@ -57,8 +57,26 @@ release_latest() {
 # The CHANGELOG.md section of a version.
 release_notes() {  # <changelog> <version>
   awk -v v="$2" '
+    { sub(/\r$/, "") }
     /^## / { if (on) exit; on = ($2 == v) }
     on { print }' "$1"
+}
+
+# The CHANGELOG sections of the releases after <current> up to <new>, newest
+# first, each once: what an update brings, also from releases it skips. A
+# heading is read as release_notes reads it (its second field), so text
+# after the version does not hide a section. Nothing in that range: <new>'s
+# own section.
+release_notes_since() {  # <changelog> <current> <new>
+  local v found=""
+  while IFS= read -r v; do
+    [[ "$v" =~ $VERSION_RE ]] || continue
+    version_newer "$v" "$2" && ! version_newer "$v" "$3" || continue
+    release_notes "$1" "$v"
+    found=1
+  done < <(awk '/^## / { sub(/\r$/, "", $2); print $2 }' "$1" | sort -urV)
+  [[ -n "$found" ]] || release_notes "$1" "$3"
+  return 0
 }
 
 release_installed() {  # 0 if this copy is an installed version
@@ -186,7 +204,7 @@ release_update() {  # [--yes]
     return 1
   fi
   echo "agentbox: $current -> $tag (signature verified)"
-  release_notes "$tmp/x/agentbox-$tag/CHANGELOG.md" "$tag" | sed 's/^/  /'
+  release_notes_since "$tmp/x/agentbox-$tag/CHANGELOG.md" "$current" "$tag" | sed 's/^/  /'
   if [[ -z "$yes" ]]; then
     local reply=""
     if [[ -t 0 ]]; then read -r -p "agentbox: install $tag? [y/N] " reply || reply=""; fi

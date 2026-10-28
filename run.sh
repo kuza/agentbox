@@ -74,7 +74,7 @@ done
 
 # Which agentbox runs: the release, or a clone and where it is.
 RUNNING_VERSION="$(agentbox_version)"
-if [[ "$RUNNING_VERSION" == dev ]]; then echo "agentbox dev ($SCRIPT_DIR)" >&2; else echo "agentbox $RUNNING_VERSION" >&2; fi
+if [[ "$RUNNING_VERSION" == dev ]]; then echo "agentbox dev ($(realpath -- "$SCRIPT_DIR"))" >&2; else echo "agentbox $RUNNING_VERSION" >&2; fi
 
 # ---------------------------------------------------------------------------
 # Arguments. If the first argument is an existing directory, it is the repo;

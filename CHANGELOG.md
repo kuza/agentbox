@@ -8,6 +8,9 @@ the steps a release needs from you, such as a rebuild.
 
 - Every start prints which agentbox runs: `agentbox v0.1.6`, or
   `agentbox dev (<path>)` from a clone.
+- `agentbox update` shows the changes of every release it brings, skipped
+  ones included, newest first. (The update to v0.1.6 itself still runs the
+  older code and shows only this section.)
 
 ## v0.1.5
 

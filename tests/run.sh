@@ -1257,6 +1257,42 @@ test_release_older_latest_not_offered() {
   assert_eq "$(current_version)" v1.1.0 "after update"
 }
 
+test_banner_of_a_release() {
+  setup "${FUNCNAME[0]}"
+  echo v1.0.0 > "$AB/VERSION"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(head -n1 "$T/out")" "agentbox v1.0.0" "banner of a release"
+}
+
+# An update over skipped releases shows each one's changes, not the
+# installed one's.
+test_release_update_shows_skipped() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  make_release v1.2.0
+  # Out of order, one with a date after the version, one twice.
+  printf '%s\n' '# Changelog' '' '## v1.1.0 (2026-11-01)' '' '- changes of v1.1.0' '' '## v1.2.0' '' '- changes of v1.2.0' '' \
+    '## v1.0.0' '' '- changes of v1.0.0' '' '## v1.1.0' '' '- the same again' > "$T/rel/agentbox-v1.2.0/CHANGELOG.md"
+  pack v1.2.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  assert_out "changes of v1.2.0"
+  assert_out "changes of v1.1.0"
+  assert_no_out "changes of v1.0.0"
+  assert_no_out "the same again"
+  [[ "$(grep -n 'changes of v1.2.0' "$T/out" | cut -d: -f1)" -lt "$(grep -n 'changes of v1.1.0' "$T/out" | cut -d: -f1)" ]] \
+    || fail "not newest first"
+  # No section in the range: the new release's own, as before.
+  ab_cmd agentbox rollback
+  printf '%s\n' '## v9.9.9' '' '- something else' > "$T/rel/agentbox-v1.2.0/CHANGELOG.md"
+  pack v1.2.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  assert_out "v1.0.0 -> v1.2.0"
+}
+
 test_release_missing_asset() {
   rel_setup "${FUNCNAME[0]}"
   make_release v1.0.0
@@ -1905,11 +1941,7 @@ test_session_basics() {
   echo "# rules" > "$CFG/AGENTS.md"
   ab_run --
   assert_rc 0
-  assert_eq "$(head -n1 "$T/out")" "agentbox dev ($AB)" "banner from a clone"
-  echo v1.0.0 > "$AB/VERSION"
-  ab_run --
-  assert_eq "$(head -n1 "$T/out")" "agentbox v1.0.0" "banner of a release"
-  rm "$AB/VERSION"
+  assert_eq "$(head -n1 "$T/out")" "agentbox dev ($(realpath "$AB"))" "banner from a clone"
   local args; args="$(session_args)"
   grep -qx -- "$REPO:/work/repo:z" <<<"$args" || fail "repo not mounted at /work/repo"
   grep -qx -- "$REPO/.git/hooks:/work/repo/.git/hooks:ro,z" <<<"$args" || fail ".git/hooks not read-only"
