@@ -4,6 +4,19 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.8
+
+- New MCP module `dbhub`: SQL databases you list in
+  `~/.config/agentbox/dbhub.toml`, read only, through `bytebase/dbhub`. The
+  agent searches schemas and runs queries; agentbox gives each database a
+  read-only `execute_sql`. DBHub never reads your file: agentbox parses it
+  and writes DBHub's config from the sources alone, and refuses anything
+  else there. The passwords stay out of the session. See README, DBHub
+  (MCP).
+- A sidecar's copies in the cache go when its module is turned off.
+- `agentbox uninstall` also removes the images of the woodpecker and dbhub
+  modules, which it missed (a module names its image through a variable).
+
 ## v0.1.7
 
 - New MCP module `woodpecker`: Woodpecker CI's repositories, pipelines,

@@ -75,6 +75,8 @@ sidecars_cleanup() {
     [[ "$name" == ab-egress || "$name" == ab-mcp-* || "$name" == ab-llm-* ]] || continue
     [[ "$wanted" == *" $name "* ]] && continue
     podman rm -f -v "$name" >/dev/null && echo "agentbox: removed $name, no longer enabled" >&2
+    # Its copies in the cache go with it: some hold passwords (mcp/dbhub).
+    rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$name"
   done
 }
 

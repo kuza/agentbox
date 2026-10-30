@@ -179,6 +179,11 @@ case "$1 ${2:-}" in
     seq=$(( $(cat "$S/idseq" 2>/dev/null || echo 0) + 1 )); echo "$seq" > "$S/idseq"
     echo "$name $name-$seq" >> "$S/ids" ;;
   "run --rm")
+    # A python3 program in the image (mcp/dbhub): runs here, from -I on.
+    if [[ " $* " == *" --entrypoint python3 "* ]]; then
+      while (( $# )) && [[ "$1" != -I ]]; do shift; done
+      exec python3 "$@"
+    fi
     if [[ -n "${STUB_NO_TRIVY:-}" && ( "$*" == *"--entrypoint trivy"* || "$*" == *"command -v trivy"* ) ]]; then exit 1; fi
     if [[ "$*" == *"graphify install"* && "${STUB_GRAPHIFY:-}" == ok ]]; then
       out="$(printf '%s\n' "$@" | sed -n 's#^\(.*\):/out:z$#\1#p')"

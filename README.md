@@ -19,7 +19,7 @@ No host credentials are mounted into the agent container, and all service tokens
 - **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [Setup in detail](#setup-in-detail) · [Daily usage](#daily-usage)
 - **[How it works](#how-it-works):** [Architecture](#architecture) · [Security model](#security-model) · [Git on the host](#git-on-the-host) · [Egress](#egress)
 - **[Agents](#agents):** [pi (OpenAI)](#pi-openai) · [Memory and personal instructions](#memory-and-personal-instructions) · [Status line](#status-line) · [Skills](#skills)
-- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [Documentation (Context7)](#documentation-context7)
+- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [DBHub (MCP)](#dbhub-mcp) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
 - **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
@@ -278,6 +278,7 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
                       ├──► ab-mcp-woodpecker ──► ab-mcp-woodpecker-srv ──► ab-mcp-woodpecker:8081 ──► Woodpecker
                       │    (nginx, caller auth)   (woodpecker-mcp,           (same nginx: GET/HEAD
                       │                            read-only, own network)    only, injects the token)
+                      ├──► ab-mcp-dbhub ──────► your databases (dbhub.toml, read-only tools)
                       └──► ab-mcp-tabularis ──► ab-mcp-tabularis-relay ──► supergateway ──► tabularis --mcp
                            (nginx, caller auth,  (socat, host network,     (host service,
                             unix socket)          unix socket → loopback)   127.0.0.1)
@@ -294,6 +295,7 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Module `github` |
 | `ab-mcp-woodpecker` | `ab-internal`, `ab-egress`, `ab-mcp-woodpecker` | Woodpecker token, bridge key | nginx: on `:8080` checks the caller token and sends the bridge key on to the server; on `:8081` lets the server read Woodpecker (GET and HEAD only, bridge key checked, token injected, certificate verified). Module `woodpecker` |
 | `ab-mcp-woodpecker-srv` | `ab-mcp-woodpecker` **only** (`--internal`, no outside DNS) | none | `rtuszik/woodpecker-mcp` in read-only mode; sees nginx and nothing else, not even squid. Not reachable from the agent. Module `woodpecker` |
+| `ab-mcp-dbhub` | `ab-internal`, `ab-egress` | Database passwords (from your `dbhub.toml`, via a mode-600 copy in the cache) | `bytebase/dbhub`: bearer-token caller auth, Host allowlist, read-only tools only. Module `dbhub` |
 | `ab-mcp-tabularis` | `ab-internal` **only** | Tabularis bridge key | nginx: checks the caller token, replaces it with the bridge key, forwards to the relay's unix socket. Module `tabularis` |
 | `ab-mcp-tabularis-relay` | host network | none | socat: the unix socket in the volume `ab-mcp-tabularis-sock`, forwarded to supergateway on `127.0.0.1`. Not reachable from the agent. Module `tabularis` |
 
@@ -587,7 +589,7 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 | Directory | |
 |---|---|
-| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis` |
+| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub` |
 | `mcp.local/<name>/` | Your own modules, in [your files](#your-files). A name that also exists in `mcp/` replaces that module |
 
 `AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
@@ -775,6 +777,51 @@ podman secret rm tabularis_mcp_caller tabularis_bridge_key
 podman volume rm ab-mcp-tabularis-sock
 rm -r ~/.cache/agentbox/tabularis
 ```
+
+### DBHub (MCP)
+
+Optional: the `dbhub` module (`AB_MCP=... dbhub`). The agent reads SQL databases you list: it searches schemas, tables, columns and indexes and runs queries, **read only**. [DBHub](https://github.com/bytebase/dbhub) speaks PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and SQLite; with two tools in all it costs the agent little context. Unlike [Tabularis](#tabularis-mcp) it needs nothing on the host, but there is no window to approve writes: it only reads.
+
+#### How it is wired
+
+- **`ab-mcp-dbhub`** runs `bytebase/dbhub`, pinned to one release in `mcp/dbhub/mcp.sh` and scanned daily with the other images, on `ab-internal` and `ab-egress`: it connects to the databases directly, since a database connection is not HTTP and cannot go through squid. It rejects requests without the caller token (`dbhub_mcp_caller`); a `Host` allowlist on top guards against DNS rebinding.
+- **Your `dbhub.toml`** lists the databases as `[[sources]]`, with their passwords. DBHub does not read it. At every start `mcp/dbhub/config.py` parses it with Python's TOML parser (in a throwaway container of the agentbox image, without network) and writes DBHub's config anew from what it parsed: your sources, their values only strings, numbers, booleans and lists of those, and for each source the two tools the agent gets, `execute_sql` with `readonly = true` and `search_objects`. Anything else in `dbhub.toml` stops the start: another table (`[[tools]]` among them, since a tool of yours could write), a source without an `id`, a nested table or a date. Since DBHub gets only what agentbox wrote, nothing in your file can be read one way by agentbox and another by DBHub. The result goes to `~/.cache/agentbox/sidecars/ab-mcp-dbhub/dbhub.toml` (mode 600), a copy with the passwords, and is mounted into the sidecar; a changed source recreates it at the next start. If `dbhub.toml` is deleted or refused, the start removes the sidecar of the last start and that copy, so deleting the file takes the access away. The session never sees the passwords.
+- **Read-only** in DBHub is two checks: it refuses statements that are not reads, and on PostgreSQL, MySQL, MariaDB and Oracle it runs each query in a `READ ONLY` transaction, so the database itself refuses a write the first check missed. The real boundary is the database user, below.
+
+#### Setup
+
+1. For each database, create a user that can only read what the agent needs (PostgreSQL: `CREATE ROLE agent LOGIN PASSWORD '...'`, then `GRANT CONNECT`, `GRANT USAGE ON SCHEMA` and `GRANT SELECT ON ALL TABLES IN SCHEMA`, or `pg_read_all_data` for everything).
+2. Write `~/.config/agentbox/dbhub.toml`, one `[[sources]]` per database. `id` (letters, digits, `_`, `-`; DBHub reads `-` as `_`, so `prod-db` and `prod_db` would clash) is the name the agent picks a database by; `description` tells it what is there:
+
+   ```toml
+   [[sources]]
+   id = "billing"
+   description = "Billing: invoices, payments, customers"
+   dsn = "postgres://agent:PASSWORD@db1.example.internal:5432/billing?sslmode=require"
+   lazy = true
+
+   [[sources]]
+   id = "crm"
+   dsn = "postgres://agent:PASSWORD@db2.example.internal:5432/crm?sslmode=require"
+   lazy = true
+   query_timeout = 30
+   ```
+
+   `lazy = true` connects at the first query to that database. Without it DBHub connects to all of them at its start and exits if one fails, and the agent gets none.
+
+   `chmod 600 ~/.config/agentbox/dbhub.toml`: it holds passwords, and agentbox warns while the group or others may read it. Special characters in a password are URL-encoded in a DSN (`@` as `%40`); or use `type`, `host`, `port`, `database`, `user` and `password` instead of `dsn`. Other source settings (`query_timeout`, `connection_timeout`, `sslmode`, ...) are in [DBHub's TOML reference](https://dbhub.ai/config/toml).
+3. `agentbox setup`: turn `dbhub` on (or add it to `AB_MCP`). The next start starts the sidecar; check with `/mcp` in a session.
+
+#### Things to watch
+
+- **TLS.** Set `sslmode` in each DSN: `require` encrypts but does not check the server's certificate, `disable` sends the password and the data in clear. `verify-ca` and `verify-full` against your own CA need a CA file in the container, which the module does not mount yet; nor does it support SSH tunnels (`ssh_*`). The sidecar reaches what the host's network reaches.
+- **Names in your network.** The sidecar resolves database hosts through Podman's DNS, which uses the host's resolvers; if a name does not resolve, see the Troubleshooting row "Sidecar can't resolve Grafana/Graylog".
+- **Query results are third-party text.** Data from a database can carry prompt injection like any other content.
+- `/mcp` shows `ENOTFOUND ab-mcp-dbhub`: the sidecar exited, usually because a database refused it at start (see `lazy` above). `podman logs ab-mcp-dbhub` names the database and the reason, such as `no pg_hba.conf entry for host ...`: PostgreSQL's `pg_hba.conf` has no rule for that user from your host's address, with or without SSL as the DSN asks.
+
+#### Disable
+
+Remove `dbhub` from `AB_MCP`. The next start removes the sidecar and the copy with the passwords in the cache (if you removed the container by hand before, the copy stays: `rm -r ~/.cache/agentbox/sidecars/ab-mcp-dbhub`). `dbhub.toml` stays, and so does the caller token until you remove it (or `agentbox uninstall --all` does): `podman secret rm dbhub_mcp_caller`.
 
 ### Documentation (Context7)
 
@@ -1243,6 +1290,7 @@ Your settings and data live apart from the code, in `~/.config/agentbox/` (`AB_H
 | `mcp.local/<name>/` | Your own MCP modules; one with the name of a module in `mcp/` replaces it |
 | `skills.local.d/<name>.conf` | Your own skill sources |
 | `egress.local.d/<name>.conf` | Your own egress groups |
+| `dbhub.toml` | Optional. The databases of the `dbhub` module, with their passwords; mode 600. See [DBHub (MCP)](#dbhub-mcp) |
 | `pi-extensions/` | pi extensions you choose to allow, mounted read-only. Created empty on the first start of pi |
 
 `run.sh` refuses to mount a repo that is, contains or lies inside agentbox's code, any installed version (`~/.local/share/agentbox`; `agentbox rollback` would run it), git-guard (`~/.local/bin/git`) or these files: a session could otherwise change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.

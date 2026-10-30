@@ -21,7 +21,9 @@
 #                        environment variable AB_MCP_TOKEN_<NAME>.
 #   MCP_EGRESS=()        hosts the agent reaches directly (remote servers),
 #                        added to squid's allowlist (lib/egress.sh)
-#   MCP_IMAGES=()        images AB_UPGRADE pulls
+#   MCP_IMAGES=()        images AB_UPGRADE pulls, on one line: agentbox
+#                        uninstall reads them as text, literal or "$VAR"
+#                        with a VAR="..." line of the module's own
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
 #                        its files through sidecar_copy, never directly. Name

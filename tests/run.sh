@@ -587,6 +587,124 @@ test_mcp_woodpecker() {
   return 0
 }
 
+test_mcp_dbhub() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=dbhub"
+  # No dbhub.toml: the start stops and says where it goes.
+  ab_run --
+  assert_rc 1
+  assert_out "the dbhub module needs .*/dbhub.toml"
+  cat > "$CFG/dbhub.toml" <<'TOML'
+# two databases
+[[sources]]
+id = "billing"
+dsn = "postgres://ro:p#ss@db1.lan:5432/billing?sslmode=require"
+
+[[sources]]
+id = 'crm'   # single quotes
+description = "CRM"
+dsn = "postgres://ro:x@db2.lan:5432/crm"
+TOML
+  chmod 644 "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 0
+  assert_out "dbhub.toml holds database passwords and the group or others may read it"
+  assert_eq "$(started)" "ab-egress ab-mcp-dbhub" "sidecars"
+  local l f
+  l="$(run_line ab-mcp-dbhub)"
+  [[ "$l" == *"--network ab-internal --network ab-egress "* ]] || fail "networks: $l"
+  [[ "$l" == *"dbhub_mcp_caller,type=env,target=DBHUB_AUTH_TOKEN"* ]] || fail "no caller auth: $l"
+  [[ "$l" == *"-e DBHUB_ALLOWED_HOSTS=ab-mcp-dbhub "* ]] || fail "no Host allowlist: $l"
+  [[ "$l" == *" docker.io/bytebase/dbhub:"[0-9]*" --transport http --port 8080 --config /etc/dbhub/dbhub.toml" ]] || fail "image or arguments: $l"
+  session_args | grep -qx 'dbhub_mcp_caller,type=env,target=AB_MCP_TOKEN_DBHUB' || fail "caller token not passed"
+  # The mounted config: written anew from the parse, read-only tools for
+  # each source; private.
+  f="$(sed -n 's/.* -v \([^ ]*\):\/etc\/dbhub\/dbhub.toml:ro,Z .*/\1/p' <<<"$l")"
+  [[ -f "$f" ]] || fail "mounted config missing: $f"
+  assert_eq "$(stat -c %a "$f")" 600 "config mode"
+  assert_file_has "$f" '^dsn = "postgres://ro:p#ss@db1'
+  assert_file_has "$f" '^id = "crm"$'
+  grep -q 'two databases\|single quotes' "$f" && fail "text of dbhub.toml reached DBHub"
+  assert_eq "$(grep -c '^readonly = true$' "$f")" 2 "read-only execute_sql per source"
+  assert_eq "$(grep -A1 '^name = "execute_sql"$' "$f" | grep -o '"[a-z]*"$' | paste -sd' ')" '"billing" "crm"' "sources"
+  assert_eq "$(grep -c '^name = "search_objects"$' "$f")" 2 "search_objects per source"
+  # A changed source recreates the sidecar; an unchanged one, or a comment,
+  # does not.
+  chmod 600 "$CFG/dbhub.toml"
+  echo '# a comment' >> "$CFG/dbhub.toml"
+  ab_run --
+  run_line ab-mcp-dbhub && fail "recreated without a change"
+  grep -q "others may read it" "$T/out" && fail "warned about a private file"
+  echo 'query_timeout = 30' >> "$CFG/dbhub.toml"
+  ab_run --
+  run_line ab-mcp-dbhub >/dev/null || fail "not recreated for a changed dbhub.toml"
+  # What DBHub gets comes from the parse: an id hidden in a multi-line string
+  # (review 3) is just text in a value.
+  printf '[[sources]]\nid = """prod"""\ndsn = "x"\nx = %s # %s\nid = "decoy"\ny = %s#%s\n' "'''" "'" "'''" "'" > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(grep -A1 '^name = "execute_sql"$' "$f" | grep -o '"[a-z]*"$' | paste -sd' ')" '"prod"' "source from the parse"
+  assert_eq "$(grep -c '^\[\[sources\]\]$' "$f")" 1 "one source"
+  # Nothing but [[sources]]: a tool of yours could write. Each refusal stops
+  # the sidecar of the last start and removes its copy.
+  local bad
+  for bad in '[[tools]]' "[['tools']]" '[other]' "'tools' = 1"; do
+    printf '[[sources]]\nid = "a"\ndsn = "postgres://x@h/d"\n%s\nname = "purge"\n' "$bad" > "$CFG/dbhub.toml"
+    [[ "$bad" == "'tools' = 1" ]] && printf "'tools' = 1\n[[sources]]\nid = \"a\"\n" > "$CFG/dbhub.toml"
+    ab_run --
+    assert_rc 1
+    assert_out "dbhub.toml: (only \[\[sources\]\] entries may be there|not valid TOML)"
+  done
+  grep -qx 'podman rm -f ab-mcp-dbhub' "$STUB_DIR/calls" || fail "old sidecar left serving"
+  [[ -e "$(dirname "$f")" ]] && fail "old copy with the passwords left"
+  for bad in 'x = 1' 'x = { a = 1 }' 'x = [[1]]' 'x = 1979-05-27' '"a b" = 1'; do
+    printf '[[sources]]\nid = "a"\n%s\n' "$bad" > "$CFG/dbhub.toml"
+    ab_run --
+    if [[ "$bad" == 'x = 1' ]]; then assert_rc 0; continue; fi
+    assert_rc 1
+    assert_out "dbhub.toml: source 'a'"
+  done
+  printf '[[sources]]\nid = "a"\ndescription = "${DBHUB_AUTH_TOKEN}"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "source 'a', description: '\\$\{' is not supported"
+  printf '[[sources]]\nid = "a"\nd = "open\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "dbhub.toml: not valid TOML"
+  # DBHub reads - as _ in tool names.
+  printf '[[sources]]\nid = "prod-db"\n[[sources]]\nid = "prod_db"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "source id 'prod_db' is the same as another"
+  printf '[[sources]]\nid = "a"\n[[sources]]\ndsn = "postgres://x@h/d"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "\[\[sources\]\] entry 2 needs an id"
+  printf '[[sources]]\nid = "a b"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "entry 1 needs an id of letters"
+  printf '# nothing yet\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 1
+  assert_out "dbhub.toml: no \[\[sources\]\] entry"
+  # The daily scan covers the pinned image.
+  local image; image="$(sed -n 's/^DBHUB_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/dbhub/mcp.sh")"
+  grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
+  # Turned off: the sidecar and the copy with the passwords go.
+  printf '[[sources]]\nid = "a"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 0
+  [[ -f "$f" ]] || fail "no copy to remove"
+  printf 'ab-mcp-dbhub x\n' >> "$STUB_DIR/running"
+  : > "$CFG/config.env"
+  ab_run --
+  assert_rc 0
+  [[ -e "$(dirname "$f")" ]] && fail "the copy with the passwords stayed"
+  return 0
+}
+
 test_github_nginx_follows_its_server() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=github"
@@ -1559,6 +1677,10 @@ test_uninstall() {
   grep -qx 'podman network disconnect ab-services redis' "$STUB_DIR/calls" || fail "redis not disconnected"
   grep -q '^podman network rm -f' "$STUB_DIR/calls" && fail "network rm -f would remove your containers"
   grep -qx 'podman rmi old-image-id' "$STUB_DIR/calls" || fail "replaced image left behind"
+  local img
+  for img in docker.io/grafana/mcp-grafana:latest docker.io/bytebase/dbhub:1.5.0 ghcr.io/rtuszik/woodpecker-mcp:0.5.3; do
+    grep -qx "podman rmi $img" "$STUB_DIR/calls" || fail "module image $img left behind"
+  done
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine" "secrets kept"
   assert_eq "$(awk '{ print $1 }' "$STUB_DIR/units")" "agentbox-mine.service" "host services left"
   [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
@@ -2125,8 +2247,9 @@ test_refuses_agentbox_code_and_user_files() {
   done
   # Another installed version (rollback would run it), and the directory of
   # git-guard (it runs on every git call on the host).
-  mkdir -p "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin"
-  for r in "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin"; do
+  # The sidecars' copies in the cache, which may hold passwords (mcp/dbhub).
+  mkdir -p "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache/agentbox/sidecars"
+  for r in "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache"; do
     ab_run_repo "$r"
     assert_rc 2
     assert_out "refusing to mount $r: it overlaps"

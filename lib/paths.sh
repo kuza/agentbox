@@ -39,12 +39,13 @@ OLD_PLACES=(
 # Refuses a repo that is, contains or lies inside agentbox's code, the other
 # installed versions, git-guard or your files: a session could change code
 # that runs on the host (rollback switches to another version; git-guard
-# runs on every git call), or read the passwords in env/. Run once the
+# runs on every git call), or read the passwords in env/ or in the
+# sidecars' copies in the cache (mcp/dbhub). Run once the
 # settings are read (AB_ENV_DIR, AB_SKILLS_DIR, AB_CONFIG may move them).
 # Needs INSTALL_DIR (lib/release.sh).
 user_paths_check_repo() {  # <repo> <env dir> <skills dir> <config file>
   local repo="$1" p what
-  for p in "code:$SCRIPT_DIR" "installed versions:$INSTALL_DIR" "git-guard:$HOME/.local/bin/git" "your files:$AB_HOME_DIR" "env dir:$2" "skills dir:$3" "config file:$4"; do
+  for p in "code:$SCRIPT_DIR" "installed versions:$INSTALL_DIR" "git-guard:$HOME/.local/bin/git" "your files:$AB_HOME_DIR" "sidecars' copies:${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars" "env dir:$2" "skills dir:$3" "config file:$4"; do
     what="${p%%:*}"; p="$(realpath -m -- "${p#*:}")"
     if [[ "$repo" == "$p" || "$p" == "$repo"/* || "$repo" == "$p"/* || "$repo" == / ]]; then
       echo "error: refusing to mount $repo: it overlaps agentbox's $what ($p)." >&2

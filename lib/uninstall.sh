@@ -17,14 +17,24 @@
 # lib/sidecars.sh.
 
 # Values of an MCP_ variable in all modules, read as text, not run: names
-# like grafana_sa or images like ghcr.io/x/y:tag ("$IMG_NGINX" is left out,
-# agentbox_uninstall removes it anyway).
+# like grafana_sa or images like ghcr.io/x/y:tag. A "$VAR" there is looked up
+# as a VAR= line of the same file (MCP_IMAGES=("$DBHUB_IMAGE")); one the file
+# does not set ("$IMG_NGINX") is left out, agentbox_uninstall removes it
+# anyway.
 uninstall_names() {  # <MCP_ variable>
-  local f
+  local f v vals
   for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
     [[ -f "$f" ]] || continue
-    sed -n "s/^$1=//p" "$f"
-  done | tr -d '()"' | tr ' ' '\n' | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
+    # Split, never globbed; a trailing comment is not a name.
+    read -ra vals <<<"$(sed -n "s/^$1=//p" "$f" | sed 's/[[:space:]]#.*//' | tr -d '()"' | tr '\n' ' ')"
+    for v in ${vals[@]+"${vals[@]}"}; do
+      if [[ "$v" =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$ ]]; then
+        sed -n "s/^${BASH_REMATCH[1]}=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$f"
+      else
+        printf '%s\n' "$v"
+      fi
+    done
+  done | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
 }
 
 agentbox_uninstall() {
