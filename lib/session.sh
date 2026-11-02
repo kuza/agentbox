@@ -192,8 +192,7 @@ session_agent_args() {
       # pi's own providers must stay, or "Sign in with ChatGPT" requests would
       # go to the sidecar: a models.json without overrides.
       models=""
-      if podman secret inspect openai_api_key >/dev/null 2>&1 \
-         && podman secret inspect llm_openai_caller >/dev/null 2>&1; then
+      if secret_exists openai_api_key && secret_exists llm_openai_caller; then
         models="$SCRIPT_DIR/pi/models.json"
         AGENT_ARGS+=(--secret "llm_openai_caller,type=env,target=OPENAI_CALLER_TOKEN")
       fi

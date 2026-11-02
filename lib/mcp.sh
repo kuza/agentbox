@@ -104,7 +104,7 @@ mcp_check_secrets() {
       fi
     done
     for s in ${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"}; do
-      podman secret inspect "$s" >/dev/null 2>&1 || missing+=("$s ($name)")
+      secret_exists "$s" || missing+=("$s ($name)")
     done
     if [[ -n "$MCP_CALLER_SECRET" ]]; then
       ensure_caller_secret "$MCP_CALLER_SECRET"

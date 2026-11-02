@@ -95,7 +95,7 @@ mcp_start() {
   if [[ ! -s "$key" ]] && tabularis_new_key "$key"; then
     secret_store tabularis_bridge_key < "$key"
     echo "agentbox: created the tabularis bridge key" >&2
-  elif [[ "${AB_RESTART:-}" == 1 ]] || ! podman secret inspect tabularis_bridge_key >/dev/null 2>&1; then
+  elif [[ "${AB_RESTART:-}" == 1 ]] || ! secret_exists tabularis_bridge_key; then
     secret_store tabularis_bridge_key < "$key"
   fi
 

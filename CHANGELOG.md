@@ -4,6 +4,13 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.9
+
+- Faster start: a sidecar that needs no change costs two podman calls
+  instead of five, the Podman secrets are listed with one podman call
+  (twice per start) instead of checked one by one, and the dbhub module parses `dbhub.toml` in a
+  container only when it, the module or the agentbox image changed.
+
 ## v0.1.8
 
 - New MCP module `dbhub`: SQL databases you list in

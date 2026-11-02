@@ -21,9 +21,48 @@ config_hash() {  # <arguments...>
   } | sha256sum | cut -c1-16
 }
 
+# The IDs of all Podman secrets, read by one podman call (secret_ids_load).
+# A secret agentbox makes goes in with its ID; one stored in a pipeline
+# (printf ... | secret_store, which runs in a subshell) does not reach this
+# list, so the caller reads it again (secret_ids_reload).
+declare -A SECRET_IDS=()
+SECRET_IDS_LOADED=""
+
+# A failed listing stops the start: taken for "no secrets", it would report
+# every secret missing and recreate every sidecar that holds one.
+secret_ids_load() {
+  local name id out
+  [[ -n "$SECRET_IDS_LOADED" ]] && return 0
+  if ! out="$(podman secret ls --format '{{.Name}} {{.ID}}')"; then
+    echo "error: cannot list the Podman secrets (podman secret ls failed)" >&2
+    exit 1
+  fi
+  SECRET_IDS=()
+  while read -r name id; do
+    [[ -n "$name" ]] && SECRET_IDS["$name"]="$id"
+  done <<<"$out"
+  SECRET_IDS_LOADED=1
+}
+
+secret_ids_reload() {
+  SECRET_IDS_LOADED=""
+  secret_ids_load
+}
+
+# A secret agentbox just made, added to the list with the ID podman secret
+# create printed.
+secret_ids_add() {  # <secret name> <ID>
+  SECRET_IDS["$1"]="$2"
+}
+
+secret_exists() {  # <secret name>: 0 if it exists, from the IDs read once
+  secret_ids_load
+  [[ -n "${SECRET_IDS[$1]+x}" ]]
+}
+
 # The IDs of the Podman secrets in <podman run arguments>: a secret made
 # anew (a renewed token through agentbox setup) has a new ID, and the
-# sidecar holding the old value is recreated.
+# sidecar holding the old value is recreated. Needs secret_ids_load first.
 secret_ids() {  # <podman run arguments...>
   local prev="" arg name
   for arg in "$@"; do
@@ -32,7 +71,7 @@ secret_ids() {  # <podman run arguments...>
     elif [[ "$arg" == --secret=* ]]; then name="${arg#--secret=}"; name="${name%%,*}"
     fi
     if [[ -n "$name" ]]; then
-      printf 'secret %s %s\n' "$name" "$(podman secret inspect "$name" --format '{{.ID}}' 2>/dev/null)"
+      printf 'secret %s %s\n' "$name" "${SECRET_IDS[$name]:-}"
     fi
     prev="$arg"
   done
@@ -42,11 +81,9 @@ start_sidecar() {  # <name> <podman run arguments...>
   local name="$1" hash
   shift
   SIDECARS_WANTED+=("$name")
+  secret_ids_load
   hash="$(config_hash "$@" "$(secret_ids "$@")")"
-  if [[ "${AB_RESTART:-}" != 1 ]] \
-     && [[ "$(podman inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == "true" ]] \
-     && [[ "$(podman inspect -f '{{index .Config.Labels "agentbox.config"}}' "$name" 2>/dev/null)" == "$hash" ]] \
-     && sidecar_image_current "$name"; then
+  if [[ "${AB_RESTART:-}" != 1 ]] && sidecar_current "$name" "$hash"; then
     return 0
   fi
   # -v: with the container's anonymous volumes (squid declares some), which
@@ -55,14 +92,17 @@ start_sidecar() {  # <name> <podman run arguments...>
   podman run -d --replace --name "$name" --label "agentbox.config=$hash" "$@" >/dev/null
 }
 
-# 0 if the container runs the image its tag names now: a rebuilt squid image
+# 0 if the container runs, was started with <hash> (its agentbox.config
+# label), and runs the image its tag names now: a rebuilt squid image
 # (image_ensure) or a pulled one keeps the tag, so the arguments alone do not
-# show it.
-sidecar_image_current() {  # <container>
-  local tag id
-  tag="$(podman inspect -f '{{.ImageName}}' "$1" 2>/dev/null)" || return 1
+# show it. Two podman calls.
+sidecar_current() {  # <container> <hash>
+  local running label tag image id
+  IFS='|' read -r running label tag image < <(podman inspect \
+    -f '{{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}}' "$1" 2>/dev/null)
+  [[ "$running" == true && "$label" == "$2" && -n "$tag" ]] || return 1
   id="$(podman image inspect -f '{{.Id}}' "$tag" 2>/dev/null)" || return 1
-  [[ -n "$id" && "$(podman inspect -f '{{.Image}}' "$1" 2>/dev/null)" == "$id" ]]
+  [[ -n "$id" && "$image" == "$id" ]]
 }
 
 # Removes agentbox sidecars this start did not ask for: those of MCP modules
@@ -125,8 +165,10 @@ cache_text() {  # <subdir> <name> <text>: prints the path; 1 on failure
 # Caller tokens: a random secret per sidecar that proves the caller may talk
 # to it. Not a credential for the service behind it. Generated once.
 ensure_caller_secret() {  # <secret name>
-  podman secret inspect "$1" >/dev/null 2>&1 && return 0
-  random_token | podman secret create "$1" - >/dev/null
+  local id
+  secret_exists "$1" && return 0
+  id="$(random_token | podman secret create "$1" -)" || return 1
+  secret_ids_add "$1" "$id"
   echo "agentbox: created secret $1" >&2
 }
 
@@ -135,16 +177,18 @@ random_token() {  # prints 32 random bytes as base64 letters and digits
 }
 
 secret_store() {  # <secret name>: create or replace it with stdin
+  local id
   # --replace came with podman 4.7; before, the old secret goes first.
   # Only for an existing secret: podman 4.7-4.9 fail --replace on a new
   # name ("deleting secret : : no secret data with ID").
   if podman secret inspect "$1" >/dev/null 2>&1 \
      && podman secret create --help 2>/dev/null | grep -q -- '--replace'; then
-    podman secret create --replace "$1" - >/dev/null
+    id="$(podman secret create --replace "$1" -)" || return 1
   else
     podman secret rm "$1" >/dev/null 2>&1 || true
-    podman secret create "$1" - >/dev/null
+    id="$(podman secret create "$1" -)" || return 1
   fi
+  secret_ids_add "$1" "$id"
 }
 
 # Host services: programs a module runs on the host itself, not in a
@@ -234,7 +278,7 @@ networks_create() {
 # pi points its built-in openai provider at this sidecar (pi/models.json), so
 # the API key never enters the agent container.
 openai_start() {
-  podman secret inspect openai_api_key >/dev/null 2>&1 || return 0
+  secret_exists openai_api_key || return 0
   ensure_caller_secret llm_openai_caller
   start_sidecar ab-llm-openai \
     --network ab-internal --network ab-egress \

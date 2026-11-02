@@ -24,6 +24,8 @@
 #   old_squid     exists: docker.io/ubuntu/squid:latest is there (else not)
 #   volumes_absent  volumes that do not exist, one per line (others do)
 #   STUB_OLD_PODMAN podman before 4.7: secret create has no --replace
+#   STUB_SECRET_LS_FAIL  secret ls fails (a locked database, say)
+#   STUB_SECRET_CREATE_FAIL  secret create fails
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
@@ -51,7 +53,14 @@ case "$1 ${2:-}" in
     [[ " $* " == *" --format "* ]] && echo "id-$({ cksum < "$S/secret-$3"; } 2>/dev/null | cut -d' ' -f1)"
     exit 0 ;;
   "secret rm") drop secrets "$3" ;;
-  "secret ls") cat "$S/secrets" ;;
+  "secret ls")
+    [[ -n "${STUB_SECRET_LS_FAIL:-}" ]] && { echo "Error: database is locked" >&2; exit 125; }
+    # --format '{{.Name}} {{.ID}}': an ID as secret inspect gives it.
+    if [[ " $* " == *"{{.ID}}"* ]]; then
+      while read -r n; do echo "$n id-$({ cksum < "$S/secret-$n"; } 2>/dev/null | cut -d' ' -f1)"; done < "$S/secrets"
+    else
+      cat "$S/secrets"
+    fi ;;
   "volume ls") cat "$S/volumes" ;;
   "volume rm") drop volumes "$3" ;;
   "network ls") cat "$S/networks" ;;
@@ -75,9 +84,12 @@ case "$1 ${2:-}" in
       echo "Error: ${*: -2:1}: secret name in use" >&2; exit 125
     fi
     # secret create [--replace] <name> -: the value goes to secret-<name>.
+    [[ -n "${STUB_SECRET_CREATE_FAIL:-}" ]] && { echo "Error: database is locked" >&2; exit 125; }
     name=""; for a in "${@:3}"; do [[ "$a" == -* ]] || { name="$a"; break; }; done
     cat > "$S/secret-$name"
-    grep -qx -- "$name" "$S/secrets" || echo "$name" >> "$S/secrets" ;;
+    grep -qx -- "$name" "$S/secrets" || echo "$name" >> "$S/secrets"
+    # Like podman, the new secret's ID, as secret inspect gives it.
+    echo "id-$(cksum < "$S/secret-$name" | cut -d' ' -f1)" ;;
   "image exists")
     [[ "$3" == docker.io/ubuntu/squid:latest ]] && { [[ -f "$S/old_squid" ]]; exit; }
     exit 0 ;;
@@ -122,6 +134,15 @@ case "$1 ${2:-}" in
     esac ;;
   "inspect -f"|"inspect --format")
     name="${*: -1}"
+    # Several fields joined by |: each as asked alone.
+    if [[ "$3" == *"}}|{{"* ]]; then
+      out=""; rest="$3"
+      while [[ -n "$rest" ]]; do
+        f="${rest%%|\{\{*}"; [[ "$f" == "$rest" ]] && rest="" || rest="${rest#"$f"|}"
+        out+="${out:+|}$("$0" inspect -f "$f" "$name")"
+      done
+      echo "$out"; exit 0
+    fi
     case "$3" in
       *State.Running*) grep -q "^$name " "$S/running" && echo true || echo false ;;
       *Labels*) key="$(sed -n 's/.*"\([^"]*\)".*/\1/p' <<<"$3")"

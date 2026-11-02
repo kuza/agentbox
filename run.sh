@@ -136,6 +136,9 @@ skills_init
 user_paths_check_repo "$REPO" "${AB_ENV_DIR:-$USER_ENV_DIR}" "$SKILLS_DIR" "$CONFIG_FILE"
 
 agent_select
+# The secret list, here and not lazily: loaded first inside a $(...) or a
+# pipeline, a failed listing would end only that subshell.
+secret_ids_load
 agent_check_secrets
 mcp_check_secrets
 egress_init
@@ -185,6 +188,9 @@ trivy_update
 mcp_write_configs
 egress_write_conf
 egress_start
+# The secret IDs were read before the image builds and the update prompt:
+# read again, so a token renewed meanwhile recreates its sidecar.
+secret_ids_reload
 mcp_start_all
 openai_start
 forward_start

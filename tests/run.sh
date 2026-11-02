@@ -542,8 +542,9 @@ test_mcp_woodpecker() {
   run_line ab-mcp-woodpecker-srv && fail "the server recreated for the token"
   # Both forms of --secret count.
   local ids
-  ids="$(PATH="$T/bin:$PATH" bash -c 'source "$1/lib/sidecars.sh"; secret_ids --secret woodpecker_token,type=env --secret=woodpecker_bridge_key,type=env' _ "$ROOT")"
+  ids="$(PATH="$T/bin:$PATH" bash -c 'source "$1/lib/sidecars.sh"; secret_ids_load; secret_ids --secret woodpecker_token,type=env --secret=woodpecker_bridge_key,type=env' _ "$ROOT")"
   assert_eq "$(cut -d' ' -f2 <<<"$ids" | paste -sd' ')" "woodpecker_token woodpecker_bridge_key" "secret_ids"
+  assert_eq "$(cut -d' ' -f3 <<<"$ids" | grep -c '^id-[0-9]')" 2 "secret IDs"
   # The daily scan covers the pinned image.
   local image; image="$(sed -n 's/^WOODPECKER_MCP_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/woodpecker/mcp.sh")"
   grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
@@ -631,6 +632,8 @@ TOML
   # A changed source recreates the sidecar; an unchanged one, or a comment,
   # does not.
   chmod 600 "$CFG/dbhub.toml"
+  ab_run --
+  grep -q -- '--entrypoint python3' "$STUB_DIR/calls" && fail "parsed again without a change"
   echo '# a comment' >> "$CFG/dbhub.toml"
   ab_run --
   run_line ab-mcp-dbhub && fail "recreated without a change"
@@ -702,6 +705,32 @@ TOML
   ab_run --
   assert_rc 0
   [[ -e "$(dirname "$f")" ]] && fail "the copy with the passwords stayed"
+  return 0
+}
+
+test_secret_list_failure_stops_the_start() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
+  ab_run STUB_SECRET_LS_FAIL=1 --
+  assert_rc 1
+  assert_out "cannot list the Podman secrets"
+  grep -q '^podman secret create\|^podman run -d' "$STUB_DIR/calls" && fail "went on as if there were no secrets"
+  return 0
+}
+
+test_secret_store_reports_a_failed_create() {
+  setup "${FUNCNAME[0]}"
+  local rc old
+  # An existing secret, so that new podman takes the --replace branch. In an
+  # if, as agentbox setup calls it: set -e does not stop it there.
+  secrets mytoken
+  for old in "" 1; do
+    PATH="$T/bin:$PATH" STUB_SECRET_CREATE_FAIL=1 STUB_OLD_PODMAN="$old" bash -c \
+      'set -euo pipefail; source "$1/lib/sidecars.sh"; if printf tok | secret_store mytoken; then exit 0; else exit 7; fi' _ "$ROOT" 2>/dev/null
+    rc=$?
+    assert_eq "$rc" 7 "secret_store status, old podman '$old'"
+  done
   return 0
 }
 

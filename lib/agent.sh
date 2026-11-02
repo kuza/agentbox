@@ -55,7 +55,7 @@ agent_select() {
 agent_check_secrets() {
   local s missing=() reply=""
   for s in ${AGENT_SECRETS[@]+"${AGENT_SECRETS[@]}"}; do
-    podman secret inspect "$s" >/dev/null 2>&1 || missing+=("$s")
+    secret_exists "$s" || missing+=("$s")
   done
   (( ${#missing[@]} )) || return 0
   # Only the Claude Code token is missing, and you are at a terminal: offer

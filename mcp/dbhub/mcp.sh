@@ -41,17 +41,35 @@ dbhub_stop() {
 }
 
 # DBHub's config from <dbhub.toml>, by config.py in the agentbox image,
-# written anew with mode 600 and renamed into place; prints its path.
+# written anew with mode 600 and renamed into place; prints its path. Made
+# again only when dbhub.toml, config.py or the agentbox image changed (their
+# hash in dbhub.toml.src next to it): no container on a start without a
+# change.
 dbhub_config() {  # <dbhub.toml>
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/ab-mcp-dbhub" dst tmp
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/ab-mcp-dbhub" dst tmp src image_id in
   dst="$dir/dbhub.toml"
-  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  [[ -r "$1" ]] || { echo "error: cannot read $1" >&2; return 1; }
+  # Also the image that parses: another Python there could read it otherwise.
+  image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" && [[ -n "$image_id" ]] \
+    || { echo "error: no image $IMAGE to read $1 with" >&2; return 1; }
+  # One read of dbhub.toml for both the hash and the parse: saved in between,
+  # a parse of the new file would be kept under the old file's hash.
+  mkdir -p "$dir" && in="$(mktemp "$dir/input.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  cat -- "$1" > "$in" || { rm -f -- "$in"; echo "error: cannot read $1" >&2; return 1; }
+  src="$({ cat -- "$in" "$MCP_DIR/config.py"; echo "$image_id"; } | sha256sum | cut -c1-16)"
+  if [[ -f "$dst" && "$(cat "$dst.src" 2>/dev/null)" == "$src" ]]; then
+    rm -f -- "$in"
+    printf '%s\n' "$dst"
+    return 0
+  fi
+  tmp="$(mktemp "$dst.XXXXXX")" || { rm -f -- "$in"; echo "error: cannot write in $dir" >&2; return 1; }
   if ! podman run --rm -i --network none --entrypoint python3 "$IMAGE" \
-         -I -c "$(cat "$MCP_DIR/config.py")" "$1" < "$1" > "$tmp"; then
-    rm -f -- "$tmp"
+         -I -c "$(cat "$MCP_DIR/config.py")" "$1" < "$in" > "$tmp"; then
+    rm -f -- "$tmp" "$in"
     return 1
   fi
-  if ! mv -f -- "$tmp" "$dst"; then
+  rm -f -- "$in"
+  if ! mv -f -- "$tmp" "$dst" || ! (umask 077; printf '%s\n' "$src" > "$dst.src"); then
     rm -f -- "$tmp"
     echo "error: cannot write $dst" >&2
     return 1
