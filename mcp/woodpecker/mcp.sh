@@ -41,12 +41,12 @@ mcp_start() {
   # quotes, which would change the config, and no user:password@, which
   # proxy_pass cannot take.
   if [[ ! "$url" =~ ^https?://[A-Za-z0-9._~:/%+=,!*-]+$ ]]; then
-    echo "error: WOODPECKER_URL must be an http:// or https:// URL of plain characters, got '$WOODPECKER_URL'" >&2
+    ab_error "WOODPECKER_URL must be an http:// or https:// URL of plain characters, got '$WOODPECKER_URL'"
     exit 2
   fi
   if [[ "$url" == http://* ]]; then
-    echo "agentbox: warning: WOODPECKER_URL is http://: the Woodpecker token, which can do all its user can," \
-         "goes over the network unencrypted" >&2
+    ab_warn "WOODPECKER_URL is http://: the Woodpecker token, which can do all its user can," \
+         "goes over the network unencrypted"
   fi
   if [[ -n "${WOODPECKER_CA:-}" ]]; then
     ca=/etc/nginx/woodpecker-ca.pem
@@ -60,9 +60,10 @@ mcp_start() {
   if ! podman network exists ab-mcp-woodpecker; then
     podman network create --internal ab-mcp-woodpecker >/dev/null
   elif [[ "$(podman network inspect ab-mcp-woodpecker --format '{{.Internal}}' 2>/dev/null)" != true ]]; then
-    echo "error: podman network ab-mcp-woodpecker is not --internal: the Woodpecker MCP server would have a way out." >&2
-    echo "  Remove it, the next start makes it anew: podman rm -f ab-mcp-woodpecker ab-mcp-woodpecker-srv; podman network rm ab-mcp-woodpecker" >&2
-    exit 1
+    ab_error "podman network ab-mcp-woodpecker is not --internal: the Woodpecker MCP server would have a way out."
+    echo "  Remove it, the next start makes it anew: podman network rm ab-mcp-woodpecker" >&2
+    # Not left running on it for the sessions open now (lib/mcp.sh).
+    exit "$MCP_TAKE_AWAY"
   fi
 
   start_sidecar ab-mcp-woodpecker-srv \

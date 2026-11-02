@@ -10,6 +10,32 @@ the steps a release needs from you, such as a rebuild.
   instead of five, the Podman secrets are listed with one podman call
   (twice per start) instead of checked one by one, and the dbhub module parses `dbhub.toml` in a
   container only when it, the module or the agentbox image changed.
+- An MCP module that cannot run no longer stops the start: one without its
+  settings or secrets, or whose start fails (a bad `WOODPECKER_URL`, a
+  refused `dbhub.toml`, the Tabularis bridge failing to install), is left
+  out of that session with a warning saying why, and the session starts
+  with the other modules. If its start failed, what the module already
+  runs stays for the sessions using it, unless that start had already
+  replaced it, or the error means access should go (a deleted
+  `dbhub.toml`, a woodpecker network that is not `--internal`, another
+  program on the Tabularis port). A module without its setting or secret
+  loses its sidecars, as one taken out of `AB_MCP` does: deleting a
+  token's secret takes the access away. A module's sidecars, their cache
+  copies and its host services carry its name as a mark
+  (`agentbox.module`), and are kept or removed by that, never by a name
+  that only starts like another's.
+- README, GitHub (MCP): a token that can write Contents, or a classic
+  token, lets the agent commit on GitHub around your local git; how to
+  check yours.
+- The warnings of a start scrolled away under the agent's screen. At a
+  terminal, agentbox now lists them again right before the session and
+  asks whether to start it (Enter: yes). No question without a terminal,
+  with `-p`/`--print`, for `agentbox shell` with a command, or with
+  `AB_WARNINGS_ASK=0` in `config.env`.
+
+Action: none. The first start after the update recreates the MCP
+sidecars once and restarts the Tabularis bridge once (they get the
+mark).
 
 ## v0.1.8
 

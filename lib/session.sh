@@ -39,8 +39,8 @@ session_git_mounts() {
   GIT_MOUNTS=()
   session_git_record
   if ! grep -qs 'agentbox git-guard' "$(command -v git)"; then
-    echo "agentbox: warning: git on this host is not git-guard; a session can make" \
-         "your next git command in this repo run its code (README, Git on the host)" >&2
+    ab_warn "git on this host is not git-guard; a session can make" \
+         "your next git command in this repo run its code (README, Git on the host)"
   fi
   if [[ -d "$REPO/.git" ]]; then
     mkdir -p "$REPO/.git/hooks" "$REPO/.git/modules"
@@ -54,8 +54,8 @@ session_git_mounts() {
     # Its "gitdir:" line tells git on the host where the repository is; the
     # agent must not point it at a directory with a config of its own.
     GIT_MOUNTS+=(-v "$REPO/.git:$WORK_DIR/.git:ro,z")
-    echo "agentbox: warning: $REPO is a git worktree or submodule;" \
-         "its git dir is outside the mount, so git will not work inside the container" >&2
+    ab_warn "$REPO is a git worktree or submodule;" \
+         "its git dir is outside the mount, so git will not work inside the container"
   fi
 }
 

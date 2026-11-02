@@ -43,38 +43,38 @@ mcp_start() {
   local wait="${AB_TABULARIS_WAIT:-60}" plain='^[A-Za-z0-9_./:=+ -]+$'
   local node npm tab key bridge image_id i state
   if [[ ! "$cmd" =~ $plain || "$cmd" == " "* ]]; then
-    echo "error: TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'" >&2
+    ab_error "TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'"
     exit 2
   fi
   # The service runs in your home directory, not here: a relative path
   # would point elsewhere.
   if [[ "${cmd%% *}" == */* && "${cmd%% *}" != /* ]]; then
-    echo "error: TABULARIS_CMD: give the command by name or as an absolute path, got '${cmd%% *}'" >&2
+    ab_error "TABULARIS_CMD: give the command by name or as an absolute path, got '${cmd%% *}'"
     exit 2
   fi
   if [[ ! "$port" =~ ^[1-9][0-9]*$ ]] || (( port < 1024 || port > 65535 )); then
-    echo "error: TABULARIS_PORT must be a port from 1024 to 65535, got '$port'" >&2
+    ab_error "TABULARIS_PORT must be a port from 1024 to 65535, got '$port'"
     exit 2
   fi
   if [[ ! "$wait" =~ ^[0-9]+$ ]]; then
-    echo "error: AB_TABULARIS_WAIT must be a number of seconds, got '$wait'" >&2
+    ab_error "AB_TABULARIS_WAIT must be a number of seconds, got '$wait'"
     exit 2
   fi
   if ! host_units_available; then
-    echo "error: the tabularis module needs a systemd user session on the host (systemctl --user);" \
-         "over SSH it needs lingering (README, Tabularis (MCP))" >&2
+    ab_error "the tabularis module needs a systemd user session on the host (systemctl --user);" \
+         "over SSH it needs lingering (README, Tabularis (MCP))"
     exit 1
   fi
   if ! command -v ss >/dev/null; then
-    echo "error: the tabularis module needs ss (iproute2) on the host, to see who listens on TABULARIS_PORT" >&2
+    ab_error "the tabularis module needs ss (iproute2) on the host, to see who listens on TABULARIS_PORT"
     exit 1
   fi
   if ! node="$(command -v node)" || ! npm="$(command -v npm)"; then
-    echo "error: the tabularis module needs Node.js (node and npm) on the host (README, Tabularis (MCP))" >&2
+    ab_error "the tabularis module needs Node.js (node and npm) on the host (README, Tabularis (MCP))"
     exit 1
   fi
   if ! tab="$(command -v "${cmd%% *}")"; then
-    echo "error: TABULARIS_CMD: '${cmd%% *}' not found; install Tabularis or set TABULARIS_CMD (README, Tabularis (MCP))" >&2
+    ab_error "TABULARIS_CMD: '${cmd%% *}' not found; install Tabularis or set TABULARIS_CMD (README, Tabularis (MCP))"
     exit 1
   fi
 
@@ -84,12 +84,12 @@ mcp_start() {
   # AB_RESTART=1 (after you changed the secret by hand).
   key="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/tabularis/bridge.key"
   if [[ ! -f "$MCP_DIR/bridge/package.json" || ! -f "$MCP_DIR/bridge/package-lock.json" ]]; then
-    echo "error: the tabularis module lacks bridge/package.json or bridge/package-lock.json in $MCP_DIR" >&2
+    ab_error "the tabularis module lacks bridge/package.json or bridge/package-lock.json in $MCP_DIR"
     exit 1
   fi
   bridge="$(tabularis_bridge_dir)"
   if [[ ! "$key$node$tab$bridge" =~ $plain ]]; then
-    echo "error: the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $node, $tab, $bridge)" >&2
+    ab_error "the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $node, $tab, $bridge)"
     exit 2
   fi
   if [[ ! -s "$key" ]] && tabularis_new_key "$key"; then
@@ -102,8 +102,8 @@ mcp_start() {
   tabularis_fail_if_taken "$port"
 
   if [[ ! -x "$bridge/node_modules/.bin/supergateway" ]] && ! tabularis_install_bridge "$npm" "$bridge"; then
-    echo "error: could not install the tabularis bridge: npm ci failed (see above; it needs the npm" \
-         "registry). Remove tabularis from AB_MCP to start without it (README, Tabularis (MCP))." >&2
+    ab_error "could not install the tabularis bridge: npm ci failed (see above; it needs the npm" \
+         "registry, README, Tabularis (MCP))."
     exit 1
   fi
   # In use: its date keeps it from tabularis_prune_bridges.
@@ -130,8 +130,8 @@ mcp_start() {
     sleep 1
   done
   if ! tabularis_listening "$port"; then
-    echo "agentbox: warning: the tabularis bridge does not answer on 127.0.0.1:$port;" \
-         "see systemctl --user status agentbox-mcp-tabularis (README, Tabularis (MCP))" >&2
+    ab_warn "the tabularis bridge does not answer on 127.0.0.1:$port;" \
+         "see systemctl --user status agentbox-mcp-tabularis (README, Tabularis (MCP))"
   fi
 
   # Root inside the user namespace (your user on the host) to own the
@@ -240,6 +240,8 @@ tabularis_listening() {  # <port>: 0 if the bridge listens on it
 tabularis_fail_if_taken() {  # <port>: stops the start if something else listens on it
   (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || return 0
   tabularis_listening "$1" && return 0
-  echo "error: TABULARIS_PORT $1 on 127.0.0.1 is in use by another program; set another port (README, Tabularis (MCP))" >&2
-  exit 1
+  ab_error "TABULARIS_PORT $1 on 127.0.0.1 is in use by another program; set another port (README, Tabularis (MCP))"
+  # The relay would send the open sessions' requests and the bridge key
+  # to it, so nothing of the module stays (lib/mcp.sh).
+  exit "$MCP_TAKE_AWAY"
 }

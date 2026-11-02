@@ -72,6 +72,12 @@ for lib in config release images agent sidecars mcp egress forward services skil
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
 
+# This start's warnings, for warnings_review before the session; gone with
+# the start (session_exec replaces this process, warnings_review removes it
+# before).
+AB_WARNINGS_FILE="$(mktemp)"
+trap 'rm -f -- "$AB_WARNINGS_FILE" "$AB_WARNINGS_FILE.err"' EXIT
+
 # Which agentbox runs: the release, or a clone and where it is.
 RUNNING_VERSION="$(agentbox_version)"
 if [[ "$RUNNING_VERSION" == dev ]]; then echo "agentbox dev ($(realpath -- "$SCRIPT_DIR"))" >&2; else echo "agentbox $RUNNING_VERSION" >&2; fi
@@ -185,13 +191,16 @@ agent_update
 agent_prepare_home
 trivy_update
 
-mcp_write_configs
-egress_write_conf
-egress_start
 # The secret IDs were read before the image builds and the update prompt:
 # read again, so a token renewed meanwhile recreates its sidecar.
 secret_ids_reload
+# Before the agents' MCP config and squid's hosts: a module whose start
+# fails is left out of both (egress_init again, for its hosts).
 mcp_start_all
+egress_init
+mcp_write_configs
+egress_write_conf
+egress_start
 openai_start
 forward_start
 sidecars_cleanup
@@ -205,4 +214,5 @@ session_tz
 session_git_mounts
 session_env_file
 session_agent_args
+warnings_review "$@"
 session_exec "$@"

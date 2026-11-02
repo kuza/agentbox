@@ -20,7 +20,7 @@ services_attach() {
     read -ra services <<< "${AB_SERVICES//,/ }"
     for svc in "${services[@]}"; do
       if ! podman container exists "$svc"; then
-        echo "agentbox: warning: AB_SERVICES: no container '$svc' (rootless podman of this user), skipped" >&2
+        ab_warn "AB_SERVICES: no container '$svc' (rootless podman of this user), skipped"
         continue
       fi
       # Containers started without --network use pasta/slirp4netns (rootless
@@ -28,20 +28,20 @@ services_attach() {
       # on a bridge network (README, Local services).
       mode="$(podman inspect --format '{{.HostConfig.NetworkMode}}' "$svc")"
       if [[ "$mode" == pasta* || "$mode" == slirp4netns* || "$mode" == host || "$mode" == none ]]; then
-        echo "agentbox: warning: '$svc' uses network mode '$mode' and cannot be attached;" \
-             "recreate it with --network podman (see README, Local services)" >&2
+        ab_warn "'$svc' uses network mode '$mode' and cannot be attached;" \
+             "recreate it with --network podman (see README, Local services)"
         continue
       fi
       if ! podman inspect --format '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$svc" \
            | tr ' ' '\n' | grep -qx ab-services; then
         podman network connect ab-services "$svc" \
-          || echo "agentbox: warning: could not attach '$svc' to ab-services" >&2
+          || ab_warn "could not attach '$svc' to ab-services"
       fi
       # A stopped service is started; it is left running after the session.
       if [[ "$(podman inspect --format '{{.State.Running}}' "$svc")" != true ]]; then
         echo "agentbox: starting '$svc'" >&2
         podman start "$svc" >/dev/null \
-          || echo "agentbox: warning: could not start '$svc'" >&2
+          || ab_warn "could not start '$svc'"
       fi
       SERVICE_NAMES+=("$svc")
     done

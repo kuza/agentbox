@@ -114,6 +114,14 @@ assert_rc() { [[ "$RC" == "$1" ]] || fail "exit status $RC, expected $1"$'\n'"$(
 assert_out() { grep -qE -- "$1" "$T/out" || fail "output lacks /$1/"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
 assert_no_out() { ! grep -qE -- "$1" "$T/out" || fail "output has /$1/"; }
 assert_file_has() { grep -qE -- "$2" "$1" 2>/dev/null || fail "$(basename "$1") lacks /$2/"; }
+# assert_skipped <module>: the start went on, without that MCP module.
+assert_skipped() {
+  assert_rc 0
+  assert_out "MCP module '$1' left out of this session"
+  grep -q "\"$1\"" "$T/home/.cache/agentbox/mcp-claude.json" && fail "$1 still in the agents' MCP config"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start"
+  return 0
+}
 assert_file_lacks() { ! grep -qE -- "$2" "$1" 2>/dev/null || fail "$(basename "$1") has /$2/"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "got '$1', expected '$2'${3:+ ($3)}"; }
 assert_json() {
@@ -200,11 +208,124 @@ test_mcp_empty_list_context7_only() {
 
 test_mcp_missing_secret() {
   setup "${FUNCNAME[0]}"
-  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example"
+  config "AB_MCP=graylog grafana" "GRAYLOG_URL=https://graylog.example" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
   ab_run --
+  assert_skipped graylog
+  assert_out "graylog' left out of this session: missing podman secrets graylog_basic"
+  grep -q '"grafana"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "the other module left out too"
+  run_line ab-mcp-graylog && fail "graylog's sidecar started"
+  # A secret deleted to take the access away: the running sidecar goes too.
+  secrets graylog_basic
+  ab_run --
+  assert_rc 0
+  run_line ab-mcp-graylog >/dev/null || fail "graylog not started with its secret"
+  sed -i '/^graylog_basic$/d' "$STUB_DIR/secrets"
+  ab_run --
+  assert_skipped graylog
+  grep -q '^podman rm -f -v ab-mcp-graylog$' "$STUB_DIR/calls" || fail "sidecar kept serving the deleted secret"
+  return 0
+}
+
+test_mcp_failed_start_skips_that_module_only() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=woodpecker grafana" "WOODPECKER_URL=ci.example" "GRAFANA_URL=https://g.example"
+  secrets woodpecker_token grafana_sa
+  ab_run --
+  assert_skipped woodpecker
+  assert_out "MCP module 'woodpecker' left out of this session: WOODPECKER_URL must be an http"
+  run_line ab-mcp-grafana >/dev/null || fail "the other module's sidecar not started"
+  grep -q '"grafana"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "the other module left out too"
+  grep -q '"woodpecker"' "$T/home/.cache/agentbox/mcp-pi.json" && fail "pi still gets woodpecker"
+  session_args | grep -q 'AB_MCP_TOKEN_WOODPECKER' && fail "the session still gets woodpecker's caller token"
+  # Once running, a module skipped by a later start keeps its sidecars for
+  # the sessions using them...
+  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=https://ci.example#' "$CFG/config.env"
+  ab_run --
+  assert_rc 0
+  run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started once fixed"
+  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=ci.example#' "$CFG/config.env"
+  ab_run --
+  assert_skipped woodpecker
+  grep -q '^podman rm -f.* ab-mcp-woodpecker' "$STUB_DIR/calls" && fail "open sessions lost woodpecker"
+  [[ " $(started) " == *" ab-mcp-woodpecker-srv "* ]] || fail "woodpecker's server stopped"
+  # ...unless the module says access must go: a network with a way out.
+  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=https://ci.example#' "$CFG/config.env"
+  ab_run STUB_NET_INTERNAL=false --
+  assert_skipped woodpecker
+  grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "left running on a network with a way out"
+  grep -qx 'podman rm -f -v ab-mcp-woodpecker' "$STUB_DIR/calls" || fail "nginx left running"
+  return 0
+}
+
+test_warnings_named_again_at_a_terminal() {
+  command -v script >/dev/null || return 0
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana"
+  secrets grafana_sa
+  tty_run 'n\n' --
   assert_rc 1
-  assert_out 'missing podman secrets for MCP modules: graylog_basic \(graylog\)'
-  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "session must not start"
+  assert_out "agentbox: this start warned:"
+  assert_out "  - MCP module 'grafana' left out of this session: it needs GRAFANA_URL"
+  assert_out "  - git on this host is not git-guard"
+  assert_out "agentbox: not started"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "the session started on a no"
+  tty_run '\n' --
+  assert_rc 0
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start on Enter"
+  # AB_WARNINGS_ASK=0: printed, not asked.
+  tty_run '' AB_WARNINGS_ASK=0 --
+  assert_rc 0
+  assert_no_out "start the session\?"
+  # A warning from inside the container (agent_prepare_home) is listed too;
+  # its script runs in the image, where there is no ab_warn.
+  tty_run '\n' STUB_HIDDEN_FILE=.claude/CLAUDE.md --
+  assert_rc 0
+  assert_out "  - ~/.claude/CLAUDE.md in the volume is hidden"
+  sed -n '/^agent_prepare_home()/,/^}/p' "$ROOT/lib/agent.sh" | sed -n "/--entrypoint sh/,/' sh /p" | grep -q ab_warn \
+    && fail "ab_warn in the script that runs in the container"
+  # An agent run with -p does not wait for an answer.
+  tty_run '' -- -p 'a task'
+  assert_rc 0
+  assert_no_out "start the session\?"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "-p run did not start"
+  # Without a terminal: no question, the session starts.
+  ab_run --
+  assert_skipped grafana
+  assert_no_out "start the session\?"
+  return 0
+}
+
+test_mcp_take_away_finds_its_own_by_mark() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/mcp.local/git" "$CFG/mcp.local/git-lab"
+  cat > "$CFG/mcp.local/git/mcp.sh" <<'MOD'
+MCP_URL="http://ab-mcp-git:8080/mcp"
+mcp_start() {
+  [[ -f "$AB_HOME_DIR/git.off" ]] && { ab_error "access taken away"; exit "$MCP_TAKE_AWAY"; }
+  start_sidecar ab-mcp-git docker.io/library/nginx:alpine
+}
+MOD
+  cat > "$CFG/mcp.local/git-lab/mcp.sh" <<'MOD'
+MCP_URL="http://ab-mcp-git-lab:8080/mcp"
+mcp_start() {
+  start_sidecar ab-mcp-git-lab -v "$(sidecar_copy ab-mcp-git-lab "$MCP_DIR/mcp.sh"):/x:ro,Z" docker.io/library/nginx:alpine
+}
+MOD
+  config "AB_MCP=git-lab git"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(started)" "ab-egress ab-mcp-git ab-mcp-git-lab" "sidecars"
+  run_line ab-mcp-git | grep -q -- '--label agentbox.module=git ' || fail "git's sidecar not marked"
+  touch "$CFG/git.off"
+  ab_run --
+  assert_skipped git
+  assert_out "MCP module 'git' left out of this session: access taken away"
+  grep -qx 'podman rm -f -v ab-mcp-git' "$STUB_DIR/calls" || fail "git's sidecar kept"
+  grep -q 'podman rm -f -v ab-mcp-git-lab' "$STUB_DIR/calls" && fail "git-lab's sidecar removed for git"
+  [[ -d "$T/home/.cache/agentbox/sidecars/ab-mcp-git-lab" ]] || fail "git-lab's copies removed for git"
+  grep -q '"git-lab"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "git-lab left out"
+  return 0
 }
 
 test_mcp_missing_setting() {
@@ -212,8 +333,8 @@ test_mcp_missing_setting() {
   config "AB_MCP=grafana"
   secrets grafana_sa
   ab_run --
-  assert_rc 2
-  assert_out "MCP module 'grafana' needs GRAFANA_URL"
+  assert_skipped grafana
+  assert_out "grafana' left out of this session: it needs GRAFANA_URL"
 }
 
 test_mcp_unknown_module() {
@@ -564,13 +685,13 @@ test_mcp_woodpecker() {
     || fail "own CA not mounted: $(run_line ab-mcp-woodpecker)"
   : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
   ab_run --
-  assert_rc 1
+  assert_skipped woodpecker
   assert_out "missing.pem is missing"
   local bad
   for bad in ci.example 'https://ci.example/;}server{' 'https://ci.example/$host' 'https://ci.example/#x' 'https://u:p@ci.example'; do
     : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=$bad"
     ab_run --
-    assert_rc 2
+    assert_skipped woodpecker
     assert_out "WOODPECKER_URL must be an http:// or https:// URL"
   done
   : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=http://ci.example"
@@ -582,7 +703,7 @@ test_mcp_woodpecker() {
   run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_URL=https://ci.example " || fail "slashes kept: $(run_line ab-mcp-woodpecker)"
   # A network of that name without --internal is not used.
   ab_run STUB_NET_INTERNAL=false --
-  assert_rc 1
+  assert_skipped woodpecker
   assert_out "ab-mcp-woodpecker is not --internal"
   run_line ab-mcp-woodpecker-srv && fail "server started on a network with a way out"
   return 0
@@ -591,9 +712,9 @@ test_mcp_woodpecker() {
 test_mcp_dbhub() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=dbhub"
-  # No dbhub.toml: the start stops and says where it goes.
+  # No dbhub.toml: the session starts without dbhub and says where it goes.
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "the dbhub module needs .*/dbhub.toml"
   cat > "$CFG/dbhub.toml" <<'TOML'
 # two databases
@@ -655,42 +776,53 @@ TOML
     printf '[[sources]]\nid = "a"\ndsn = "postgres://x@h/d"\n%s\nname = "purge"\n' "$bad" > "$CFG/dbhub.toml"
     [[ "$bad" == "'tools' = 1" ]] && printf "'tools' = 1\n[[sources]]\nid = \"a\"\n" > "$CFG/dbhub.toml"
     ab_run --
-    assert_rc 1
+    assert_skipped dbhub
     assert_out "dbhub.toml: (only \[\[sources\]\] entries may be there|not valid TOML)"
+    if [[ "$bad" == '[[tools]]' ]]; then
+      grep -qx 'podman rm -f -v ab-mcp-dbhub' "$STUB_DIR/calls" || fail "old sidecar left serving"
+      [[ -e "$(dirname "$f")" ]] && fail "old copy with the passwords left"
+    fi
   done
-  grep -qx 'podman rm -f ab-mcp-dbhub' "$STUB_DIR/calls" || fail "old sidecar left serving"
-  [[ -e "$(dirname "$f")" ]] && fail "old copy with the passwords left"
+  # The copy goes also when its container is gone already.
+  printf '[[sources]]\nid = "a"\n' > "$CFG/dbhub.toml"
+  ab_run --
+  assert_rc 0
+  sed -i '/^ab-mcp-dbhub /d' "$STUB_DIR/running"
+  rm -f "$CFG/dbhub.toml"
+  ab_run --
+  assert_skipped dbhub
+  [[ -e "$(dirname "$f")" ]] && fail "copy with the passwords left without its container"
   for bad in 'x = 1' 'x = { a = 1 }' 'x = [[1]]' 'x = 1979-05-27' '"a b" = 1'; do
     printf '[[sources]]\nid = "a"\n%s\n' "$bad" > "$CFG/dbhub.toml"
     ab_run --
     if [[ "$bad" == 'x = 1' ]]; then assert_rc 0; continue; fi
-    assert_rc 1
+    assert_skipped dbhub
     assert_out "dbhub.toml: source 'a'"
   done
   printf '[[sources]]\nid = "a"\ndescription = "${DBHUB_AUTH_TOKEN}"\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "source 'a', description: '\\$\{' is not supported"
   printf '[[sources]]\nid = "a"\nd = "open\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "dbhub.toml: not valid TOML"
   # DBHub reads - as _ in tool names.
   printf '[[sources]]\nid = "prod-db"\n[[sources]]\nid = "prod_db"\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "source id 'prod_db' is the same as another"
   printf '[[sources]]\nid = "a"\n[[sources]]\ndsn = "postgres://x@h/d"\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "\[\[sources\]\] entry 2 needs an id"
   printf '[[sources]]\nid = "a b"\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "entry 1 needs an id of letters"
   printf '# nothing yet\n' > "$CFG/dbhub.toml"
   ab_run --
-  assert_rc 1
+  assert_skipped dbhub
   assert_out "dbhub.toml: no \[\[sources\]\] entry"
   # The daily scan covers the pinned image.
   local image; image="$(sed -n 's/^DBHUB_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/dbhub/mcp.sh")"
@@ -843,12 +975,11 @@ test_tabularis_bridge_install() {
   ab_run AB_TABULARIS_WAIT=0 --
   [[ -e "$old" ]] && fail "an install unused for 40 days kept"
   [[ -e "$new" ]] || fail "the install in use removed"
-  # npm ci fails: the start stops and says so.
+  # npm ci fails: the session starts without tabularis and says why.
   echo " " >> "$AB/mcp/tabularis/bridge/package-lock.json"
   ab_run AB_TABULARIS_WAIT=0 STUB_NPM_FAIL=1 --
-  assert_rc 1
+  assert_skipped tabularis
   assert_out "could not install the tabularis bridge: npm ci failed"
-  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "session started without its enabled module"
   ls -d "$base"/.install.* 2>/dev/null && fail "failed install left"
   # A leftover older than an hour goes; a half install is replaced.
   mkdir -p "$base/.install.old"; touch -d '2 hours ago' "$base/.install.old"
@@ -866,7 +997,7 @@ test_tabularis_bridge_files_missing() {
   tab_setup "${FUNCNAME[0]}"
   rm "$AB/mcp/tabularis/bridge/package-lock.json"
   ab_run AB_TABULARIS_WAIT=0 --
-  assert_rc 1
+  assert_skipped tabularis
   assert_out "lacks bridge/package.json or bridge/package-lock.json"
 }
 
@@ -912,7 +1043,7 @@ test_tabularis_host_unit_failures() {
   assert_rc 0
   : > "$STUB_DIR/units"
   ab_run AB_TABULARIS_WAIT=0 STUB_RUN_FAIL=1 --
-  assert_rc 1
+  assert_skipped tabularis
   assert_out "could not start the host service agentbox-mcp-tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
   : > "$CFG/config.env"
@@ -965,11 +1096,14 @@ print(s.getsockname()[1], flush=True); time.sleep(30)' > "$T/port" &
   local pid=$! i
   for (( i = 0; i < 50; i++ )); do [[ -s "$T/port" ]] && break; sleep 0.1; done
   tab_port "$(cat "$T/port")"
+  # Running from an earlier start, for open sessions.
+  printf '%s\n' "ab-mcp-tabularis x" "ab-mcp-tabularis-relay y" >> "$STUB_DIR/running"
   ab_run AB_TABULARIS_WAIT=0 --
   kill "$pid" 2>/dev/null
-  assert_rc 1
+  assert_skipped tabularis
   assert_out "TABULARIS_PORT $(cat "$T/port") on 127.0.0.1 is in use by another program"
   grep -q '^systemd-run' "$STUB_DIR/calls" && fail "bridge started on a taken port"
+  grep -qx 'podman rm -f -v ab-mcp-tabularis-relay' "$STUB_DIR/calls" || fail "relay left sending to the other program"
   assert_eq "$(started)" "ab-egress" "sidecars"
 }
 
@@ -977,26 +1111,26 @@ test_tabularis_errors() {
   tab_setup "${FUNCNAME[0]}"
   config 'TABULARIS_CMD=tabularis $(touch x)'
   ab_run AB_TABULARIS_WAIT=0 --
-  assert_rc 2
+  assert_skipped tabularis
   assert_out "TABULARIS_CMD may hold only"
   local p
   for p in 80 08080 70000; do
     : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_PORT=$p"
     ab_run AB_TABULARIS_WAIT=0 --
-    assert_rc 2
+    assert_skipped tabularis
     assert_out "TABULARIS_PORT must be a port from 1024 to 65535, got '$p'"
   done
   : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=./bin/tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
-  assert_rc 2
+  assert_skipped tabularis
   assert_out "give the command by name or as an absolute path, got './bin/tabularis'"
   : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD= tabularis"
   ab_run AB_TABULARIS_WAIT=0 TABULARIS_CMD=" tabularis" --
-  assert_rc 2
+  assert_skipped tabularis
   assert_out "starts with the command"
   : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=no-such-tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
-  assert_rc 1
+  assert_skipped tabularis
   assert_out "'no-such-tabularis' not found"
   grep -q '^systemd-run' "$STUB_DIR/calls" && fail "bridge started despite the error"
   return 0
@@ -1743,14 +1877,20 @@ test_uninstall_asks() {
 # --- agentbox login: a real terminal through script(1) ---
 
 # tty_run <input> <env...> -- <run.sh args...>: run.sh on a pseudo-terminal,
-# <input> typed into it.
+# <input> typed into it; a "\p" in it waits a second before the rest, as a
+# person would (agent_login reads on what comes right after a token).
 tty_run() {
   local input="$1"; shift
   local envs=()
   while (( $# )) && [[ "$1" != -- ]]; do envs+=("$1"); shift; done
   [[ "${1:-}" == -- ]] && shift
   : > "$STUB_DIR/calls"
-  printf '%b' "$input" | script -qec "$(printf '%q ' env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
+  # timeout: a question the input does not answer fails the test, not the run.
+  local part
+  { while [[ "$input" == *'\p'* ]]; do
+      part="${input%%\\p*}"; printf '%b' "$part"; sleep 1; input="${input#*\\p}"
+    done
+    printf '%b' "$input"; } | timeout 60 script -qec "$(printf '%q ' env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
       PATH="$T/bin:$PATH" STUB_DIR="$STUB_DIR" AB_CHECK_UPDATES=0 ${envs[@]+"${envs[@]}"} bash "$AB/run.sh" "$@")" /dev/null \
       > "$T/out" 2>&1
   RC=$?
@@ -1794,7 +1934,8 @@ test_first_start_offers_login() {
   command -v script >/dev/null || return 0
   setup "${FUNCNAME[0]}"
   : > "$STUB_DIR/secrets"
-  tty_run 'y\nsk-ant-oat01-first\n' --
+  # The last Enter: the warnings of the start, then "start the session?".
+  tty_run 'y\nsk-ant-oat01-first\n\p\n' --
   assert_rc 0
   assert_out "no Claude Code token yet"
   assert_eq "$(cat "$STUB_DIR/secret-claude_oauth" 2>/dev/null)" sk-ant-oat01-first "stored token"

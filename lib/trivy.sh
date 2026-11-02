@@ -34,10 +34,10 @@ trivy_update() {
       echo "error: AB_TRIVY=1, but the agentbox image has no Trivy; rebuild it: AB_UPGRADE=1 agentbox" >&2
       exit 1
     elif [[ -n "$have" ]]; then
-      echo "agentbox: warning: Trivy database update failed, using the one there is" >&2
+      ab_warn "Trivy database update failed, using the one there is"
     else
-      echo "agentbox: warning: Trivy database download failed; trivy fails in this session," \
-           "a later start tries again" >&2
+      ab_warn "Trivy database download failed; trivy fails in this session," \
+           "a later start tries again"
     fi
   fi
   # memory: no scan cache written into the read-only volume.

@@ -26,6 +26,7 @@
 #   STUB_OLD_PODMAN podman before 4.7: secret create has no --replace
 #   STUB_SECRET_LS_FAIL  secret ls fails (a locked database, say)
 #   STUB_SECRET_CREATE_FAIL  secret create fails
+#   STUB_HIDDEN_FILE  agent_prepare_home's script finds that file hidden
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
 set -u
 S="${STUB_DIR:?}"
@@ -161,10 +162,16 @@ case "$1 ${2:-}" in
     esac ;;
   "ps -a")
     # --filter label=<key>=<value>: only containers with that label.
-    filter=""
+    filter=""; all="$*"
     while (( $# )); do [[ "$1" == --filter ]] && filter="${2#label=}"; shift; done
     if [[ -n "$filter" ]]; then
       awk -v f="$filter" '$2 == f { print $1 }' "$S/labels" | sort -u
+    elif [[ "$all" == *agentbox.module* ]]; then
+      # --format '{{.Names}} {{index .Labels "agentbox.module"}}'
+      while read -r n _; do
+        m="$(awk -v n="$n" '$1 == n && $2 ~ /^agentbox.module=/ { sub(/^agentbox.module=/, "", $2); m = $2 } END { print m }' "$S/labels")"
+        echo "$n $m"
+      done < "$S/running"
     else
       cat "$S/running"
     fi ;;
@@ -200,6 +207,10 @@ case "$1 ${2:-}" in
     seq=$(( $(cat "$S/idseq" 2>/dev/null || echo 0) + 1 )); echo "$seq" > "$S/idseq"
     echo "$name $name-$seq" >> "$S/ids" ;;
   "run --rm")
+    # agent_prepare_home's script reports a hidden file of yours.
+    if [[ -n "${STUB_HIDDEN_FILE:-}" && " $* " == *" AB_COVERED="* ]]; then
+      echo "warning: ~/$STUB_HIDDEN_FILE in the volume is hidden"
+    fi
     # A python3 program in the image (mcp/dbhub): runs here, from -I on.
     if [[ " $* " == *" --entrypoint python3 "* ]]; then
       while (( $# )) && [[ "$1" != -I ]]; do shift; done

@@ -142,7 +142,7 @@ skills_sources() {
     if ! SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" \
          SKILLS_SOURCE="$name" SKILLS_PIN="$ref" \
          "$SCRIPT_DIR/sync-skills.sh" "$url" ${at:+"$at"} >&2; then
-      echo "agentbox: warning: could not sync skills from '$name'; continuing with what is installed" >&2
+      ab_warn "could not sync skills from '$name'; continuing with what is installed"
     fi
   done
 
@@ -155,7 +155,7 @@ skills_sources() {
     [[ "${enabled_url[$src]:-}" == "$url" ]] && continue
     echo "agentbox: removing skills of disabled source '$src' ($url)" >&2
     AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/sync-skills.sh" --remove "$url" >&2 \
-      || echo "agentbox: warning: could not remove skills from '$src'" >&2
+      || ab_warn "could not remove skills from '$src'"
   done
 }
 
@@ -173,7 +173,7 @@ skills_prepare() {
   GRAPHIFY_STAMP="$SKILLS_DIR/graphify/.agentbox-image"
   image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
   if [[ -e "$SKILLS_DIR/graphify" && ! -f "$GRAPHIFY_STAMP" ]]; then
-    echo "agentbox: warning: $SKILLS_DIR/graphify was not installed by agentbox; not updating it" >&2
+    ab_warn "$SKILLS_DIR/graphify was not installed by agentbox; not updating it"
   elif [[ "$(cat "$GRAPHIFY_STAMP" 2>/dev/null)" != "$image_id" || ! -d "$GRAPHIFY_PI/graphify" ]]; then
     graphify_tmp="$(mktemp -d)"
     if podman run --rm --network none --userns="$USERNS" -e HOME=/out \
@@ -188,7 +188,7 @@ skills_prepare() {
       echo "$image_id" > "$GRAPHIFY_STAMP"
       echo "agentbox: installed the graphify skill $(cat "$SKILLS_DIR/graphify/.graphify_version" 2>/dev/null) from the image" >&2
     else
-      echo "agentbox: warning: could not extract the graphify skill from the image" >&2
+      ab_warn "could not extract the graphify skill from the image"
     fi
     rm -rf -- "$graphify_tmp"
   fi

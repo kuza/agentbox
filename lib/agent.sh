@@ -127,7 +127,7 @@ agent_update() {
          install -g ${AGENT_INSTALL_FLAGS[@]+"${AGENT_INSTALL_FLAGS[@]}"} --prefix "$AGENT_PREFIX" "$AGENT_PKG@latest" >&2; then
       touch "$STAMP"
     else
-      echo "agentbox: warning: update failed, using the installed version" >&2
+      ab_warn "update failed, using the installed version"
     fi
   fi
   if ! podman run --rm -v "$AGENT_VOL:$AGENT_PREFIX:ro" --entrypoint test "$IMAGE" -x "$AGENT_BIN"; then
@@ -191,10 +191,11 @@ agent_prepare_home() {
       # is hidden from every session: say so, leave it as it is.
       for f in $AB_COVERED; do
         if [ -f "$f" ] && [ -s "$f" ] && [ "$(stat -c %u "$f")" != 0 ]; then
-          echo "agentbox: warning: ~/$f in the volume $AB_HOME_VOLUME is hidden by the file agentbox mounts there." \
+          # On stdout, as "warning: ...": the host records it as a warning.
+          echo "warning: ~/$f in the volume $AB_HOME_VOLUME is hidden by the file agentbox mounts there." \
                "Instructions belong in ~/.config/agentbox/AGENTS.md (README, Memory and personal instructions)." \
                "Read it: podman run --rm -v $AB_HOME_VOLUME:/h --entrypoint cat localhost/agentbox /h/$f;" \
-               "then remove it: the same with rm -f instead of cat" >&2
+               "then remove it: the same with rm -f instead of cat"
         fi
       done
       if [ "$AGENT" = claude ]; then
@@ -203,7 +204,7 @@ agent_prepare_home() {
           let c = {}, changed = false, readable = true;
           try { c = JSON.parse(fs.readFileSync(f, \"utf8\")); } catch (e) {
             readable = e.code === \"ENOENT\";
-            if (!readable) console.error(\"agentbox: warning: ~/.claude.json cannot be read (\" + e.message + \"); left as it is\");
+            if (!readable) console.log(\"warning: ~/.claude.json cannot be read (\" + e.message + \"); left as it is\");
           }
           if (!readable || !c || typeof c !== \"object\") { c = {}; readable = false; }
           if (c.hasCompletedOnboarding !== true) {
@@ -234,5 +235,8 @@ agent_prepare_home() {
           }"
         chown node:node /home/node/.claude.json /home/node/.claude/settings.json
       fi
-    ' sh ${home_dirs[@]+"${home_dirs[@]}"}
+    ' sh ${home_dirs[@]+"${home_dirs[@]}"} \
+  | while IFS= read -r line; do
+      if [[ "$line" == "warning: "* ]]; then ab_warn "${line#warning: }"; else printf '%s\n' "$line"; fi
+    done
 }

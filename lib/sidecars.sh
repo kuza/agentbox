@@ -34,7 +34,7 @@ secret_ids_load() {
   local name id out
   [[ -n "$SECRET_IDS_LOADED" ]] && return 0
   if ! out="$(podman secret ls --format '{{.Name}} {{.ID}}')"; then
-    echo "error: cannot list the Podman secrets (podman secret ls failed)" >&2
+    ab_error "cannot list the Podman secrets (podman secret ls failed)"
     exit 1
   fi
   SECRET_IDS=()
@@ -77,10 +77,16 @@ secret_ids() {  # <podman run arguments...>
   done
 }
 
+# The MCP module whose mcp_start runs now (lib/mcp.sh): its sidecars, their
+# copies in the cache and its host services are marked as its own, and
+# found by that mark, never by a name that only starts like it.
+AB_CURRENT_MODULE=""
+
 start_sidecar() {  # <name> <podman run arguments...>
   local name="$1" hash
   shift
   SIDECARS_WANTED+=("$name")
+  [[ -n "$AB_CURRENT_MODULE" ]] && set -- --label "agentbox.module=$AB_CURRENT_MODULE" "$@"
   secret_ids_load
   hash="$(config_hash "$@" "$(secret_ids "$@")")"
   if [[ "${AB_RESTART:-}" != 1 ]] && sidecar_current "$name" "$hash"; then
@@ -105,19 +111,65 @@ sidecar_current() {  # <container> <hash>
   [[ -n "$id" && "$image" == "$id" ]]
 }
 
+# Sidecars with the module that owns them, "<name> <module>" per line; the
+# module is empty for ab-egress, ab-llm-* and sidecars made before the mark.
+sidecars_list() {
+  podman ps -a --format '{{.Names}} {{index .Labels "agentbox.module"}}' \
+    | awk '$1 == "ab-egress" || $1 ~ /^ab-mcp-/ || $1 ~ /^ab-llm-/ { print $1, $2 }'
+}
+
+# Removes a sidecar now, with its copies in the cache: some hold passwords
+# (mcp/dbhub).
+sidecar_remove() {  # <container>
+  podman rm -f -v "$1" >/dev/null
+  rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$1"
+}
+
+# 0 if <module> is one this start left out with "keep" (MCP_SKIPPED,
+# lib/mcp.sh): what it runs stays for the sessions using it. A sidecar made
+# before the mark has no module: its name tells, ab-mcp-<module>[-*].
+skipped_keeps() {  # <owning module, may be empty> <container or unit name>
+  local m
+  for m in ${MCP_SKIPPED[@]+"${MCP_SKIPPED[@]}"}; do
+    if [[ -n "$1" ]]; then
+      [[ "$1" == "$m" ]] && return 0
+    elif [[ "$2" == "ab-mcp-$m" || "$2" == "ab-mcp-$m"-* || "$2" == "agentbox-mcp-$m" || "$2" == "agentbox-mcp-$m"-* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Removes agentbox sidecars this start did not ask for: those of MCP modules
 # no longer in AB_MCP, ab-llm-openai once its key is gone. Sidecars are named
 # ab-egress, ab-mcp-* or ab-llm-*. A second agentbox setup with another
 # AB_CONFIG on the same host would remove the other's sidecars.
 sidecars_cleanup() {
-  local name wanted=" ${SIDECARS_WANTED[*]} "
-  for name in $(podman ps -a --format '{{.Names}}' | awk '{ print $1 }'); do
-    [[ "$name" == ab-egress || "$name" == ab-mcp-* || "$name" == ab-llm-* ]] || continue
+  local name module wanted=" ${SIDECARS_WANTED[*]} "
+  while read -r name module; do
+    [[ -n "$name" ]] || continue
     [[ "$wanted" == *" $name "* ]] && continue
-    podman rm -f -v "$name" >/dev/null && echo "agentbox: removed $name, no longer enabled" >&2
-    # Its copies in the cache go with it: some hold passwords (mcp/dbhub).
-    rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$name"
+    skipped_keeps "$module" "$name" && continue
+    sidecar_remove "$name" && echo "agentbox: removed $name, no longer enabled" >&2
+  done < <(sidecars_list)
+}
+
+# Everything of <module>, now: its sidecars and their copies (also copies
+# whose container is gone), its host services. For a module whose access
+# goes (MCP_TAKE_AWAY, lib/mcp.sh). Found by the mark alone.
+module_remove() {  # <module>
+  local name module unit d
+  while read -r name module; do
+    [[ -n "$name" && "$module" == "$1" ]] && sidecar_remove "$name"
+  done < <(sidecars_list)
+  for d in "${XDG_CACHE_HOME:-$HOME/.cache}"/agentbox/sidecars/*/; do
+    [[ "$(cat "$d.module" 2>/dev/null)" == "$1" ]] && rm -rf -- "$d"
   done
+  command -v systemctl >/dev/null || return 0
+  while read -r unit module; do
+    [[ -n "$unit" && "$module" == "$1" ]] && systemctl --user stop "$unit" >/dev/null 2>&1
+  done < <(host_units_list)
+  return 0
 }
 
 # Config files reach sidecars as copies in the cache, never from the repo:
@@ -125,7 +177,17 @@ sidecars_cleanup() {
 # which on the repo's own file would lock out agent sessions and git in them
 # (README, Troubleshooting). Each container gets a copy of its own.
 sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
+  sidecar_dir "$1" >/dev/null || return 1
   cache_copy "sidecars/$1" "$2"
+}
+
+# The directory of <container>'s copies in the cache, marked with the module
+# that owns it (.module), so module_remove finds it with no container left.
+sidecar_dir() {  # <container>: prints its path
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sidecars/$1"
+  mkdir -p "$dir" || { ab_error "cannot write in $dir"; return 1; }
+  if [[ -n "$AB_CURRENT_MODULE" ]]; then printf '%s\n' "$AB_CURRENT_MODULE" > "$dir/.module"; fi
+  printf '%s\n' "$dir"
 }
 
 # A fresh copy of <file> in the cache, under <subdir>: what a container
@@ -137,11 +199,11 @@ sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
 cache_copy() {  # <subdir> <file> [name]: prints the path of the copy; 1 on failure
   local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
   dst="$dir/${3:-$(basename "$2")}"
-  [[ -f "$2" ]] || { echo "error: $2 is missing" >&2; return 1; }
-  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  [[ -f "$2" ]] || { ab_error "$2 is missing"; return 1; }
+  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { ab_error "cannot write in $dir"; return 1; }
   if ! { cp -- "$2" "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
     rm -f -- "$tmp"
-    echo "error: cannot copy $2 to $dst" >&2
+    ab_error "cannot copy $2 to $dst"
     return 1
   fi
   printf '%s\n' "$dst"
@@ -153,10 +215,10 @@ cache_copy() {  # <subdir> <file> [name]: prints the path of the copy; 1 on fail
 cache_text() {  # <subdir> <name> <text>: prints the path; 1 on failure
   local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
   dst="$dir/$2"
-  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { echo "error: cannot write in $dir" >&2; return 1; }
+  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { ab_error "cannot write in $dir"; return 1; }
   if ! { printf '%s' "$3" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
     rm -f -- "$tmp"
-    echo "error: cannot write $dst" >&2
+    ab_error "cannot write $dst"
     return 1
   fi
   printf '%s\n' "$dst"
@@ -221,7 +283,7 @@ start_host_unit() {  # <name> [VAR=value...] -- <command...>
   while (( $# )) && [[ "$1" != -- ]]; do env+=("--setenv=$1"); shift; done
   shift
   HOST_UNITS_WANTED+=("$name")
-  desc="$HOST_UNIT_DESCRIPTION [$(config_hash "${HOST_UNIT_PROPERTIES[@]}" ${env[@]+"${env[@]}"} "$@")]"
+  desc="$HOST_UNIT_DESCRIPTION${AB_CURRENT_MODULE:+ of $AB_CURRENT_MODULE} [$(config_hash "${HOST_UNIT_PROPERTIES[@]}" ${env[@]+"${env[@]}"} "$@")]"
   if [[ "${AB_RESTART:-}" != 1 ]] && host_unit_is "$name" "$desc"; then
     return 0
   fi
@@ -232,7 +294,7 @@ start_host_unit() {  # <name> [VAR=value...] -- <command...>
   if ! systemd-run --user --quiet --collect --unit="$name" --description="$desc" \
          "${HOST_UNIT_PROPERTIES[@]}" ${env[@]+"${env[@]}"} -- "$@" \
      && ! host_unit_is "$name" "$desc"; then
-    echo "error: could not start the host service $name (systemctl --user status $name)" >&2
+    ab_error "could not start the host service $name (systemctl --user status $name)"
     exit 1
   fi
 }
@@ -246,20 +308,29 @@ host_unit_is() {  # <name> <description>: 0 if it runs with that description
 # modules no longer in AB_MCP. Only units agentbox started (by their
 # description), never one of yours that happens to share the prefix.
 host_units_cleanup() {
-  local unit wanted=" ${HOST_UNITS_WANTED[*]} "
+  local unit module wanted=" ${HOST_UNITS_WANTED[*]} "
   command -v systemctl >/dev/null || return 0
-  for unit in $(host_units_list); do
+  while read -r unit module; do
+    [[ -n "$unit" ]] || continue
     [[ "$wanted" == *" ${unit%.service} "* ]] && continue
+    skipped_keeps "$module" "${unit%.service}" && continue
     if systemctl --user stop "$unit" >/dev/null 2>&1; then
       echo "agentbox: stopped $unit, no longer enabled" >&2
     fi
-  done
+  done < <(host_units_list)
 }
 
-host_units_list() {  # agentbox's host services that are loaded, one per line
-  local unit
+# agentbox's host services that are loaded, "<unit> <module>" per line: the
+# module from the description ("agentbox host service of <module> [...]"),
+# empty for one started before the mark.
+host_units_list() {
+  local unit desc module
   for unit in $(systemctl --user list-units --all --plain --no-legend 'agentbox-*.service' 2>/dev/null | awk '{ print $1 }'); do
-    [[ "$(systemctl --user show -p Description --value "$unit" 2>/dev/null)" == "$HOST_UNIT_DESCRIPTION "* ]] && echo "$unit"
+    desc="$(systemctl --user show -p Description --value "$unit" 2>/dev/null)"
+    [[ "$desc" == "$HOST_UNIT_DESCRIPTION "* ]] || continue
+    module=""
+    [[ "$desc" =~ ^"$HOST_UNIT_DESCRIPTION of "([^ ]+)" " ]] && module="${BASH_REMATCH[1]}"
+    echo "$unit $module"
   done
 }
 

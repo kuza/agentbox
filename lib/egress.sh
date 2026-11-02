@@ -22,8 +22,10 @@
 EGRESS_DIRS=("$USER_EGRESS_DIR" "$SCRIPT_DIR/egress.d")
 EGRESS_DEFAULT="anthropic openai pypi go"
 
-# Enabled groups, read and checked. Run after mcp_check_secrets, which
-# collects the modules' hosts (MCP_EGRESS_ALL), and after agent_select.
+# Enabled groups, read and checked. Run after agent_select and after
+# mcp_check_secrets, to check the groups early, and again after
+# mcp_start_all, which can drop modules: both collect the modules' hosts
+# (MCP_EGRESS_ALL).
 # Result: EGRESS_HOSTS, one "host[:port]" each.
 egress_init() {
   local name d file line host seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" n entry

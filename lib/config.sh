@@ -9,8 +9,50 @@
 # modules then add their keys (GRAFANA_URL, ...), and the second pass reads
 # those, warning about anything still unknown.
 
+# Warnings of a start: printed, and kept in AB_WARNINGS_FILE (made by
+# run.sh; a file, so that warnings from subshells count too) for
+# warnings_review, which names them again before the session: by then they
+# have scrolled away under the agent's screen.
+AB_WARNINGS_FILE=""
+ab_warn() {  # <message...>
+  echo "agentbox: warning: $*" >&2
+  if [[ -n "$AB_WARNINGS_FILE" ]]; then printf '%s\n' "$*" >> "$AB_WARNINGS_FILE"; fi
+}
+
+# An error, printed now. Inside an MCP module's start (lib/mcp.sh) also kept
+# as the reason the warning about that module gives.
+AB_MODULE_ERRORS=""
+ab_error() {  # <message...>
+  echo "error: $*" >&2
+  if [[ -n "$AB_MODULE_ERRORS" ]]; then printf '%s\n' "$*" >> "$AB_MODULE_ERRORS"; fi
+}
+
+# At a terminal, the warnings of this start again, right before the
+# session, which starts on Enter and not on "n". No question without a
+# terminal, with AB_WARNINGS_ASK=0, for an agent run with -p or --print, or
+# a shell given a command: they start, warned.
+warnings_review() {  # <the session's arguments...>
+  local reply="" w a ask=1
+  rm -f -- "$AB_WARNINGS_FILE.err"
+  [[ -s "$AB_WARNINGS_FILE" ]] || { rm -f -- "$AB_WARNINGS_FILE"; return 0; }
+  [[ -t 0 && -t 1 && "${AB_WARNINGS_ASK:-1}" != 0 ]] || ask=""
+  [[ "$AGENT" == shell && $# -gt 0 ]] && ask=""
+  for a in "$@"; do [[ "$a" == -p || "$a" == --print ]] && ask=""; done
+  if [[ -n "$ask" ]]; then
+    echo "agentbox: this start warned:" >&2
+    while IFS= read -r w; do echo "  - $w" >&2; done < "$AB_WARNINGS_FILE"
+    read -r -p "agentbox: start the session? [Y/n] " reply || reply=n
+    if [[ "$reply" == [nN]* ]]; then
+      rm -f -- "$AB_WARNINGS_FILE"
+      echo "agentbox: not started" >&2
+      exit 1
+    fi
+  fi
+  rm -f -- "$AB_WARNINGS_FILE"
+}
+
 CONFIG_KEYS=(AB_MCP AB_EGRESS AB_FORWARD AB_SKILLS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES AB_GRAPHIFY_EXTRAS AB_TRIVY
-  AB_PYTHON_VERSIONS AB_GO_VERSION AB_GOLANGCI_LINT_VERSION)
+  AB_PYTHON_VERSIONS AB_GO_VERSION AB_GOLANGCI_LINT_VERSION AB_WARNINGS_ASK)
 CONFIG_FILE="${AB_CONFIG:-$USER_CONFIG}"
 
 load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
@@ -24,7 +66,7 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
     [[ -z "$line" || "$line" == \#* ]] && continue
     line="${line#export }"
     if [[ "$line" != *=* ]]; then
-      [[ "$warn" == 1 ]] && echo "agentbox: warning: $file:$n: not KEY=VALUE, ignored" >&2
+      [[ "$warn" == 1 ]] && ab_warn "$file:$n: not KEY=VALUE, ignored"
       continue
     fi
     key="${line%%=*}"; val="${line#*=}"
@@ -35,7 +77,7 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
       val="${val%"${val##*[![:space:]]}"}"
     fi
     if [[ "$allowed" != *" $key "* ]]; then
-      [[ "$warn" == 1 ]] && echo "agentbox: warning: $file:$n: unknown key '$key', ignored" >&2
+      [[ "$warn" == 1 ]] && ab_warn "$file:$n: unknown key '$key', ignored"
       continue
     fi
     if [[ -z "${!key+x}" ]]; then

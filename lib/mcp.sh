@@ -27,10 +27,22 @@
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
 #                        its files through sidecar_copy, never directly. Name
-#                        the sidecars ab-mcp-*: run.sh removes such containers
-#                        that no enabled module started. A program that must
+#                        the sidecars ab-mcp-<name> or ab-mcp-<name>-<part>
+#                        (<name> the module's): run.sh removes such
+#                        containers that no enabled module started, except
+#                        a skipped module's (mcp_skip). A program that must
 #                        run on the host goes through start_host_unit
-#                        (lib/sidecars.sh), named agentbox-mcp-*.
+#                        (lib/sidecars.sh), named agentbox-mcp-<name>[-*]. It runs
+#                        in a subshell: on an error it says why with
+#                        ab_error (the reason the warning gives) and exits
+#                        non-zero, and that module alone is left out
+#                        of the start (mcp_skip); exit "$MCP_TAKE_AWAY" if
+#                        what it runs must go too (access taken away).
+#                        Sidecars, copies and host services it starts are
+#                        marked as its own (agentbox.module) and found by
+#                        that mark. Variables it sets
+#                        do not come back, only the sidecars and host
+#                        services it asked for.
 #
 # Sourced by run.sh. Provides mcp_init, mcp_check_secrets, mcp_write_configs,
 # mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,
@@ -85,11 +97,55 @@ mcp_init() {
   done
 }
 
-# Required settings and secrets of every enabled module; caller tokens are
-# created when missing. Also collects images, session arguments, NO_PROXY
-# hosts, remote hosts and the registrations to clean up.
+# A module that cannot run is left out of this start, with a warning: the
+# session starts without it rather than not at all. With "keep" (sidecars
+# and host services only: its MCP_EGRESS hosts leave squid), what it
+# already runs (marked with its name, lib/sidecars.sh) stays for the sessions using it: the cleanups skip MCP_SKIPPED. That is
+# for a start that failed. A setting or secret that is gone says access
+# should go, and so does an mcp_start that exits $MCP_TAKE_AWAY (mcp/dbhub,
+# mcp/woodpecker, mcp/tabularis): then its sidecars, their copies in the
+# cache and its host services are removed like a disabled module's.
+# The status of an mcp_start that wants its module's access taken away.
+# Not 1-3, which common tools use (systemctl is-active returns 3).
+MCP_TAKE_AWAY=97
+MCP_SKIPPED=()
+mcp_skip() {  # <name> <why> [keep]
+  local n kept=()
+  [[ "${3:-}" == keep ]] && MCP_SKIPPED+=("$1")
+  ab_warn "MCP module '$1' left out of this session: $2"
+  for n in "${MCP_ENABLED[@]}"; do [[ "$n" == "$1" ]] || kept+=("$n"); done
+  MCP_ENABLED=("${kept[@]}")
+}
+
+# Required settings and secrets of every enabled module; a module without
+# them is skipped (mcp_skip). Caller tokens are created when missing. Also
+# collects images, session arguments, NO_PROXY hosts, remote hosts and the
+# registrations to clean up.
 mcp_check_secrets() {
-  local name key s missing=() host var h
+  local name key s missing
+  for name in "${MCP_ENABLED[@]}"; do
+    mcp_load "$name"
+    for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
+      if [[ -z "${!key:-}" ]]; then
+        mcp_skip "$name" "it needs $key in $CONFIG_FILE (agentbox setup)"
+        continue 2
+      fi
+    done
+    missing=()
+    for s in ${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"}; do
+      secret_exists "$s" || missing+=("$s")
+    done
+    if (( ${#missing[@]} )); then
+      mcp_skip "$name" "missing podman secrets ${missing[*]} (agentbox setup, or README, Setup in detail, step 5)"
+    fi
+  done
+  mcp_collect
+}
+
+# Images, session arguments, NO_PROXY hosts, remote hosts and registrations
+# of the enabled modules; caller tokens are created when missing.
+mcp_collect() {
+  local name host var h
   MCP_IMAGES_ALL=()
   MCP_SESSION_ARGS=()
   MCP_NO_PROXY=()
@@ -97,15 +153,6 @@ mcp_check_secrets() {
   MCP_MANAGED=""
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load "$name"
-    for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
-      if [[ -z "${!key:-}" ]]; then
-        echo "error: MCP module '$name' needs $key in $CONFIG_FILE" >&2
-        exit 2
-      fi
-    done
-    for s in ${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"}; do
-      secret_exists "$s" || missing+=("$s ($name)")
-    done
     if [[ -n "$MCP_CALLER_SECRET" ]]; then
       ensure_caller_secret "$MCP_CALLER_SECRET"
       var="$(mcp_token_var "$name")"
@@ -118,10 +165,6 @@ mcp_check_secrets() {
     [[ "$host" != *.* ]] && MCP_NO_PROXY+=("$host")
     MCP_MANAGED+="$name $MCP_URL"$'\n'
   done
-  if (( ${#missing[@]} )); then
-    echo "error: missing podman secrets for MCP modules: ${missing[*]} (README, Setup in detail, step 5)" >&2
-    exit 1
-  fi
 }
 
 json_str() {  # <text>: JSON string literal
@@ -162,12 +205,56 @@ write_file() {  # <path> <content>: replace atomically (new inode)
   mv -f "$tmp" "$1"
 }
 
+# Each module's mcp_start runs in a subshell, so that its exit (a bad
+# setting, a sidecar that fails) stops that module alone: it is skipped
+# (mcp_skip). What a module that succeeded asked for comes back on fd 3.
+# Then the lists of mcp_collect are made again, without the skipped.
 mcp_start_all() {
-  local name
+  local name rc res kind item skipped="" why d c u
+  local errf="${AB_WARNINGS_FILE:+$AB_WARNINGS_FILE.err}"
+  [[ -n "$errf" ]] || errf="$(mktemp)"
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load "$name"
-    if declare -F mcp_start >/dev/null; then
-      mcp_start
+    declare -F mcp_start >/dev/null || continue
+    # The lists come back on the subshell's fd 3, its output goes to stderr:
+    # no file, so starts at the same time cannot mix them up.
+    : > "$errf"
+    set +e
+    res="$(
+      (
+        set -e
+        SIDECARS_WANTED=(); HOST_UNITS_WANTED=()
+        AB_MODULE_ERRORS="$errf"
+        AB_CURRENT_MODULE="$name"
+        # Without fd 3: a program it starts that stays (conmon, podman's
+        # pause process) would hold the capture open and the start with it.
+        mcp_start 3>&-
+        printf 's %s\n' ${SIDECARS_WANTED[@]+"${SIDECARS_WANTED[@]}"} >&3
+        printf 'h %s\n' ${HOST_UNITS_WANTED[@]+"${HOST_UNITS_WANTED[@]}"} >&3
+      ) 3>&1 >&2
+    )"
+    rc=$?
+    set -e
+    # The reason: what the module reported with ab_error (its output went to
+    # the terminal as it came). A command that failed on its own (podman,
+    # under set -e) reported nothing here: the output above says.
+    why="$(awk 'NR <= 3' "$errf" | paste -sd ';' -)" || why=""
+    why="${why:-its start failed, see the output above}"
+    if (( rc == MCP_TAKE_AWAY )); then
+      mcp_skip "$name" "$why; what it ran is removed"
+      # Now, not at the cleanup at the end of the start: a later step that
+      # fails would leave them serving.
+      module_remove "$name"
+      skipped=1; continue
+    elif (( rc != 0 )); then
+      mcp_skip "$name" "$why; open sessions keep what it already runs" keep
+      skipped=1; continue
     fi
+    while read -r kind item; do
+      [[ -n "$item" ]] || continue
+      if [[ "$kind" == s ]]; then SIDECARS_WANTED+=("$item"); else HOST_UNITS_WANTED+=("$item"); fi
+    done <<<"$res"
   done
+  rm -f -- "$errf"
+  [[ -z "$skipped" ]] || mcp_collect
 }

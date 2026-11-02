@@ -70,7 +70,7 @@ agentbox_uninstall() {
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.env, env/ with passwords, skills)?"; }; then files_too=1; fi
 
   if command -v systemctl >/dev/null; then
-    for c in $(host_units_list); do
+    for c in $(host_units_list | awk '{ print $1 }'); do
       systemctl --user stop "$c" >/dev/null 2>&1 && echo "stopped host service $c"
     done
   fi
