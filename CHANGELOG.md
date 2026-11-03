@@ -6,47 +6,53 @@ the steps a release needs from you, such as a rebuild.
 
 ## v0.1.11
 
-- bb4: the server for the browser's pages is now `bb4-devtools`, not
-  `chrome-devtools`, the name chrome-devtools-mcp's own instructions give
-  a registration by hand.
-- A module's server marked `caller` without an `MCP_CALLER_SECRET`, or two
-  servers with the same name, leave that module out of the start with the
-  reason, instead of failing quietly in the session. So do a module whose
-  mcp.sh sets no `MCP_URL` (its URL may come from its settings; emptied,
-  its sidecars go) and one whose mcp.sh does not parse, which both stopped
-  the whole start before.
+- bb4: the server for the pages of the browser is now `bb4-devtools`, not
+  `chrome-devtools`. The old name is the name that the instructions of
+  chrome-devtools-mcp give for a server that you register yourself.
+- These module faults leave the module out of the start, with the reason:
+  a server marked `caller` without an `MCP_CALLER_SECRET`, two servers
+  with the same name, a server or module without a URL, and an mcp.sh
+  that does not parse. Before, the first two failed quietly in the
+  session, and the last two stopped the whole start. Without a URL (an
+  emptied setting), the sidecars of the module are removed.
+- Modules check their settings in a new optional `mcp_check`. The start
+  and `agentbox setup` both run it. If a setting of woodpecker or
+  tabularis is not correct, the start now removes what the module runs,
+  as for bb4 and for an emptied setting. Before, open sessions kept it.
+- A module that is left out for a setting or a secret is removed at once,
+  not at the end of the start.
 - `agentbox setup` shows "NOT USABLE" and the reason under a module that
-  the start would leave out: a setting that is not correct, or a fault in
-  its server lines. It says so when you enable the module, too.
-- Modules check their settings in a new optional `mcp_check`, which the
-  start and `agentbox setup` both run. A setting of woodpecker or tabularis
-  that is not correct now removes what the module runs, as bb4 already
-  did and as an emptied setting does. Before, open sessions kept it. A
-  module left out for a setting or secret is removed at once, not at the
-  end of the start.
-- The warnings of the update check (an image or skill source that could
-  not be updated, a skill record that is not correct) are in the list
-  before the session too. "Could not check" is not: offline, it would ask
-  at every start.
+  the start would leave out. It also says so when you enable the module.
+  If podman cannot list the secrets, setup still opens and shows them as
+  MISSING.
+- When podman cannot start the sidecar of a module, the warning before the
+  session gives the error of podman as the reason (its `Error:` line, or
+  else its last line). The output of podman, such as the progress of an
+  image pull, shows as it comes.
 - When `dbhub.toml` is refused, the warning gives the reason, not "see the
   output above".
+- The warnings of the update check are in the list before the session
+  too: an image or skill source that could not be updated, and a skill
+  record that is not correct. "Could not check" is not in the list,
+  because offline it would ask at every start.
 - The update check also reminds you when the base of an image that a
-  module builds here (bb4's `agentbox-bb4-devtools`) is a month old.
+  module builds (`agentbox-bb4-devtools`) is a month old.
 - A module in `AB_MCP` that this version does not have keeps only the
-  sidecars that carry its mark, not all of those with its name prefix.
+  sidecars with its mark, not all sidecars with its name prefix.
 - A module whose mcp.sh does not parse adds no "unknown key" warnings for
   its settings.
-- When podman cannot start a module's sidecar, its `Error:` line is the
-  reason in the warning before the session.
-- `agentbox uninstall` also finds the images of a module of yours whose
-  `MCP_IMAGES` or image variable is indented or in single quotes.
-- Fewer podman calls per start: the agentbox image ID is looked up once.
-  The bb4 devtools image is built again once (its fingerprint is now
-  made like those of the other images).
+- `agentbox uninstall` also finds the images of a module of yours when
+  `MCP_IMAGES` or the image variable is indented, in single quotes, or
+  written as `${VAR}`.
+- The start looks up the ID of the agentbox image once. The bb4 devtools
+  image is built again once, because its fingerprint is now made like the
+  fingerprints of the other images.
+- README: rewritten by the ASD-STE100 rules (Simplified Technical
+  English). The facts, commands and links are the same.
 
-Action: rename `mcp__chrome-devtools__` to `mcp__bb4-devtools__` in
-permission rules (`.claude/settings*.json`) and anything else that names
-bb4's page tools.
+Action: if permission rules (`.claude/settings*.json`) or other files of
+yours name the page tools of bb4, change `mcp__chrome-devtools__` to
+`mcp__bb4-devtools__`.
 
 ## v0.1.10
 
