@@ -433,6 +433,7 @@ Claude Code does not start without `anthropic`. pi needs `openai` only with a Ch
 | `pypi` | `pypi.org`, `files.pythonhosted.org` | pip / uv packages (see [Python](#python)) |
 | `go` | `proxy.golang.org`, `sum.golang.org` | Go modules (see [Go](#go)) |
 | `openai` | `auth.openai.com`, `api.openai.com` | pi with a ChatGPT subscription (see [pi](#pi-openai)) |
+| `chatgpt` | `chatgpt.com` | pi with "OpenAI Codex (legacy)", for a business ChatGPT account; with `openai`. Not enabled by default (see [pi](#pi-openai)) |
 | `github-read` | `github.com` and its content hosts | anonymous read access to public GitHub (see [GitHub read access](#github-read-access-optional)) |
 | `gcs` | `storage.googleapis.com` | Google Cloud Storage, all buckets |
 
@@ -473,7 +474,9 @@ There are two ways to give pi access to OpenAI models. Both use the **OpenAI** p
 | Egress | `auth.openai.com`, `api.openai.com` through squid | none, through the sidecar |
 | `pi/models.json` | one without overrides (`{ "providers": {} }`) | points the provider at the sidecar |
 
-**Do not use "OpenAI Codex (legacy)".** It is the older ChatGPT integration of pi, and pi marks it as legacy. It connects to the internal Codex backend of ChatGPT (`chatgpt.com/backend-api`), which is not a public API and can change without notice. *Sign in with ChatGPT* on the OpenAI provider gets a token for the public API (`api.openai.com`). It uses the same endpoint and request format as API-key access. To see the models that your plan gives there, use `/model`.
+**Use *Sign in with ChatGPT* if your account permits it.** It gets a token for the public API (`api.openai.com`), with the same endpoint and request format as API-key access. To see the models that your plan gives there, use `/model`.
+
+**"OpenAI Codex (legacy)" is for accounts that cannot use it.** With a business (workspace) ChatGPT account, *Sign in with ChatGPT* stops with "operation not permitted", and only the legacy provider connects. pi marks it as legacy. It connects to the internal Codex backend of ChatGPT (`chatgpt.com/backend-api`), which is not a public API and can change without notice. It needs the `chatgpt` egress group as well as `openai` (see below). Sign in with `/login` → **OpenAI Codex (legacy)**, then use steps 3 to 6 below.
 
 #### Setup: ChatGPT subscription
 
@@ -486,7 +489,7 @@ There are two ways to give pi access to OpenAI models. Both use the **OpenAI** p
 
 **The agent can read the token**, as Claude Code can read the Claude OAuth token. pi must write and refresh the token, so it cannot be in a sidecar. To revoke the token, run `/logout` in pi. Then end the session in the security settings of your ChatGPT account.
 
-`auth.openai.com` and `api.openai.com` come from the `openai` [egress group](#egress), which is enabled by default. All sessions share squid, so Claude Code sessions can also reach these hosts. If you use pi with an API key or do not use pi, remove `openai` from `AB_EGRESS`. The legacy provider also needs `chatgpt.com`. To allow it, add it to a group of your own in `egress.local.d/`.
+`auth.openai.com` and `api.openai.com` come from the `openai` [egress group](#egress), which is enabled by default. All sessions share squid, so Claude Code sessions can also reach these hosts. If you use pi with an API key or do not use pi, remove `openai` from `AB_EGRESS`. The legacy provider also needs `chatgpt.com`, from the `chatgpt` group. To allow it, enable `chatgpt` in `agentbox setup`, or add it to `AB_EGRESS` (for example `AB_EGRESS=anthropic openai chatgpt pypi go`).
 
 #### Setup: OpenAI API key
 
@@ -1238,7 +1241,8 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | pi (subscription): sign-in or requests fail with `ERR_PROXY_TUNNEL` / 403 | `openai` is not in `AB_EGRESS`. The squid log shows the denied host. |
 | pi (subscription): browser shows "can't connect to 127.0.0.1:1455" after approving | This is expected: the callback listener is in the container. Copy the full URL from the address bar and paste it into pi. |
 | pi (subscription): requests go to `ab-llm-openai` and fail | pi uses `pi/models.json`, which points pi at the sidecar, only when the `openai_api_key` secret exists. If not, pi gets a `models.json` without overrides. If you changed from API key to subscription, run `podman secret rm openai_api_key`. |
-| pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 agentbox pi`). If you use the legacy "OpenAI Codex" provider, change to OpenAI → Sign in with ChatGPT. |
+| pi (subscription): worked before, now fails after an update | Update pi (`AB_UPDATE=1 agentbox pi`). If you use the legacy "OpenAI Codex" provider and your account permits *Sign in with ChatGPT*, change to OpenAI → Sign in with ChatGPT: the legacy backend can change without notice. |
+| pi: *Sign in with ChatGPT* says "operation not permitted" | Your ChatGPT account (a business workspace) does not permit it. Use "OpenAI Codex (legacy)" with the `chatgpt` egress group enabled (see [pi (OpenAI)](#pi-openai)). |
 | An MCP server is `failed` in `/mcp` | Check the `podman logs` of its sidecar. Both agents list only enabled modules. Thus a failed module has a sidecar that should run, or (Context7) a host that squid should allow. |
 | `claude mcp list` does not show grafana, graylog, ... | Expected: the servers of the modules come from `--mcp-config`, and `mcp list` ignores it. Use `/mcp` in a session. |
 | `uv` says a Python version is not available and downloads are set to `never` | The image does not contain that version. Add it to `AB_PYTHON_VERSIONS` in `config.env`, and run `AB_UPGRADE=1 agentbox`. |
@@ -1430,8 +1434,6 @@ The workflows have read-only access to the repo and no secrets. The actions are 
 
 ### Not yet verified
 
-These parts come from documentation and from tests against fake upstreams. Nobody ran them end to end yet:
+This part comes from documentation and from tests against a fake upstream. Nobody ran it end to end yet:
 
 - pi through the OpenAI sidecar against the real OpenAI API. The chain pi → nginx (caller check, key injection) → upstream was tested with a fake upstream.
-- pi's *Sign in with ChatGPT* through squid with the pasted callback URL, and token refresh with `PI_OFFLINE=1` set.
-- Context7 through squid from pi (it works from Claude Code).

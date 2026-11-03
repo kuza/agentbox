@@ -601,8 +601,13 @@ test_egress_default_groups() {
   assert_file_has "$f" '^acl allowed dstdomain proxy.golang.org$'
   assert_file_has "$f" '^acl allowed dstdomain auth.openai.com$'
   assert_file_has "$f" '^acl allowed dstdomain mcp.context7.com$'
-  assert_file_lacks "$f" 'github.com|storage.googleapis.com'
+  assert_file_lacks "$f" 'github.com|storage.googleapis.com|chatgpt.com'
   grep -q 'squid-allow.conf:/etc/squid/agentbox-allow.conf:ro,Z' "$STUB_DIR/calls" || fail "include not mounted"
+  # chatgpt (pi's legacy provider) only when listed.
+  config "AB_EGRESS=anthropic openai chatgpt"
+  ab_run --
+  assert_rc 0
+  assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain chatgpt.com$'
 }
 
 test_egress_listed_groups_local_override_and_ports() {

@@ -47,6 +47,11 @@ the steps a release needs from you, such as a rebuild.
 - The start looks up the ID of the agentbox image once. The bb4 devtools
   image is built again once, because its fingerprint is now made like the
   fingerprints of the other images.
+- New egress group `chatgpt` (`chatgpt.com`), not enabled by default: pi
+  with "OpenAI Codex (legacy)". A business ChatGPT account refuses "Sign
+  in with ChatGPT" ("operation not permitted"); the legacy provider is the
+  way for it, and the README now says so. A group of yours with the same
+  name (`egress.local.d/chatgpt.conf`) replaces this one.
 - README: rewritten by the ASD-STE100 rules (Simplified Technical
   English). The facts, commands and links are the same.
 
