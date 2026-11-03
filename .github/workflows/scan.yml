@@ -37,13 +37,15 @@ jobs:
           tar -xzf "$RUNNER_TEMP/trivy.tgz" -C "$RUNNER_TEMP" trivy
           "$RUNNER_TEMP/trivy" --version
 
-      - name: Build the agentbox and squid images
+      - name: Build the agentbox, squid and bb4 devtools images
         run: |
           mkdir -p "$RUNNER_TEMP/empty"
           podman build --layers=false --build-arg WITH_TRIVY=1 -t localhost/agentbox -f Containerfile "$RUNNER_TEMP/empty"
           podman save -o "$RUNNER_TEMP/agentbox.tar" localhost/agentbox
           podman build --layers=false -t localhost/agentbox-squid -f Containerfile.squid "$RUNNER_TEMP/empty"
           podman save -o "$RUNNER_TEMP/squid.tar" localhost/agentbox-squid
+          podman build --layers=false -t localhost/agentbox-bb4-devtools -f mcp/bb4/devtools/Containerfile mcp/bb4/devtools
+          podman save -o "$RUNNER_TEMP/bb4-devtools.tar" localhost/agentbox-bb4-devtools
 
       - name: Scan
         run: |
@@ -62,6 +64,7 @@ jobs:
           }
           scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
           scan "agentbox-squid (from Containerfile.squid)" --input "$RUNNER_TEMP/squid.tar"
+          scan "agentbox-bb4-devtools (from mcp/bb4/devtools)" --input "$RUNNER_TEMP/bb4-devtools.tar"
           for img in docker.io/library/nginx:alpine \
                      docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest \
                      ghcr.io/rtuszik/woodpecker-mcp:0.5.3 docker.io/bytebase/dbhub:1.5.0; do

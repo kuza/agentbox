@@ -94,7 +94,9 @@ agentbox_uninstall() {
   while read -r _ id; do
     [[ -n "${id:-}" ]] && podman rmi "$id" >/dev/null 2>&1 && echo "removed image $id (replaced earlier)"
   done < <(cat "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images" 2>/dev/null)
-  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES); do
+  # Also the images modules build here (mcp/bb4), by their agentbox.build label.
+  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES) \
+           $(podman images --filter label=agentbox.build --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^localhost/agentbox-'); do
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then

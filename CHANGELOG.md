@@ -4,6 +4,29 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.10
+
+- New MCP module `bb4`: a remote browser on a browser server, one per
+  user, that the agent drives. Two servers: `bb4`, the server's own (start
+  and set up the browser), and `chrome-devtools` (open pages, read, click,
+  type, screenshots), chrome-devtools-mcp in a sidecar built here from
+  pinned packages, without usage statistics or CrUX. Settings `BB4_URL`,
+  `BB4_USER`, `BB4_DEVTOOLS_PORT`. The browser reaches the whole internet
+  past squid's allowlist, so every start warns in capitals while it is on.
+  See README, Remote browser (bb4).
+- A module can register more than one MCP server (`MCP_SERVERS`).
+- A module in `AB_MCP` that this version does not have (one of a newer or
+  older version, or a typo) is left out with a warning, like a module that
+  cannot run, instead of stopping the start; sidecars of it that another
+  version runs stay. Only a name that is not one
+  (`../etc`) still stops it.
+- Tabularis bridge: `@modelcontextprotocol/node` 2.1.0 and
+  `@hono/node-server` 2.1.3 under supergateway, for a vulnerability in not
+  limiting the size of a request (GHSA-f897-62hf-6gxq). `@hono/node-server`
+  2.x goes past the range `@modelcontextprotocol/node` declares (^1); the
+  SDK itself accepts it, and both bridges were checked with it. The first
+  start with tabularis installs the bridge anew (the npm registry once).
+
 ## v0.1.9
 
 - Faster start: a sidecar that needs no change costs two podman calls

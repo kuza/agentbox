@@ -328,6 +328,101 @@ MOD
   return 0
 }
 
+test_mcp_bb4() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=bb4" "BB4_URL=http://browser.example.internal:5101/" "BB4_USER=octo-cat"
+  # Without the lock file nothing is built: left out, with how to make it.
+  rm -f "$AB/mcp/bb4/devtools/package-lock.json"
+  ab_run --
+  assert_skipped bb4
+  assert_out "package-lock.json is missing: in a clone, run"
+  echo '{"lockfileVersion": 3}' > "$AB/mcp/bb4/devtools/package-lock.json"
+  # An image from another lock file: built anew.
+  echo "localhost/agentbox-bb4-devtools old" >> "$STUB_DIR/image_labels"
+  ab_run --
+  assert_rc 0
+  local j="$T/home/.cache/agentbox/mcp-claude.json" l
+  # Two servers: bb4 remote, through squid, without the caller token;
+  # chrome-devtools through nginx, with it.
+  grep -q '"bb4": { "type": "http", "url": "http://browser.example.internal:5101/u/octo-cat/mcp" }' "$j" \
+    || fail "bb4 not registered: $(cat "$j")"
+  grep -q '"chrome-devtools": { "type": "http", "url": "http://ab-mcp-bb4:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_BB4}" } }' "$j" \
+    || fail "chrome-devtools not registered: $(cat "$j")"
+  grep -q '"chrome-devtools"' "$T/home/.cache/agentbox/mcp-pi.json" || fail "pi lacks chrome-devtools"
+  session_args | grep -qx 'bb4_mcp_caller,type=env,target=AB_MCP_TOKEN_BB4' || fail "caller token not passed"
+  assert_file_has "$T/home/.cache/agentbox/squid-allow.conf" '^acl ab_host_[0-9]+ dstdomain browser.example.internal$'
+  assert_file_has "$T/home/.cache/agentbox/squid-allow.conf" '^acl ab_port_[0-9]+ port 5101$'
+  assert_out "warning: BB4 IS ON: THE AGENT DRIVES A BROWSER THAT REACHES THE WHOLE INTERNET"
+  assert_eq "$(started)" "ab-egress ab-mcp-bb4 ab-mcp-bb4-devtools" "sidecars"
+  grep "^podman build" "$STUB_DIR/calls" | grep -q -- "-t localhost/agentbox-bb4-devtools -f .*/mcp/bb4/devtools/Containerfile .*/mcp/bb4/devtools$" \
+    || fail "devtools image not built"
+  l="$(run_line ab-mcp-bb4-devtools)"
+  [[ "$l" == *"--network ab-egress --secret bb4_bridge_key localhost/agentbox-bb4-devtools "* ]] || fail "devtools sidecar: $l"
+  [[ "$l" == *"--stdio chrome-devtools-mcp --wsEndpoint=ws://browser.example.internal:5100/u/octo-cat/devtools/browser --no-usage-statistics --no-performance-crux "* ]] \
+    || fail "devtools command: $l"
+  [[ "$l" == *"--apiKeyFile /run/secrets/bb4_bridge_key --logLevel none" ]] || fail "devtools key: $l"
+  l="$(run_line ab-mcp-bb4)"
+  [[ "$l" == *"--network ab-internal --network ab-egress "* ]] || fail "nginx networks: $l"
+  [[ "$l" == *"bb4_mcp_caller,type=env,target=BB4_CALLER_TOKEN"* && "$l" == *"bb4_bridge_key,type=env,target=BB4_BRIDGE_KEY"* ]] \
+    || fail "nginx secrets: $l"
+  assert_file_has "$ROOT/mcp/bb4/nginx.conf.template" 'proxy_pass http://ab-mcp-bb4-devtools:8000/mcp;'
+  # A host without a dot still goes through squid, not NO_PROXY.
+  ab_run BB4_URL=http://browser:5101 --
+  assert_rc 0
+  session_args | grep -q 'NO_PROXY=.*browser' && fail "remote bb4 host in NO_PROXY"
+  session_args | grep -q 'NO_PROXY=.*ab-mcp-bb4' || fail "the sidecar not in NO_PROXY"
+  # Built once; another port, https: wss on that port.
+  ab_run BB4_DEVTOOLS_PORT=6100 BB4_URL=https://browser.example.internal --
+  assert_rc 0
+  grep -q '^podman build' "$STUB_DIR/calls" && fail "built again without a change"
+  run_line ab-mcp-bb4-devtools | grep -q -- '--wsEndpoint=wss://browser.example.internal:6100/u/octo-cat/' || fail "wss: $(run_line ab-mcp-bb4-devtools)"
+  # The server's URL with a path, an odd host or port, a user name that is
+  # not one, a port that is not: left out, nothing added to squid.
+  local bad
+  for bad in "BB4_URL=http://browser.example.internal:5101/u/x" "BB4_URL=http://a..b:5101" "BB4_URL=http://browser.example.internal:05101" \
+             "BB4_URL=http://browser.example.internal:99999" "BB4_USER=a/b" "BB4_DEVTOOLS_PORT=x"; do
+    : > "$CFG/config.env"
+    config "AB_MCP=bb4" "BB4_URL=http://browser.example.internal:5101" "BB4_USER=octo-cat" "$bad"
+    [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] || sed -i "0,/^${bad%%=*}=/{/^${bad%%=*}=/d}" "$CFG/config.env"
+    printf 'ab-mcp-bb4-devtools x\n' >> "$STUB_DIR/running"
+    ab_run --
+    assert_skipped bb4
+    # Settings that do not check out take the old browser connection away.
+    grep -qx 'podman rm -f -v ab-mcp-bb4-devtools' "$STUB_DIR/calls" || fail "$bad: old devtools sidecar kept"
+    [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] && continue
+    grep -q 'browser.example.internal' "$T/home/.cache/agentbox/squid-allow.conf" && fail "$bad: host still in squid"
+  done
+  return 0
+}
+
+test_mcp_server_names_and_urls_checked() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/mcp.local/a" "$CFG/mcp.local/b" "$CFG/mcp.local/c"
+  printf 'MCP_URL=https://a.example/mcp\nMCP_SERVERS=("shared|https://a.example/mcp|-|A")\n' > "$CFG/mcp.local/a/mcp.sh"
+  printf 'MCP_URL=https://b.example/mcp\nMCP_SERVERS=("shared|https://b.example/mcp|-|B")\n' > "$CFG/mcp.local/b/mcp.sh"
+  config "AB_MCP=a b"
+  ab_run --
+  assert_skipped b
+  assert_out "MCP module 'b' left out of this session: its server 'shared' has the name of one of module 'a'"
+  grep -q 'a.example' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a left out"
+  # A name is taken only by a module that is not left out for another
+  # reason: b gets it once a lacks its setting.
+  printf 'MCP_URL=https://a.example/mcp\nMCP_CONFIG=(A_URL)\nMCP_REQUIRED_CONFIG=(A_URL)\nMCP_SERVERS=("shared|https://a.example/mcp|-|A")\n' > "$CFG/mcp.local/a/mcp.sh"
+  ab_run --
+  assert_skipped a
+  grep -q 'b.example' "$T/home/.cache/agentbox/mcp-claude.json" || fail "b left out for a skipped a"
+  # A sidecar of a module of yours without a caller token: still reached
+  # without the proxy.
+  printf 'MCP_URL=http://ab-mcp-d:8080/mcp\n' > "$CFG/mcp.local/b/mcp.sh"
+  ab_run --
+  session_args | grep -q 'NO_PROXY=.*ab-mcp-d' || fail "own sidecar without a caller token sent through squid"
+  printf 'MCP_URL="https://c.example/x|y"\n' > "$CFG/mcp.local/c/mcp.sh"
+  : > "$CFG/config.env"; config "AB_MCP=c"
+  ab_run --
+  assert_rc 2
+  assert_out "sets no MCP_URL, or one with a |"
+}
+
 test_mcp_missing_setting() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=grafana"
@@ -339,10 +434,18 @@ test_mcp_missing_setting() {
 
 test_mcp_unknown_module() {
   setup "${FUNCNAME[0]}"
-  config "AB_MCP=grafana jira"
+  # A module of another version, or a typo: left out, the rest starts.
+  config "AB_MCP=grafana jira" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
   ab_run --
-  assert_rc 2
-  assert_out "no MCP module 'jira'"
+  assert_skipped jira
+  assert_out "MCP module 'jira' left out of this session: this agentbox has no such module"
+  grep -q '"grafana"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "grafana left out too"
+  # Its sidecars, of another version's sessions, stay.
+  printf 'ab-mcp-jira x\n' >> "$STUB_DIR/running"
+  ab_run --
+  grep -q 'rm -f -v ab-mcp-jira' "$STUB_DIR/calls" && fail "another version's sidecar removed"
+  return 0
 }
 
 test_mcp_invalid_name() {

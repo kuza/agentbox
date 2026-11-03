@@ -19,7 +19,7 @@ No host credentials are mounted into the agent container, and all service tokens
 - **[Getting started](#getting-started):** [Quick start](#quick-start) · [Requirements](#requirements) · [Setup in detail](#setup-in-detail) · [Daily usage](#daily-usage)
 - **[How it works](#how-it-works):** [Architecture](#architecture) · [Security model](#security-model) · [Git on the host](#git-on-the-host) · [Egress](#egress)
 - **[Agents](#agents):** [pi (OpenAI)](#pi-openai) · [Memory and personal instructions](#memory-and-personal-instructions) · [Status line](#status-line) · [Skills](#skills)
-- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [DBHub (MCP)](#dbhub-mcp) · [Documentation (Context7)](#documentation-context7)
+- **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [DBHub (MCP)](#dbhub-mcp) · [Remote browser (bb4)](#remote-browser-bb4) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
 - **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
@@ -281,6 +281,8 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
                       │    (nginx, caller auth)   (woodpecker-mcp,           (same nginx: GET/HEAD
                       │                            read-only, own network)    only, injects the token)
                       ├──► ab-mcp-dbhub ──────► your databases (dbhub.toml, read-only tools)
+                      ├──► ab-mcp-bb4 ──► ab-mcp-bb4-devtools ──► remote browser (CDP WebSocket)
+                      │    (nginx, caller auth) (chrome-devtools-mcp)
                       └──► ab-mcp-tabularis ──► ab-mcp-tabularis-relay ──► supergateway ──► tabularis --mcp
                            (nginx, caller auth,  (socat, host network,     (host service,
                             unix socket)          unix socket → loopback)   127.0.0.1)
@@ -297,6 +299,8 @@ Tokens never go into `config.env`. The menu only edits; the next `agentbox` star
 | `ab-mcp-github-srv` | `ab-egress` **only** | none | Official `github-mcp-server` in HTTP mode. Not reachable from the agent. Module `github` |
 | `ab-mcp-woodpecker` | `ab-internal`, `ab-egress`, `ab-mcp-woodpecker` | Woodpecker token, bridge key | nginx: on `:8080` checks the caller token and sends the bridge key on to the server; on `:8081` lets the server read Woodpecker (GET and HEAD only, bridge key checked, token injected, certificate verified). Module `woodpecker` |
 | `ab-mcp-woodpecker-srv` | `ab-mcp-woodpecker` **only** (`--internal`, no outside DNS) | none | `rtuszik/woodpecker-mcp` in read-only mode; sees nginx and nothing else, not even squid. Not reachable from the agent. Module `woodpecker` |
+| `ab-mcp-bb4` | `ab-internal`, `ab-egress` | bb4 bridge key | nginx: checks the caller token, forwards to `ab-mcp-bb4-devtools` with the bridge key. Module `bb4` |
+| `ab-mcp-bb4-devtools` | `ab-egress` **only** | bb4 bridge key | chrome-devtools-mcp behind supergateway, built here; connects to the remote browser's DevTools WebSocket. Not reachable from the agent. Module `bb4` |
 | `ab-mcp-dbhub` | `ab-internal`, `ab-egress` | Database passwords (from your `dbhub.toml`, via a mode-600 copy in the cache) | `bytebase/dbhub`: bearer-token caller auth, Host allowlist, read-only tools only. Module `dbhub` |
 | `ab-mcp-tabularis` | `ab-internal` **only** | Tabularis bridge key | nginx: checks the caller token, replaces it with the bridge key, forwards to the relay's unix socket. Module `tabularis` |
 | `ab-mcp-tabularis-relay` | host network | none | socat: the unix socket in the volume `ab-mcp-tabularis-sock`, forwarded to supergateway on `127.0.0.1`. Not reachable from the agent. Module `tabularis` |
@@ -591,10 +595,10 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 | Directory | |
 |---|---|
-| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub` |
+| `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub`, `bb4` |
 | `mcp.local/<name>/` | Your own modules, in [your files](#your-files). A name that also exists in `mcp/` replaces that module |
 
-`AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). A module that lacks a setting or a secret, or whose start fails, is left out of that session with a warning saying why (see [Daily usage](#daily-usage) for how warnings are shown again); the others work. If its start failed, what the module already runs stays for the sessions using it; if a setting or secret is gone, it goes, as for a module taken out of `AB_MCP`. Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
+`AB_MCP` in `config.env` lists the enabled ones (`AB_MCP=grafana graylog`); `context7` is always on. On every start `run.sh` checks the enabled modules' settings and secrets, starts their sidecars, and writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`) plus the remote hosts for squid (see [Egress](#egress)). A module that lacks a setting or a secret, that this version does not have, or whose start fails, is left out of that session with a warning saying why (see [Daily usage](#daily-usage) for how warnings are shown again); the others work. If its start failed, what the module already runs stays for the sessions using it; if a setting or secret is gone, it goes, as for a module taken out of `AB_MCP`. Nobody gets servers they did not enable, and adding one does not touch `run.sh`.
 
 #### Writing a module
 
@@ -602,7 +606,8 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 | | |
 |---|---|
-| `MCP_URL` | Required. The URL the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar, the server's URL for a remote one |
+| `MCP_URL` | Required unless `MCP_SERVERS` is set. The URL the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar, the server's URL for a remote one (and its host in `MCP_EGRESS`) |
+| `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`): `"<name>\|<url>\|<caller or ->\|<description>"` each, in place of the one server named like the module. `caller`: the agents send the module's caller token to it; `-`: nothing (a remote server). As for `MCP_URL`, a host without a dot is reached without the proxy unless it is in `MCP_EGRESS` |
 | `MCP_DESCRIPTION` | One line, shown by pi |
 | `MCP_CONFIG=(...)` | `config.env` keys the module reads; `run.sh` accepts them only while the module is enabled |
 | `MCP_REQUIRED_CONFIG=(...)` | Of those, the ones that must be set |
@@ -768,7 +773,7 @@ Keep Tabularis running while you work if the agent should write: approvals need 
 
 - **This is your access to your databases.** Isolation does not limit what Tabularis does with a query it accepts. Read-only mode and approvals in Tabularis are the boundary, so set them before you enable the module, and leave out connections the agent has no business with.
 - **Query results are third-party text.** Data from a database can carry prompt injection like any other content.
-- **A program of agentbox runs on your host.** supergateway comes from npm and runs with your user, like `run.sh`. Not just its own version but every package under it is pinned, with its hash, in `mcp/tabularis/bridge/package-lock.json`: the module installs exactly that tree with `npm ci --ignore-scripts` into `~/.cache/agentbox/tabularis/bridge-<hash of package.json and the lock file>`. npm refuses a package whose content differs from the hash, and no package's install scripts run. A new agentbox release with a changed lock file installs the new tree at the next start; trees no start has used for 30 days are removed. If `npm ci` fails (no registry, say), the session starts without the module and says why. `package.json` also overrides the MCP SDK packages supergateway pins (`@modelcontextprotocol/sdk`, `server`, `client`) with later releases that fix vulnerabilities, two of them in serving several sessions at once, which is how the bridge runs. Maintainers update the lock file with `cd mcp/tabularis/bridge && npm install --package-lock-only --ignore-scripts`, after bumping a version in `package.json`, check it with `trivy fs mcp/tabularis/bridge`, and review the diff; an override goes once supergateway pins a fixed release itself.
+- **A program of agentbox runs on your host.** supergateway comes from npm and runs with your user, like `run.sh`. Not just its own version but every package under it is pinned, with its hash, in `mcp/tabularis/bridge/package-lock.json`: the module installs exactly that tree with `npm ci --ignore-scripts` into `~/.cache/agentbox/tabularis/bridge-<hash of package.json and the lock file>`. npm refuses a package whose content differs from the hash, and no package's install scripts run. A new agentbox release with a changed lock file installs the new tree at the next start; trees no start has used for 30 days are removed. If `npm ci` fails (no registry, say), the session starts without the module and says why. `package.json` also overrides the MCP SDK packages supergateway pins (`@modelcontextprotocol/sdk`, `server`, `client`, `node`, and `@hono/node-server` under them) with later releases that fix vulnerabilities, among them two in serving several sessions at once, which is how the bridge runs, and one in not limiting the size of a request. Known and left: supergateway itself uses zod 3, for which npm lists a way to exhaust memory with an oversized input (GHSA-mrhx-c7xc-m3w5, fixed only in zod 4). Only requests with the bridge key reach supergateway, so the most it allows is the agent bringing down its own bridge; it goes once supergateway moves to zod 4. Maintainers update the lock file with `cd mcp/tabularis/bridge && npm install --package-lock-only --ignore-scripts`, after bumping a version in `package.json`, check it with `trivy fs mcp/tabularis/bridge`, and review the diff; an override goes once supergateway pins a fixed release itself.
 - **On a host shared with other users** the bridge's port is an ordinary TCP port on `127.0.0.1`. agentbox checks at every start that the bridge holds it, but while the bridge is down (stopped, failed, or after you log out) another local user could take the port and receive the agent's requests, bridge key included. supergateway cannot listen on a unix socket, which would close this. On a machine only you use, this does not apply.
 - `TABULARIS_PORT` (default `47821`) must be free on the host: if another program listens there, agentbox leaves the module out of that start, with an error, rather than send the agent's requests and the bridge key to it. If `/mcp` shows the server as failed, see `systemctl --user status agentbox-mcp-tabularis`. A bridge that fails three times within a minute (supergateway refusing to start, say) stays down until the next agentbox start. supergateway logs nothing on purpose; to see an error, run it by hand with the command shown there, without `--logLevel none`.
 
@@ -826,6 +831,37 @@ Optional: the `dbhub` module (`AB_MCP=... dbhub`). The agent reads SQL databases
 #### Disable
 
 Remove `dbhub` from `AB_MCP`. The next start removes the sidecar and the copy with the passwords in the cache (if you removed the container by hand before, the copy stays: `rm -r ~/.cache/agentbox/sidecars/ab-mcp-dbhub`). `dbhub.toml` stays, and so does the caller token until you remove it (or `agentbox uninstall --all` does): `podman secret rm dbhub_mcp_caller`.
+
+### Remote browser (bb4)
+
+Optional: the `bb4` module (`AB_MCP=... bb4`). The agent drives a browser that runs on a browser server, one per user. The browser is not in the box and not on your host, so its windows stay out of your way, and sites see a real browser. The agent gets two MCP servers:
+
+- **`bb4`**, the server's own: starts the browser and sets it up (a proxy, a time zone);
+- **`chrome-devtools`**, [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) connected to that browser: it opens pages, reads them, clicks and types, takes screenshots.
+
+**Read this before you turn it on.** The browser goes to the internet itself, from that server: **squid's allowlist does not apply to it.** Through it the agent can open any site, fill in any form, and send your code or data anywhere, for instance in the address of a page it opens. The agent decides what to open, and page content can carry prompt injection like any other text it reads. So agentbox warns in capitals at every start while `bb4` is on, and names the warning again before the session ([Daily usage](#daily-usage)). Turn it on for the work that needs a browser, and off again.
+
+#### How it is wired
+
+- **`bb4`** is a remote server, like Context7: the agent connects to `<BB4_URL>/u/<BB4_USER>/mcp` through squid, which lets it reach that host and port only.
+- **`ab-mcp-bb4-devtools`** runs chrome-devtools-mcp, which speaks stdio only, behind [supergateway](https://github.com/supercorp-ai/supergateway), in an image built here from `mcp/bb4/devtools/` (never pulled; scanned daily with the other images). Every package is pinned with its hash in `package-lock.json` and installed with `npm ci --ignore-scripts`, so no install script runs and puppeteer downloads no Chrome. It connects to the browser's DevTools WebSocket, `ws://<host of BB4_URL>:<BB4_DEVTOOLS_PORT>/u/<BB4_USER>/devtools/browser` (`wss://` for an https `BB4_URL`), directly over `ab-egress`: a WebSocket, not HTTPS through squid. It runs with `--no-usage-statistics` and `--no-performance-crux`, so it sends Google neither usage data nor the URLs of a performance trace, and logs nothing of the pages. supergateway requires a bridge key (`bb4_bridge_key`, generated); the agent cannot reach this sidecar.
+- **`ab-mcp-bb4`** (nginx, `mcp/bb4/nginx.conf.template`), on `ab-internal` and `ab-egress`, where the sidecar is: checks the caller token (`bb4_mcp_caller`) and forwards to the sidecar with the bridge key.
+
+`ab-mcp-bb4-devtools` is on `ab-egress`, which has a way out: chrome-devtools-mcp and the packages under it could connect to any host, not only the browser server. It only can because the browser it drives reaches everywhere anyway, and its packages are pinned and scanned.
+
+The browser server tells users apart by the name in the path and has **no authentication of its own**: anyone who reaches it (it is only reachable over the VPN) can drive any user's browser, and so can the agent, by name. agentbox cannot add a check there.
+
+#### Setup
+
+1. Be on the VPN, so that the host resolves and answers; squid and the sidecar resolve it through the host's DNS.
+2. `agentbox setup`: turn `bb4` on and enter `BB4_URL`, the server's base URL with scheme, host and port only (`http://browser.example.internal:5101`), and `BB4_USER`, your user name there (your GitHub user name). `BB4_DEVTOOLS_PORT` is the port of the browser's DevTools WebSocket on the same host (default `5100`). By hand: the lines in `config.env` and `bb4` in `AB_MCP`.
+3. The first start builds the image `localhost/agentbox-bb4-devtools` (the npm registry once, a minute). Check with `/mcp` in a session: `bb4` starts the browser, `chrome-devtools` then works on its pages.
+
+A `BB4_URL` with a path, a `BB4_USER` that is not a plain name or a port that is not one leaves the module out of that start with the reason, and adds nothing to squid. `AB_UPGRADE=1` rebuilds the image on a fresh base. Maintainers update the pinned packages with `cd mcp/bb4/devtools && npm install --package-lock-only --ignore-scripts` after bumping a version in `package.json`, check the lock file with `trivy fs mcp/bb4/devtools` and `npm audit`, and review its diff. The same overrides as the Tabularis bridge apply, and so does its one known issue (zod 3 in supergateway, see [Tabularis (MCP)](#tabularis-mcp)).
+
+#### Disable
+
+Remove `bb4` from `AB_MCP`. The next start removes the sidecars and takes the host out of squid's allowlist; the browser on the server stays as it is. The secrets stay until you remove them (or `agentbox uninstall --all` does): `podman secret rm bb4_mcp_caller bb4_bridge_key`; the image with `podman rmi localhost/agentbox-bb4-devtools` (also `agentbox uninstall`).
 
 ### Documentation (Context7)
 
@@ -1248,6 +1284,7 @@ agentbox . -p "say ok"
 | `AB_UPGRADE` | unset | `1` pulls sidecar images, rebuilds the base image, updates Claude Code, recreates sidecars |
 | `AB_RESTART` | unset | `1` recreates all sidecars. Rarely needed: a sidecar is recreated by itself when its settings, image tag, mounted files (nginx templates, `squid.conf`, egress hosts) or Podman secrets change |
 | `AB_WARNINGS_ASK` | `1` | `0`: no question before the session when the start warned; the warnings are still printed. See [Daily usage](#daily-usage) |
+| `BB4_URL`, `BB4_USER`, `BB4_DEVTOOLS_PORT` | unset, unset, `5100` | Settings of the `bb4` module: the browser server's base URL (scheme, host, port), your user name there, and its DevTools WebSocket port. See [Remote browser (bb4)](#remote-browser-bb4) |
 | `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
 Sidecars are started once and reused. The next start recreates a sidecar whose settings, image tag, mounted files or Podman secrets (a secret made anew, such as a renewed token) changed, and removes those of modules no longer in `AB_MCP`. To recreate them all anyway:

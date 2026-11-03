@@ -7,6 +7,11 @@
 #
 #   MCP_URL              URL the agents connect to (required)
 #   MCP_DESCRIPTION      one line, shown by pi
+#   MCP_SERVERS=()       optional, for a module with more than one server:
+#                        "<name>|<url>|<caller or ->|<description>" each, in
+#                        place of the one server <module name>, MCP_URL. With
+#                        "caller" the agents send the module's caller token
+#                        to that one; with "-" nothing (a remote server).
 #   MCP_CONFIG=()        config.env keys the module reads
 #   MCP_REQUIRED_CONFIG=()  of those, the ones that must be set
 #   MCP_SECRETS=()       podman secrets that must exist (README, Setup in detail, step 5)
@@ -52,25 +57,53 @@
 
 MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 
-mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
+mcp_find() {  # <name>: prints the module's directory; 1 if there is none
   local d
-  unset -f mcp_start mcp_secret_value
-  MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""
-  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
-  MCP_DIR=""
   for d in "${MCP_DIRS[@]}"; do
-    if [[ -f "$d/$1/mcp.sh" ]]; then MCP_DIR="$d/$1"; break; fi
+    if [[ -f "$d/$1/mcp.sh" ]]; then printf '%s\n' "$d/$1"; return 0; fi
   done
-  if [[ -z "$MCP_DIR" ]]; then
+  return 1
+}
+
+mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
+  unset -f mcp_start mcp_secret_value
+  MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=()
+  MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
+  if ! MCP_DIR="$(mcp_find "$1")"; then
     echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
     exit 2
   fi
   # shellcheck source=/dev/null
   source "$MCP_DIR/mcp.sh"
-  if [[ -z "$MCP_URL" ]]; then
-    echo "error: $MCP_DIR/mcp.sh does not set MCP_URL" >&2
+  # Its servers, as mcp_servers gives them: a name, a URL without "|" (the
+  # field separator), caller or -.
+  if (( ! ${#MCP_SERVERS[@]} )) && [[ -z "$MCP_URL" || "$MCP_URL" == *"|"* ]]; then
+    echo "error: $MCP_DIR/mcp.sh sets no MCP_URL, or one with a |" >&2
     exit 2
   fi
+  local server url auth
+  while IFS='|' read -r server url auth _; do
+    if [[ ! "$server" =~ ^[a-z0-9][a-z0-9-]*$ || -z "$url" || ( "$auth" != caller && "$auth" != - && -n "$auth" ) ]]; then
+      echo "error: $MCP_DIR/mcp.sh: a server must be \"<name>|<url>|<caller or ->|<description>\", got '$server|$url|$auth'" >&2
+      exit 2
+    fi
+  done < <(mcp_servers "$1")
+}
+
+# The servers of the module mcp_load loaded, "<name>|<url>|<caller or
+# ->|<description>" per line: its MCP_SERVERS, or the one it has.
+mcp_servers() {  # <module name>
+  if (( ${#MCP_SERVERS[@]} )); then
+    printf '%s\n' "${MCP_SERVERS[@]}"
+  else
+    printf '%s|%s|%s|%s\n' "$1" "$MCP_URL" "${MCP_CALLER_SECRET:+caller}" "$MCP_DESCRIPTION"
+  fi
+}
+
+mcp_egress_has() {  # <host>: 0 if the loaded module's MCP_EGRESS lists it
+  local h
+  for h in ${MCP_EGRESS[@]+"${MCP_EGRESS[@]}"}; do [[ "${h%:*}" == "$1" ]] && return 0; done
+  return 1
 }
 
 mcp_token_var() {  # <name>: environment variable of the caller token
@@ -91,6 +124,16 @@ mcp_init() {
     fi
     [[ "$seen" == *" $name "* ]] && continue
     seen+="$name "
+    # A module this version does not have (a newer or older one's, or a
+    # typo): left out, with a warning, like a module that cannot run.
+    # What it runs (another version's sessions) stays.
+    if ! mcp_find "$name" >/dev/null; then
+      ab_warn "MCP module '$name' left out of this session: this agentbox has no such module" \
+              "(looked for $USER_MCP_DIR/$name/mcp.sh and mcp/$name/mcp.sh). Sidecars of it that run stay;" \
+              "take it out of AB_MCP to have them removed"
+      MCP_SKIPPED+=("$name")
+      continue
+    fi
     MCP_ENABLED+=("$name")
     mcp_load "$name"
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
@@ -122,7 +165,8 @@ mcp_skip() {  # <name> <why> [keep]
 # collects images, session arguments, NO_PROXY hosts, remote hosts and the
 # registrations to clean up.
 mcp_check_secrets() {
-  local name key s missing
+  local name key s missing server taken=" "
+  declare -A owner=()
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load "$name"
     for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
@@ -137,7 +181,18 @@ mcp_check_secrets() {
     done
     if (( ${#missing[@]} )); then
       mcp_skip "$name" "missing podman secrets ${missing[*]} (agentbox setup, or README, Setup in detail, step 5)"
+      continue
     fi
+    # Two modules with a server of the same name: the agents' config would
+    # keep one of them. The later module is left out; only modules that are
+    # not left out for another reason count.
+    while IFS='|' read -r server _; do
+      if [[ "$taken" == *" $server "* ]]; then
+        mcp_skip "$name" "its server '$server' has the name of one of module '${owner[$server]}'" keep
+        continue 2
+      fi
+    done < <(mcp_servers "$name")
+    while IFS='|' read -r server _; do taken+="$server "; owner[$server]="$name"; done < <(mcp_servers "$name")
   done
   mcp_collect
 }
@@ -145,7 +200,7 @@ mcp_check_secrets() {
 # Images, session arguments, NO_PROXY hosts, remote hosts and registrations
 # of the enabled modules; caller tokens are created when missing.
 mcp_collect() {
-  local name host var h
+  local name host var h server url
   MCP_IMAGES_ALL=()
   MCP_SESSION_ARGS=()
   MCP_NO_PROXY=()
@@ -160,10 +215,14 @@ mcp_collect() {
     fi
     MCP_IMAGES_ALL+=(${MCP_IMAGES[@]+"${MCP_IMAGES[@]}"})
     for h in ${MCP_EGRESS[@]+"${MCP_EGRESS[@]}"}; do MCP_EGRESS_ALL+=("$h $name"); done
-    # Sidecars are reached by container name, without the proxy.
-    host="${MCP_URL#*://}"; host="${host%%[:/]*}"
-    [[ "$host" != *.* ]] && MCP_NO_PROXY+=("$host")
-    MCP_MANAGED+="$name $MCP_URL"$'\n'
+    while IFS='|' read -r server url _; do
+      # Sidecars are reached by container name, without the proxy. A host
+      # the module lists in MCP_EGRESS is a remote server: through squid,
+      # also when its name has no dot.
+      host="${url#*://}"; host="${host%%[:/]*}"
+      if [[ "$host" != *.* ]] && ! mcp_egress_has "$host"; then MCP_NO_PROXY+=("$host"); fi
+      MCP_MANAGED+="$server $url"$'\n'
+    done < <(mcp_servers "$name")
   done
 }
 
@@ -179,17 +238,19 @@ json_str() {  # <text>: JSON string literal
 # agents expand them from the environment.
 mcp_write_configs() {
   local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox" name hdr sep_c="" sep_p=""
-  local claude="" pi=""
+  local claude="" pi="" server url auth desc
   mkdir -p "$dir"
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load "$name"
-    hdr=""
-    if [[ -n "$MCP_CALLER_SECRET" ]]; then
-      hdr=", \"headers\": { \"Authorization\": \"Bearer \${$(mcp_token_var "$name")}\" }"
-    fi
-    claude+="$sep_c    $(json_str "$name"): { \"type\": \"http\", \"url\": $(json_str "$MCP_URL")$hdr }"
-    pi+="$sep_p    $(json_str "$name"): { \"url\": $(json_str "$MCP_URL")$hdr, \"description\": $(json_str "$MCP_DESCRIPTION") }"
-    sep_c=$',\n'; sep_p=$',\n'
+    while IFS='|' read -r server url auth desc; do
+      hdr=""
+      if [[ "$auth" == caller && -n "$MCP_CALLER_SECRET" ]]; then
+        hdr=", \"headers\": { \"Authorization\": \"Bearer \${$(mcp_token_var "$name")}\" }"
+      fi
+      claude+="$sep_c    $(json_str "$server"): { \"type\": \"http\", \"url\": $(json_str "$url")$hdr }"
+      pi+="$sep_p    $(json_str "$server"): { \"url\": $(json_str "$url")$hdr, \"description\": $(json_str "$desc") }"
+      sep_c=$',\n'; sep_p=$',\n'
+    done < <(mcp_servers "$name")
   done
   MCP_CLAUDE_JSON="$dir/mcp-claude.json"
   MCP_PI_JSON="$dir/mcp-pi.json"

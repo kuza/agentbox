@@ -1,0 +1,16 @@
+# chrome-devtools-mcp, which speaks stdio only, behind supergateway, which
+# serves it over streamable HTTP: the ab-mcp-bb4-devtools sidecar of the bb4
+# module. Built here by mcp/bb4/mcp.sh, never pulled. Every package at the
+# version and hash of package-lock.json; no install scripts, so puppeteer
+# downloads no Chrome: the browser is the remote one on the browser
+# server.
+FROM docker.io/library/node:24-trixie-slim
+WORKDIR /opt/devtools
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund --loglevel=error \
+ && npm cache clean --force
+# No usage statistics to Google (also --no-usage-statistics in mcp.sh).
+ENV CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1 \
+    PATH=/opt/devtools/node_modules/.bin:$PATH
+USER node
+ENTRYPOINT ["supergateway"]
