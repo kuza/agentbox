@@ -73,21 +73,16 @@ mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
     echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
     exit 2
   fi
-  # shellcheck source=/dev/null
-  source "$MCP_DIR/mcp.sh"
-  # Its servers, as mcp_servers gives them: a name, a URL without "|" (the
-  # field separator), caller or -.
-  if (( ! ${#MCP_SERVERS[@]} )) && [[ -z "$MCP_URL" || "$MCP_URL" == *"|"* ]]; then
-    echo "error: $MCP_DIR/mcp.sh sets no MCP_URL, or one with a |" >&2
-    exit 2
+  # A module that does not parse: 1. One that does is sourced, and its last
+  # line's status does not count (a false "[[ ... ]] && ..." there would
+  # end the start under set -e).
+  if ! bash -n "$MCP_DIR/mcp.sh" 2>/dev/null; then
+    echo "error: $MCP_DIR/mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)" >&2
+    return 1
   fi
-  local server url auth
-  while IFS='|' read -r server url auth _; do
-    if [[ ! "$server" =~ ^[a-z0-9][a-z0-9-]*$ || -z "$url" || ( "$auth" != caller && "$auth" != - && -n "$auth" ) ]]; then
-      echo "error: $MCP_DIR/mcp.sh: a server must be \"<name>|<url>|<caller or ->|<description>\", got '$server|$url|$auth'" >&2
-      exit 2
-    fi
-  done < <(mcp_servers "$1")
+  # shellcheck source=/dev/null
+  source "$MCP_DIR/mcp.sh" || true
+  return 0
 }
 
 # The servers of the module mcp_load loaded, "<name>|<url>|<caller or
@@ -98,6 +93,43 @@ mcp_servers() {  # <module name>
   else
     printf '%s|%s|%s|%s\n' "$1" "$MCP_URL" "${MCP_CALLER_SECRET:+caller}" "$MCP_DESCRIPTION"
   fi
+}
+
+# What is wrong with the servers of the module mcp_load loaded, on stdout;
+# nothing if they are fine. Names already taken by other modules are in
+# <taken> (" server=module ..."). Run after the settings are read: a URL may
+# come from them. Status 3 for a missing URL ("take away"), 0 for the rest
+# ("keep"; see mcp_check_secrets).
+mcp_servers_problem() {  # <module name> <taken>
+  local server url auth names=" " owner
+  if (( ! ${#MCP_SERVERS[@]} )) && [[ -z "$MCP_URL" ]]; then
+    echo "no URL: its mcp.sh sets no MCP_URL, or the setting it comes from is empty"; return 3
+  fi
+  if (( ! ${#MCP_SERVERS[@]} )) && [[ "$MCP_URL" == *"|"* ]]; then
+    echo "its MCP_URL has a |"; return
+  fi
+  while IFS='|' read -r server url auth _; do
+    if [[ "$server" =~ ^[a-z0-9][a-z0-9-]*$ && -z "$url" ]]; then
+      echo "no URL for its server '$server': the setting it comes from is empty"; return 3
+    fi
+    if [[ ! "$server" =~ ^[a-z0-9][a-z0-9-]*$ || -z "$url" || ( "$auth" != caller && "$auth" != - && -n "$auth" ) ]]; then
+      echo "a server in its mcp.sh must be \"<name>|<url>|<caller or ->|<description>\", got '$server|$url|$auth'"; return
+    fi
+    # Without the secret the agents would send no token, and every call
+    # would get 401 from the module's nginx.
+    if [[ "$auth" == caller && -z "$MCP_CALLER_SECRET" ]]; then
+      echo "its server '$server' is marked caller, but its mcp.sh sets no MCP_CALLER_SECRET"; return
+    fi
+    # Two servers of one name: the agents' config would keep one of them.
+    if [[ "$names" == *" $server "* ]]; then
+      echo "its MCP_SERVERS has the server '$server' twice"; return
+    fi
+    if [[ "$2" == *" $server="* ]]; then
+      owner="${2#* "$server"=}"; owner="${owner%% *}"
+      echo "its server '$server' has the name of one of module '$owner'"; return
+    fi
+    names+="$server "
+  done < <(mcp_servers "$1")
 }
 
 mcp_egress_has() {  # <host>: 0 if the loaded module's MCP_EGRESS lists it
@@ -134,8 +166,12 @@ mcp_init() {
       MCP_SKIPPED+=("$name")
       continue
     fi
+    if ! mcp_load "$name" 2>/dev/null; then
+      ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $(mcp_find "$name")/mcp.sh)"
+      MCP_SKIPPED+=("$name")
+      continue
+    fi
     MCP_ENABLED+=("$name")
-    mcp_load "$name"
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done
 }
@@ -165,8 +201,7 @@ mcp_skip() {  # <name> <why> [keep]
 # collects images, session arguments, NO_PROXY hosts, remote hosts and the
 # registrations to clean up.
 mcp_check_secrets() {
-  local name key s missing server taken=" "
-  declare -A owner=()
+  local name key s missing server why rc taken=" "
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load "$name"
     for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
@@ -183,16 +218,19 @@ mcp_check_secrets() {
       mcp_skip "$name" "missing podman secrets ${missing[*]} (agentbox setup, or README, Setup in detail, step 5)"
       continue
     fi
-    # Two modules with a server of the same name: the agents' config would
-    # keep one of them. The later module is left out; only modules that are
-    # not left out for another reason count.
-    while IFS='|' read -r server _; do
-      if [[ "$taken" == *" $server "* ]]; then
-        mcp_skip "$name" "its server '$server' has the name of one of module '${owner[$server]}'" keep
-        continue 2
-      fi
-    done < <(mcp_servers "$name")
-    while IFS='|' read -r server _; do taken+="$server "; owner[$server]="$name"; done < <(mcp_servers "$name")
+    # A module whose servers are malformed, or named like those of a module
+    # before it, is left out; only modules not left out for another reason
+    # take names.
+    rc=0; why="$(mcp_servers_problem "$name" "$taken")" || rc=$?
+    if (( rc == 3 )); then
+      # Its setting emptied: access goes, as for a module turned off.
+      mcp_skip "$name" "$why"
+      continue
+    elif [[ -n "$why" ]]; then
+      mcp_skip "$name" "$why" keep
+      continue
+    fi
+    while IFS='|' read -r server _; do taken+="$server=$name "; done < <(mcp_servers "$name")
   done
   mcp_collect
 }
@@ -244,7 +282,8 @@ mcp_write_configs() {
     mcp_load "$name"
     while IFS='|' read -r server url auth desc; do
       hdr=""
-      if [[ "$auth" == caller && -n "$MCP_CALLER_SECRET" ]]; then
+      # (mcp_servers_problem left out a caller server without the secret.)
+      if [[ "$auth" == caller ]]; then
         hdr=", \"headers\": { \"Authorization\": \"Bearer \${$(mcp_token_var "$name")}\" }"
       fi
       claude+="$sep_c    $(json_str "$server"): { \"type\": \"http\", \"url\": $(json_str "$url")$hdr }"

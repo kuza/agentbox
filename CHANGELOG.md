@@ -4,6 +4,22 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.11
+
+- bb4: the server for the browser's pages is now `bb4-devtools`, not
+  `chrome-devtools`, the name chrome-devtools-mcp's own instructions give
+  a registration by hand.
+- A module's server marked `caller` without an `MCP_CALLER_SECRET`, or two
+  servers with the same name, leave that module out of the start with the
+  reason, instead of failing quietly in the session. So do a module whose
+  mcp.sh sets no `MCP_URL` (its URL may come from its settings; emptied,
+  its sidecars go) and one whose mcp.sh does not parse, which both stopped
+  the whole start before.
+
+Action: rename `mcp__chrome-devtools__` to `mcp__bb4-devtools__` in
+permission rules (`.claude/settings*.json`) and anything else that names
+bb4's page tools.
+
 ## v0.1.10
 
 - New MCP module `bb4`: a remote browser on a browser server, one per

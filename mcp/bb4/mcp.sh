@@ -2,7 +2,7 @@
 # server (README, Remote browser (bb4)). Two MCP servers:
 #   bb4              the server's own, which starts the browser and sets it
 #                    up; remote, reached through squid, like context7
-#   chrome-devtools  pages in that browser (open, read, click, screenshots):
+#   bb4-devtools     pages in that browser (open, read, click, screenshots):
 #                    chrome-devtools-mcp, stdio only, behind supergateway in
 #                    the sidecar ab-mcp-bb4-devtools, built here
 #                    (devtools/Containerfile); it reaches the browser's CDP
@@ -41,7 +41,7 @@ if bb4_target >/dev/null && [[ "${BB4_USER:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]];
 fi
 MCP_SERVERS=(
   "bb4|$MCP_URL|-|The remote browser on the browser server: start it, set it up"
-  "chrome-devtools|http://ab-mcp-bb4:8080/mcp|caller|Pages in the remote browser: open, read, click, type, screenshots"
+  "bb4-devtools|http://ab-mcp-bb4:8080/mcp|caller|Pages in the remote browser: open, read, click, type, screenshots"
 )
 MCP_EGRESS=()
 if _bb4_target="$(bb4_target)"; then MCP_EGRESS=("$_bb4_target"); fi

@@ -343,12 +343,12 @@ test_mcp_bb4() {
   assert_rc 0
   local j="$T/home/.cache/agentbox/mcp-claude.json" l
   # Two servers: bb4 remote, through squid, without the caller token;
-  # chrome-devtools through nginx, with it.
+  # bb4-devtools through nginx, with it.
   grep -q '"bb4": { "type": "http", "url": "http://browser.example.internal:5101/u/octo-cat/mcp" }' "$j" \
     || fail "bb4 not registered: $(cat "$j")"
-  grep -q '"chrome-devtools": { "type": "http", "url": "http://ab-mcp-bb4:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_BB4}" } }' "$j" \
-    || fail "chrome-devtools not registered: $(cat "$j")"
-  grep -q '"chrome-devtools"' "$T/home/.cache/agentbox/mcp-pi.json" || fail "pi lacks chrome-devtools"
+  grep -q '"bb4-devtools": { "type": "http", "url": "http://ab-mcp-bb4:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_BB4}" } }' "$j" \
+    || fail "bb4-devtools not registered: $(cat "$j")"
+  grep -q '"bb4-devtools"' "$T/home/.cache/agentbox/mcp-pi.json" || fail "pi lacks bb4-devtools"
   session_args | grep -qx 'bb4_mcp_caller,type=env,target=AB_MCP_TOKEN_BB4' || fail "caller token not passed"
   assert_file_has "$T/home/.cache/agentbox/squid-allow.conf" '^acl ab_host_[0-9]+ dstdomain browser.example.internal$'
   assert_file_has "$T/home/.cache/agentbox/squid-allow.conf" '^acl ab_port_[0-9]+ port 5101$'
@@ -416,11 +416,49 @@ test_mcp_server_names_and_urls_checked() {
   printf 'MCP_URL=http://ab-mcp-d:8080/mcp\n' > "$CFG/mcp.local/b/mcp.sh"
   ab_run --
   session_args | grep -q 'NO_PROXY=.*ab-mcp-d' || fail "own sidecar without a caller token sent through squid"
+  # A malformed module is left out, not the whole start.
   printf 'MCP_URL="https://c.example/x|y"\n' > "$CFG/mcp.local/c/mcp.sh"
   : > "$CFG/config.env"; config "AB_MCP=c"
   ab_run --
-  assert_rc 2
-  assert_out "sets no MCP_URL, or one with a |"
+  assert_skipped c
+  assert_out "c' left out of this session: its MCP_URL has a |"
+  printf 'MCP_SERVERS=("s|http://ab-mcp-c:8080/mcp|caller|C")\n' > "$CFG/mcp.local/c/mcp.sh"
+  ab_run --
+  assert_skipped c
+  assert_out "its server 's' is marked caller, but its mcp.sh sets no MCP_CALLER_SECRET"
+  printf 'MCP_SERVERS=("s|https://c.example/1|-|C" "s|https://c.example/2|-|C")\n' > "$CFG/mcp.local/c/mcp.sh"
+  ab_run --
+  assert_skipped c
+  assert_out "its MCP_SERVERS has the server 's' twice"
+  # One that does not parse is left out.
+  printf 'MCP_URL=https://c.example/mcp\nif\n' > "$CFG/mcp.local/c/mcp.sh"
+  ab_run --
+  assert_skipped c
+  assert_out "c' left out of this session: its mcp.sh does not parse"
+  # A module whose last line is false still loads.
+  printf 'MCP_URL=https://c.example/mcp\nMCP_EGRESS=(c.example)\n[[ -n "${NOPE:-}" ]] && X=1\n' > "$CFG/mcp.local/c/mcp.sh"
+  ab_run --
+  assert_rc 0
+  grep -q 'c.example/mcp' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a module ending in a false && left out"
+  # A URL from the module's settings counts once they are read; emptied, its
+  # sidecars go.
+  printf 'MCP_CONFIG=(C_URL)\nMCP_URL="${C_URL:-}"\nMCP_EGRESS=(c.example)\n' > "$CFG/mcp.local/c/mcp.sh"
+  config "C_URL=https://c.example/mcp"
+  ab_run --
+  assert_rc 0
+  grep -q 'c.example/mcp' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a URL from settings not taken"
+  sed -i '/^C_URL=/d' "$CFG/config.env"
+  printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped c
+  grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its URL setting emptied"
+  # The same for a server line of MCP_SERVERS.
+  printf 'MCP_CONFIG=(C_URL)\nMCP_SERVERS=("s|${C_URL:-}|-|C")\n' > "$CFG/mcp.local/c/mcp.sh"
+  printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped c
+  assert_out "no URL for its server 's'"
+  grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its server's URL setting emptied"
 }
 
 test_mcp_missing_setting() {
@@ -2326,7 +2364,7 @@ test_setup_values_names_input() {
   # A file name with a space is one name, and cannot be used; a module that
   # cannot be read cannot be turned on.
   echo x > "$CFG/egress.local.d/my group.conf"
-  mkdir -p "$CFG/mcp.local/broken"; echo 'MCP_DESCRIPTION=x' > "$CFG/mcp.local/broken/mcp.sh"
+  mkdir -p "$CFG/mcp.local/broken"; echo 'MCP_DESCRIPTION=x; if' > "$CFG/mcp.local/broken/mcp.sh"
   local broken; broken="$(setup_entry broken)"
   setup_run "$broken\ns\n"
   assert_out "my group .*cannot be used"

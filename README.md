@@ -602,12 +602,12 @@ Each MCP server is a module: a directory with an `mcp.sh` and whatever else it n
 
 #### Writing a module
 
-`mcp.sh` is bash that `run.sh` sources on the host. It sets variables and, if the server needs a sidecar, defines `mcp_start`:
+`mcp.sh` is bash that `run.sh` sources on the host. It sets variables and, if the server needs a sidecar, defines `mcp_start`. The code outside `mcp_start` runs without `set -e`: a command there that fails does not stop the start. Put checks in `mcp_start`, which can exit `$MCP_TAKE_AWAY`, or leave the URL empty when a value does not check out:
 
 | | |
 |---|---|
 | `MCP_URL` | Required unless `MCP_SERVERS` is set. The URL the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar, the server's URL for a remote one (and its host in `MCP_EGRESS`) |
-| `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`): `"<name>\|<url>\|<caller or ->\|<description>"` each, in place of the one server named like the module. `caller`: the agents send the module's caller token to it; `-`: nothing (a remote server). As for `MCP_URL`, a host without a dot is reached without the proxy unless it is in `MCP_EGRESS` |
+| `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`): `"<name>\|<url>\|<caller or ->\|<description>"` each, in place of the one server named like the module. `caller`: the agents send the module's caller token to it; `-`: nothing (a remote server); `caller` needs `MCP_CALLER_SECRET`. Server names must differ, within the module and from other modules'; a module that breaks a rule is left out of the start with the reason. As for `MCP_URL`, a host without a dot is reached without the proxy unless it is in `MCP_EGRESS` |
 | `MCP_DESCRIPTION` | One line, shown by pi |
 | `MCP_CONFIG=(...)` | `config.env` keys the module reads; `run.sh` accepts them only while the module is enabled |
 | `MCP_REQUIRED_CONFIG=(...)` | Of those, the ones that must be set |
@@ -837,7 +837,7 @@ Remove `dbhub` from `AB_MCP`. The next start removes the sidecar and the copy wi
 Optional: the `bb4` module (`AB_MCP=... bb4`). The agent drives a browser that runs on a browser server, one per user. The browser is not in the box and not on your host, so its windows stay out of your way, and sites see a real browser. The agent gets two MCP servers:
 
 - **`bb4`**, the server's own: starts the browser and sets it up (a proxy, a time zone);
-- **`chrome-devtools`**, [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) connected to that browser: it opens pages, reads them, clicks and types, takes screenshots.
+- **`bb4-devtools`**, [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) connected to that browser: it opens pages, reads them, clicks and types, takes screenshots.
 
 **Read this before you turn it on.** The browser goes to the internet itself, from that server: **squid's allowlist does not apply to it.** Through it the agent can open any site, fill in any form, and send your code or data anywhere, for instance in the address of a page it opens. The agent decides what to open, and page content can carry prompt injection like any other text it reads. So agentbox warns in capitals at every start while `bb4` is on, and names the warning again before the session ([Daily usage](#daily-usage)). Turn it on for the work that needs a browser, and off again.
 
@@ -855,7 +855,7 @@ The browser server tells users apart by the name in the path and has **no authen
 
 1. Be on the VPN, so that the host resolves and answers; squid and the sidecar resolve it through the host's DNS.
 2. `agentbox setup`: turn `bb4` on and enter `BB4_URL`, the server's base URL with scheme, host and port only (`http://browser.example.internal:5101`), and `BB4_USER`, your user name there (your GitHub user name). `BB4_DEVTOOLS_PORT` is the port of the browser's DevTools WebSocket on the same host (default `5100`). By hand: the lines in `config.env` and `bb4` in `AB_MCP`.
-3. The first start builds the image `localhost/agentbox-bb4-devtools` (the npm registry once, a minute). Check with `/mcp` in a session: `bb4` starts the browser, `chrome-devtools` then works on its pages.
+3. The first start builds the image `localhost/agentbox-bb4-devtools` (the npm registry once, a minute). Check with `/mcp` in a session: `bb4` starts the browser, `bb4-devtools` then works on its pages.
 
 A `BB4_URL` with a path, a `BB4_USER` that is not a plain name or a port that is not one leaves the module out of that start with the reason, and adds nothing to squid. `AB_UPGRADE=1` rebuilds the image on a fresh base. Maintainers update the pinned packages with `cd mcp/bb4/devtools && npm install --package-lock-only --ignore-scripts` after bumping a version in `package.json`, check the lock file with `trivy fs mcp/bb4/devtools` and `npm audit`, and review its diff. The same overrides as the Tabularis bridge apply, and so does its one known issue (zod 3 in supergateway, see [Tabularis (MCP)](#tabularis-mcp)).
 
@@ -1187,7 +1187,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 |---|---|
 | The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. Typical cause: your own `podman run -v .:/dst:Z ...` in the repo. Use lowercase `:z` (shared label) for code you also open in the box. If the whole repo was relabeled, the next session start restores it; single files stay private, because podman does not relabel a volume it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. agentbox's own sidecars and sessions mount copies of agentbox's files from the cache, so they do not cause this; an installed version's files are read-only and could not be relabelled anyway |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. |
-| `MCP module '...' left out of this session` | That module lacks a setting or a secret (`agentbox setup` adds them), or its start failed: the error above says why. The session starts without it; fix it and start again. |
+| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above says why. No such module in this version: another version's, or a typo in `AB_MCP`. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting the URL comes from is empty. A server of its `MCP_SERVERS` not of the form, `caller` without `MCP_CALLER_SECRET`, or a server name another module has: fix the module's `mcp.sh`. The session starts without it. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a required host. The error names it; check the squid log for `DENIED`, add the host in a group in `egress.local.d/` (see [Egress](#egress)); the next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed; add others deliberately, each one widens egress. |
