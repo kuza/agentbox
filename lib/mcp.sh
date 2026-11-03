@@ -160,7 +160,7 @@ mcp_token_var() {  # <name>: environment variable of the caller token
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.env), before the second.
 mcp_init() {
-  local name dir seen=" " list="${AB_MCP:-}"
+  local name dir keys seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -185,7 +185,8 @@ mcp_init() {
       MCP_SKIPPED+=("$name")
       # Its settings in config.env are known keys still: read as text, the
       # MCP_CONFIG=(...) line, not "unknown key" warnings pointing elsewhere.
-      MCP_CONFIG_KEYS+=($(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$dir/mcp.sh"))
+      read -ra keys <<<"$(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$dir/mcp.sh" | tr '\n' ' ')"
+      MCP_CONFIG_KEYS+=(${keys[@]+"${keys[@]}"})
       continue
     fi
     mcp_load "$name"
