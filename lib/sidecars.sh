@@ -31,12 +31,17 @@ SECRET_IDS_LOADED=""
 # A failed listing stops the start: taken for "no secrets", it would report
 # every secret missing and recreate every sidecar that holds one.
 secret_ids_load() {
-  local name id out
   [[ -n "$SECRET_IDS_LOADED" ]] && return 0
-  if ! out="$(podman secret ls --format '{{.Name}} {{.ID}}')"; then
+  if ! secret_ids_read; then
     ab_error "cannot list the Podman secrets (podman secret ls failed)"
     exit 1
   fi
+}
+
+# The list read now; 1 if podman cannot list them (agentbox setup goes on).
+secret_ids_read() {
+  local name id out
+  out="$(podman secret ls --format '{{.Name}} {{.ID}}')" || return 1
   SECRET_IDS=()
   while read -r name id; do
     [[ -n "$name" ]] && SECRET_IDS["$name"]="$id"
@@ -95,7 +100,21 @@ start_sidecar() {  # <name> <podman run arguments...>
   # -v: with the container's anonymous volumes (squid declares some), which
   # would otherwise stay behind on every recreation.
   podman rm -f -v "$name" >/dev/null 2>&1 || true
-  podman run -d --replace --name "$name" --label "agentbox.config=$hash" "$@" >/dev/null
+  # podman's output goes to the terminal as it comes (an image pull shows
+  # its progress); its error is also the reason the warning about the
+  # module gives (lib/mcp.sh).
+  local errf rc=0 why
+  errf="$(mktemp)"
+  podman run -d --replace --name "$name" --label "agentbox.config=$hash" "$@" 2>&1 >/dev/null \
+    | tee "$errf" >&2 || rc=$?
+  if (( rc )); then
+    why="$(sed -n 's/^Error: //p' "$errf" | head -1)"
+    [[ -n "$why" ]] || why="$(sed '/^[[:space:]]*$/d' "$errf" | tail -1)"
+    rm -f -- "$errf"
+    [[ -z "$why" ]] || ab_reason "could not start $name: $why"
+    return 1
+  fi
+  rm -f -- "$errf"
 }
 
 # 0 if the container runs, was started with <hash> (its agentbox.config
@@ -201,13 +220,21 @@ sidecar_dir() {  # <container>: prints its path
 # renamed into place: a container already running keeps the copy it mounted
 # (its bind mount holds the old file), even when sessions share one path.
 cache_copy() {  # <subdir> <file> [name]: prints the path of the copy; 1 on failure
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
-  dst="$dir/${3:-$(basename "$2")}"
   [[ -f "$2" ]] || { ab_error "$2 is missing"; return 1; }
+  [[ -r "$2" ]] || { ab_error "cannot read $2"; return 1; }
+  cache_write "$1" "${3:-$(basename "$2")}" < "$2"
+}
+
+# Writes stdin to <cache>/agentbox/<subdir>/<name>, anew and renamed into
+# place (a new inode: a running container keeps the version it mounted),
+# with <mode> (default 644). Prints the path; 1 on failure.
+cache_write() {  # <subdir> <name> [mode]
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
+  dst="$dir/$2"
   mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { ab_error "cannot write in $dir"; return 1; }
-  if ! { cp -- "$2" "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
+  if ! { cat > "$tmp" && chmod "${3:-644}" "$tmp" && mv -f -- "$tmp" "$dst"; }; then
     rm -f -- "$tmp"
-    ab_error "cannot copy $2 to $dst"
+    ab_error "cannot write $dst"
     return 1
   fi
   printf '%s\n' "$dst"
@@ -217,15 +244,14 @@ cache_copy() {  # <subdir> <file> [name]: prints the path of the copy; 1 on fail
 # cache_copy's copies: for a session path that is always mounted, with
 # nothing of the user's to put there.
 cache_text() {  # <subdir> <name> <text>: prints the path; 1 on failure
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1" dst tmp
-  dst="$dir/$2"
-  mkdir -p "$dir" && tmp="$(mktemp "$dst.XXXXXX")" || { ab_error "cannot write in $dir"; return 1; }
-  if ! { printf '%s' "$3" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$dst"; }; then
-    rm -f -- "$tmp"
-    ab_error "cannot write $dst"
-    return 1
+  local dst="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/$1/$2"
+  # Already so, and readable for the container: not written again at each
+  # start.
+  if [[ -f "$dst" && ! -L "$dst" && "$(stat -c %a -- "$dst" 2>/dev/null)" == 644 \
+        && "$(cat -- "$dst" 2>/dev/null; printf x)" == "$3x" ]]; then
+    printf '%s\n' "$dst"; return 0
   fi
-  printf '%s\n' "$dst"
+  printf '%s' "$3" | cache_write "$1" "$2"
 }
 
 # Caller tokens: a random secret per sidecar that proves the caller may talk
@@ -247,6 +273,7 @@ secret_store() {  # <secret name>: create or replace it with stdin
   # --replace came with podman 4.7; before, the old secret goes first.
   # Only for an existing secret: podman 4.7-4.9 fail --replace on a new
   # name ("deleting secret : : no secret data with ID").
+  # Asked live, not from the loaded list, which may be out of date.
   if podman secret inspect "$1" >/dev/null 2>&1 \
      && podman secret create --help 2>/dev/null | grep -q -- '--replace'; then
     id="$(podman secret create --replace "$1" -)" || return 1

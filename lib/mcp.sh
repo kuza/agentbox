@@ -28,7 +28,8 @@
 #                        added to squid's allowlist (lib/egress.sh)
 #   MCP_IMAGES=()        images AB_UPGRADE pulls, on one line: agentbox
 #                        uninstall reads them as text, literal or "$VAR"
-#                        with a VAR="..." line of the module's own
+#                        with a VAR=... line of the module's own (quoted
+#                        or not, indented or not)
 #   mcp_check()          optional: checks the module's settings once they
 #                        are read; prints what is wrong, one line each, and
 #                        nothing when they are fine. It must not start or
@@ -76,9 +77,10 @@ mcp_find() {  # <name>: prints the module's directory; 1 if there is none
 
 # 0 if module <name>'s mcp.sh parses (bash -n). Checked once, by mcp_init
 # and agentbox setup: mcp_load sources it without asking again.
-mcp_parses() {  # <name>
-  local dir
-  dir="$(mcp_find "$1")" && bash -n "$dir/mcp.sh" 2>/dev/null
+mcp_parses() {  # <name> [its directory, from mcp_find]
+  local dir="${2:-}"
+  [[ -n "$dir" ]] || dir="$(mcp_find "$1")" || return 1
+  bash -n "$dir/mcp.sh" 2>/dev/null
 }
 
 mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
@@ -121,10 +123,10 @@ mcp_servers_problem() {  # <module name> <taken>
     echo "its MCP_URL has a |"; return
   fi
   while IFS='|' read -r server url auth _; do
-    if [[ "$server" =~ ^[a-z0-9][a-z0-9-]*$ && -z "$url" ]]; then
+    if [[ "$server" =~ $AB_NAME_RE && -z "$url" ]]; then
       echo "no URL for its server '$server': the setting it comes from is empty"; return 3
     fi
-    if [[ ! "$server" =~ ^[a-z0-9][a-z0-9-]*$ || -z "$url" || ( "$auth" != caller && "$auth" != - && -n "$auth" ) ]]; then
+    if [[ ! "$server" =~ $AB_NAME_RE || -z "$url" || ( "$auth" != caller && "$auth" != - && -n "$auth" ) ]]; then
       echo "a server in its mcp.sh must be \"<name>|<url>|<caller or ->|<description>\", got '$server|$url|$auth'"; return
     fi
     # Without the secret the agents would send no token, and every call
@@ -158,11 +160,11 @@ mcp_token_var() {  # <name>: environment variable of the caller token
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.env), before the second.
 mcp_init() {
-  local name seen=" " list="${AB_MCP:-}"
+  local name dir seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
-    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
       echo "error: AB_MCP: invalid module name '$name'" >&2
       exit 2
     fi
@@ -171,19 +173,19 @@ mcp_init() {
     # A module this version does not have (a newer or older one's, or a
     # typo): left out, with a warning, like a module that cannot run.
     # What it runs (another version's sessions) stays.
-    if ! mcp_find "$name" >/dev/null; then
+    if ! dir="$(mcp_find "$name")"; then
       ab_warn "MCP module '$name' left out of this session: this agentbox has no such module" \
               "(looked for $USER_MCP_DIR/$name/mcp.sh and mcp/$name/mcp.sh). Sidecars of it that run stay;" \
               "take it out of AB_MCP to have them removed"
       MCP_UNKNOWN+=("$name")
       continue
     fi
-    if ! mcp_parses "$name"; then
-      ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $(mcp_find "$name")/mcp.sh)"
+    if ! mcp_parses "$name" "$dir"; then
+      ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $dir/mcp.sh)"
       MCP_SKIPPED+=("$name")
       # Its settings in config.env are known keys still: read as text, the
       # MCP_CONFIG=(...) line, not "unknown key" warnings pointing elsewhere.
-      MCP_CONFIG_KEYS+=($(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$(mcp_find "$name")/mcp.sh"))
+      MCP_CONFIG_KEYS+=($(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$dir/mcp.sh"))
       continue
     fi
     mcp_load "$name"

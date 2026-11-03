@@ -185,6 +185,9 @@ fi
 # in; and the egress proxy (Containerfile.squid). Rebuilt when their
 # Containerfile or build settings change.
 ensure_images
+# Its ID, once, before the first use (skills, forward, modules): the later
+# calls of agentbox_image_id only read it, also in mcp_start's subshells.
+agentbox_image_id || { ab_error "no image $IMAGE after the build"; exit 1; }
 
 agent_update
 # No token yet and you said yes at agent_check_secrets: sign in now.

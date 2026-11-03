@@ -36,6 +36,13 @@ the steps a release needs from you, such as a rebuild.
   sidecars that carry its mark, not all of those with its name prefix.
 - A module whose mcp.sh does not parse adds no "unknown key" warnings for
   its settings.
+- When podman cannot start a module's sidecar, its `Error:` line is the
+  reason in the warning before the session.
+- `agentbox uninstall` also finds the images of a module of yours whose
+  `MCP_IMAGES` or image variable is indented or in single quotes.
+- Fewer podman calls per start: the agentbox image ID is looked up once.
+  The bb4 devtools image is built again once (its fingerprint is now
+  made like those of the other images).
 
 Action: rename `mcp__chrome-devtools__` to `mcp__bb4-devtools__` in
 permission rules (`.claude/settings*.json`) and anything else that names

@@ -8,7 +8,8 @@
 #
 # Each test runs in its own scratch directory with a copy of agentbox's code,
 # never the real config.env or skills/. Needs bash 4+, git, and
-# python3 for the JSON checks (skipped without it).
+# python3 for the JSON checks (skipped without it); Python 3.11+ for the
+# dbhub tests (tomllib; skipped without it).
 set -uo pipefail
 
 # Nothing from the caller's environment may point the scripts at real files:
@@ -265,6 +266,18 @@ test_mcp_failed_start_skips_that_module_only() {
   grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "left running on a network with a way out"
   grep -qx 'podman rm -f -v ab-mcp-woodpecker' "$STUB_DIR/calls" || fail "nginx left running"
   return 0
+}
+
+test_mcp_podman_error_is_the_reason() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example"
+  secrets graylog_basic
+  ab_run STUB_RUN_FAIL=ab-mcp-graylog --
+  assert_skipped graylog
+  assert_out "graylog' left out of this session: could not start ab-mcp-graylog: stub: cannot start ab-mcp-graylog"
+  # No "Error:" line: the last line it printed.
+  ab_run STUB_RUN_FAIL=ab-mcp-graylog STUB_RUN_ERR="crun: executable file not found" --
+  assert_out "graylog' left out of this session: could not start ab-mcp-graylog: crun: executable file not found"
 }
 
 test_warnings_named_again_at_a_terminal() {
@@ -680,6 +693,10 @@ test_egress_recreated_when_groups_change() {
 
 # --- run.sh: forwards ---
 
+# The hash in tabularis_bridge_dir (mcp/tabularis/mcp.sh), for the tests.
+bridge_hash() {
+  cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16
+}
 fwd_key() { printf '%s' "$REPO" | sha256sum | cut -c1-8; }
 run_line() { grep "^podman run -d --replace --name $1 " "$STUB_DIR/calls"; }
 
@@ -871,6 +888,8 @@ test_mcp_woodpecker() {
 }
 
 test_mcp_dbhub() {
+  # config.py parses with tomllib (Python 3.11+), here as in the image.
+  python3 -c 'import tomllib' 2>/dev/null || { echo "  (skipped: needs Python 3.11+ for tomllib)"; return 0; }
   setup "${FUNCNAME[0]}"
   config "AB_MCP=dbhub"
   # No dbhub.toml: the session starts without dbhub and says where it goes.
@@ -1093,7 +1112,7 @@ test_tabularis_wiring() {
   # only, with the key, Tabularis's stderr dropped.
   local b; b="$(bridge_line)"
   [[ "$b" == *" --unit=agentbox-mcp-tabularis "* ]] || fail "unit name: $b"
-  local bridge; bridge="$(cache tabularis)/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  local bridge; bridge="$(cache tabularis)/bridge-$(bridge_hash)"
   [[ "$b" == *" -- $bridge/node_modules/.bin/supergateway "* ]] || fail "supergateway not from the lock file's install: $b"
   [[ "$b" != *npx* ]] || fail "npx used: $b"
   grep -q "^npm ci --ignore-scripts --omit=dev .*(in $(cache tabularis)/\.install\." "$STUB_DIR/npm-calls" \
@@ -1131,7 +1150,7 @@ test_tabularis_bridge_install() {
   sed -i 's/"private": true/"private": true /' "$AB/mcp/tabularis/bridge/package.json"
   ab_run AB_TABULARIS_WAIT=0 --
   assert_rc 0
-  local new; new="$base/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  local new; new="$base/bridge-$(bridge_hash)"
   bridge_line | grep -qF -- "$new/node_modules" || fail "bridge not restarted on the new install: $(bridge_line)"
   [[ -e "$old" ]] || fail "a recent install removed"
   touch -d '40 days ago' "$old" "$new"
@@ -1146,7 +1165,7 @@ test_tabularis_bridge_install() {
   ls -d "$base"/.install.* 2>/dev/null && fail "failed install left"
   # A leftover older than an hour goes; a half install is replaced.
   mkdir -p "$base/.install.old"; touch -d '2 hours ago' "$base/.install.old"
-  local half; half="$base/bridge-$(cat "$AB/mcp/tabularis/bridge/package.json" "$AB/mcp/tabularis/bridge/package-lock.json" | sha256sum | cut -c1-16)"
+  local half; half="$base/bridge-$(bridge_hash)"
   mkdir -p "$half/node_modules/express"
   ab_run AB_TABULARIS_WAIT=0 --
   assert_rc 0
@@ -1829,7 +1848,8 @@ test_session_optional_files_always_mounted() {
   assert_rc 0
   m="$(optional_mount_of /home/node/.claude/CLAUDE.md)"
   [[ -n "$m" && ! -s "$m" ]] || fail "CLAUDE.md not mounted empty: '$m'"
-  [[ -n "$(optional_mount_of /home/node/.claude/statusline.py)" ]] || fail "status line not mounted"
+  m="$(optional_mount_of /home/node/.claude/statusline.py)"
+  cmp -s "$m" "$AB/claude/statusline.py" || fail "status line mount is not a copy of claude/statusline.py: '$m'"
   # With your AGENTS.md and an API key: those.
   echo "# rules" > "$CFG/AGENTS.md"
   secrets openai_api_key llm_openai_caller
@@ -1991,6 +2011,9 @@ test_uninstall() {
   printf '%s\n' "ab-services redis" "ab-services ab-claude-7" > "$STUB_DIR/netconns"
   printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine > "$STUB_DIR/secrets"
   printf '%s\n' "agentbox-mcp-tabularis.service agentbox host service [abc]" "agentbox-mine.service my own" > "$STUB_DIR/units"
+  # A module of yours: indented, in single quotes, ${VAR}.
+  mkdir -p "$CFG/mcp.local/mine"
+  printf '%s\n' "  MINE_IMAGE='ghcr.io/me/mine:1'" "  MCP_IMAGES=(\"\${MINE_IMAGE}\" 'ghcr.io/me/other:2')" > "$CFG/mcp.local/mine/mcp.sh"
   mkdir -p "$T/home/.cache/agentbox"
   echo "localhost/agentbox old-image-id" > "$T/home/.cache/agentbox/retired-images"
   : > "$STUB_DIR/calls"
@@ -2004,7 +2027,8 @@ test_uninstall() {
   grep -q '^podman network rm -f' "$STUB_DIR/calls" && fail "network rm -f would remove your containers"
   grep -qx 'podman rmi old-image-id' "$STUB_DIR/calls" || fail "replaced image left behind"
   local img
-  for img in docker.io/grafana/mcp-grafana:latest docker.io/bytebase/dbhub:1.5.0 ghcr.io/rtuszik/woodpecker-mcp:0.5.3; do
+  for img in docker.io/grafana/mcp-grafana:latest docker.io/bytebase/dbhub:1.5.0 ghcr.io/rtuszik/woodpecker-mcp:0.5.3 \
+             ghcr.io/me/mine:1 ghcr.io/me/other:2; do
     grep -qx "podman rmi $img" "$STUB_DIR/calls" || fail "module image $img left behind"
   done
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine" "secrets kept"
@@ -2430,6 +2454,9 @@ test_sidecar_recreated_when_its_setup_changes() {
   ab_run --
   ab_run --
   run_line ab-mcp-graylog && fail "recreated without a change"
+  # An unchanged sidecar costs one inspect of the container (and one of its
+  # image), not one per field.
+  assert_eq "$(grep -c '^podman inspect .* ab-mcp-graylog$' "$STUB_DIR/calls")" 1 "inspects of an unchanged sidecar"
   # A changed setting reaches the sidecar only through a new container.
   : > "$CFG/config.env"; config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog2.example"
   ab_run --
@@ -2778,9 +2805,27 @@ test_updates_registry_down_warns() {
       bash "$AB/check-updates.sh" --if-due > "$T/out" 2>&1 < /dev/null
   assert_out "could not check docker.io/grafana/mcp-grafana:latest"
   [[ -s "$T/warnings" ]] && fail "a failed check asks before the session: $(cat "$T/warnings")"
-  # ...but a failed update is.
-  grep -q 'ab_warn "pull of' "$AB/check-updates.sh" || fail "a failed pull not in the start's list"
-  grep -q "AB_WARNINGS_TO=" "$AB/run.sh" || fail "run.sh does not pass its warnings file"
+}
+
+# A failed update is in the start's list (warnings_review): answered at a
+# terminal, the pull fails.
+test_updates_failed_pull_in_warnings() {
+  command -v script >/dev/null || return 0
+  cu_setup "${FUNCNAME[0]}"
+  echo bbb > "$T/remote_digest"
+  : > "$T/warnings"
+  printf 'y\n' | timeout 60 script -qec "$(printf '%q ' env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
+      PATH="$T/bin:$PATH" STUB_DIR="$STUB_DIR" STUB_PULL_FAIL=1 AB_WARNINGS_TO="$T/warnings" \
+      bash "$AB/check-updates.sh")" /dev/null > "$T/out" 2>&1
+  assert_out "pull of docker.io/grafana/mcp-grafana:latest failed"
+  grep -q "pull of docker.io/grafana/mcp-grafana:latest failed" "$T/warnings" \
+    || fail "a failed pull not in the start's list: $(cat "$T/warnings")"
+  # run.sh passes its list on.
+  config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  secrets grafana_sa
+  printf '%s\n' '#!/usr/bin/env bash' 'echo "AB_WARNINGS_TO=${AB_WARNINGS_TO:-}" > "'"$T"'/cu-env"' > "$AB/check-updates.sh"
+  ab_run AB_CHECK_UPDATES=1 --
+  grep -q '^AB_WARNINGS_TO=/' "$T/cu-env" || fail "run.sh does not pass its warnings file: $(cat "$T/cu-env" 2>/dev/null)"
 }
 
 test_updates_skills_behind() {

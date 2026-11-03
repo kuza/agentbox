@@ -138,7 +138,7 @@ mcp_start() {
   # Root inside the user namespace (your user on the host) to own the
   # socket; no capability, read-only. The image ID label makes start_sidecar
   # recreate it on a rebuilt image.
-  image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
+  agentbox_image_id; image_id="$AGENTBOX_IMAGE_ID"
   start_sidecar ab-mcp-tabularis-relay \
     --network host \
     --label "agentbox.image=$image_id" \

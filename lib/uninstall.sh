@@ -17,8 +17,9 @@
 # lib/sidecars.sh.
 
 # Values of an MCP_ variable in all modules, read as text, not run: names
-# like grafana_sa or images like ghcr.io/x/y:tag. A "$VAR" there is looked up
-# as a VAR= line of the same file (MCP_IMAGES=("$DBHUB_IMAGE")); one the file
+# like grafana_sa or images like ghcr.io/x/y:tag, in "", '' or no quotes,
+# on one line, indented or not. A "$VAR" or "${VAR}" there is looked up as a
+# VAR= line of the same file (MCP_IMAGES=("$DBHUB_IMAGE")); one the file
 # does not set ("$IMG_NGINX") is left out, agentbox_uninstall removes it
 # anyway.
 uninstall_names() {  # <MCP_ variable>
@@ -26,10 +27,10 @@ uninstall_names() {  # <MCP_ variable>
   for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
     [[ -f "$f" ]] || continue
     # Split, never globbed; a trailing comment is not a name.
-    read -ra vals <<<"$(sed -n "s/^$1=//p" "$f" | sed 's/[[:space:]]#.*//' | tr -d '()"' | tr '\n' ' ')"
+    read -ra vals <<<"$(sed -n "s/^[[:space:]]*$1=//p" "$f" | sed 's/[[:space:]]#.*//' | tr -d "()\"'" | tr '\n' ' ')"
     for v in ${vals[@]+"${vals[@]}"}; do
       if [[ "$v" =~ ^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$ ]]; then
-        sed -n "s/^${BASH_REMATCH[1]}=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$f"
+        sed -n "s/^[[:space:]]*${BASH_REMATCH[1]}=[\"']\{0,1\}\([^\"']*\)[\"']\{0,1\}[[:space:]]*\$/\1/p" "$f"
       else
         printf '%s\n' "$v"
       fi

@@ -11,6 +11,8 @@
 # Environment:
 #   STUB_IMAGE_ID   ID of localhost/agentbox (default: img-1)
 #   STUB_BUILT_ID   a build gives localhost/agentbox this ID
+#   STUB_RUN_FAIL   a container name: run -d of it fails with an Error: line
+#   STUB_PULL_FAIL  any value: every pull fails
 #   STUB_PULL_NEW   images (space-separated) a pull replaces: ID new-<image>
 #   STUB_RMI_FAIL   image IDs rmi refuses to remove (still in use)
 #   STUB_NO_SOCAT   the agentbox image has no socat: run -d with it fails
@@ -35,7 +37,8 @@ touch "$S/secrets" "$S/running" "$S/labels" "$S/image_labels" "$S/image_pulled" 
 drop() {  # <file> <first field>: remove its lines
   awk -v x="$2" '$1 != x' "$S/$1" > "$S/$1.new"; mv "$S/$1.new" "$S/$1"
 }
-printf '%s\n' "podman $*" >> "$S/calls"
+# Its own calls for one field of a |-joined inspect are not podman calls.
+[[ -n "${STUB_SELF:-}" ]] || printf '%s\n' "podman $*" >> "$S/calls"
 
 image_id() {  # <image>
   local id
@@ -123,6 +126,7 @@ case "$1 ${2:-}" in
     [[ "$*" == *"label=agentbox.build "* ]] || exit 0
     awk '{ print $1 }' "$S/image_labels" ;;
   "pull -q")
+    [[ -z "${STUB_PULL_FAIL:-}" ]] || exit 1
     if [[ " ${STUB_PULL_NEW:-} " == *" $3 "* ]]; then
       grep -v "^$3 " "$S/image_ids" > "$S/image_ids.new"; mv "$S/image_ids.new" "$S/image_ids"
       echo "$3 new-$3" >> "$S/image_ids"
@@ -145,7 +149,7 @@ case "$1 ${2:-}" in
       out=""; rest="$3"
       while [[ -n "$rest" ]]; do
         f="${rest%%|\{\{*}"; [[ "$f" == "$rest" ]] && rest="" || rest="${rest#"$f"|}"
-        out+="${out:+|}$("$0" inspect -f "$f" "$name")"
+        out+="${out:+|}$(STUB_SELF=1 "$0" inspect -f "$f" "$name")"
       done
       echo "$out"; exit 0
     fi
@@ -187,6 +191,8 @@ case "$1 ${2:-}" in
       grep -v "^$n " "$S/labels" > "$S/labels.new"; mv "$S/labels.new" "$S/labels"
     done ;;
   "run -d")
+    [[ -n "${STUB_RUN_FAIL:-}" && "$*" == *"--name $STUB_RUN_FAIL "* ]] \
+      && { echo "${STUB_RUN_ERR:-Error: stub: cannot start $STUB_RUN_FAIL}" >&2; exit 125; }
     [[ "$*" == *--entrypoint=socat* && -n "${STUB_NO_SOCAT:-}" ]] && { echo "executable file \`socat\` not found" >&2; exit 127; }
     # run -d --replace --name <name> [options] <image> [args]: the image is the
     # first argument after the options that does not start with "-" and is not

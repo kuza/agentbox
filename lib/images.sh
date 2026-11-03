@@ -7,6 +7,17 @@
 
 RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 
+# The ID of the agentbox image, in AGENTBOX_IMAGE_ID: looked up once per
+# start, by run.sh after ensure_images (the stamps of skills, forward and
+# module sidecars use it), again after a build. Call it as a command, not in
+# $(...), which would lose it.
+AGENTBOX_IMAGE_ID=""
+agentbox_image_id() {  # 1 if there is no image
+  [[ -n "$AGENTBOX_IMAGE_ID" ]] && return 0
+  AGENTBOX_IMAGE_ID="$(podman image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" || AGENTBOX_IMAGE_ID=""
+  [[ -n "$AGENTBOX_IMAGE_ID" ]]
+}
+
 # The image is built from an empty context directory: the Containerfile
 # copies nothing in, and the agentbox directory holds config.env, env/
 # (passwords) and skills/, which a build has no reason to receive. A COPY
@@ -18,6 +29,7 @@ RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 # fingerprint is not the current one (a changed AB_TRIVY or AB_GO_VERSION, a
 # release with a new Containerfile).
 build_image() {  # [podman build options...]: the agentbox image
+  AGENTBOX_IMAGE_ID=""
   build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$(agentbox_fingerprint)" - \
     "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 }

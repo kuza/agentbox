@@ -226,11 +226,9 @@ session_optional_file() {  # <agent> <name> <file or ""> <fallback text>
     cache_text "session/$1" "$2.none" "$4"
   elif [[ "$3" == "$SCRIPT_DIR"/* ]]; then
     cache_copy "session/$1" "$3" "$2"
-  elif [[ -f "$3" ]]; then
-    printf '%s\n' "$3"
   else
-    echo "error: $3 is missing" >&2
-    return 1
+    # The caller checked that it is there.
+    printf '%s\n' "$3"
   fi
 }
 

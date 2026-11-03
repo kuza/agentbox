@@ -113,8 +113,8 @@ mcp_start() {
 # in MCP_IMAGES, which AB_UPGRADE pulls; agentbox uninstall removes it by
 # its agentbox.build label.
 bb4_devtools_fingerprint() {
-  cat -- "$MCP_DIR/devtools/Containerfile" "$MCP_DIR/devtools/package.json" "$MCP_DIR/devtools/package-lock.json" \
-    | sha256sum | cut -c1-16
+  image_fingerprint "$MCP_DIR/devtools/Containerfile" \
+    "$(cat -- "$MCP_DIR/devtools/package.json" "$MCP_DIR/devtools/package-lock.json")"
 }
 
 bb4_devtools_build() {  # [podman build options...]

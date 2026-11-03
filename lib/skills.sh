@@ -86,18 +86,14 @@ sorted_list() {  # <comma-separated list>: sorted, no spaces
 }
 
 skills_sources() {
-  local list="${AB_SKILLS:-}" name d conf url only prefix ref slug sync want have at f src
+  local list="${AB_SKILLS:-}" name conf url only prefix ref slug sync want have at f src
   local -A enabled_url=() source_of_slug=()
   for name in ${list//,/ }; do
-    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
       echo "error: AB_SKILLS: invalid source name '$name'" >&2
       exit 2
     fi
-    conf=""
-    for d in "${SKILLS_SOURCE_DIRS[@]}"; do
-      if [[ -f "$d/$name.conf" ]]; then conf="$d/$name.conf"; break; fi
-    done
-    if [[ -z "$conf" ]]; then
+    if ! conf="$(conf_find "$name" "${SKILLS_SOURCE_DIRS[@]}")"; then
       echo "error: AB_SKILLS: no skill source '$name' (looked for $USER_SKILLS_SOURCES_DIR/$name.conf and skills.d/$name.conf)" >&2
       exit 2
     fi
@@ -171,7 +167,7 @@ skills_prepare() {
   # rebuild with a new GRAPHIFY_VERSION brings the matching skill. A
   # <skills>/graphify that agentbox did not install is left alone.
   GRAPHIFY_STAMP="$SKILLS_DIR/graphify/.agentbox-image"
-  image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
+  agentbox_image_id; image_id="$AGENTBOX_IMAGE_ID"
   if [[ -e "$SKILLS_DIR/graphify" && ! -f "$GRAPHIFY_STAMP" ]]; then
     ab_warn "$SKILLS_DIR/graphify was not installed by agentbox; not updating it"
   elif [[ "$(cat "$GRAPHIFY_STAMP" 2>/dev/null)" != "$image_id" || ! -d "$GRAPHIFY_PI/graphify" ]]; then

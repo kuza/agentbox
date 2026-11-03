@@ -62,9 +62,14 @@ setup_prime() {
       if [[ -n "${!k+x}" ]]; then printf '%s\tset %s\n' "$k" "${!k}"; else printf '%s\tunset\n' "$k"; fi
     done
   )
-  while IFS= read -r k; do
-    [[ -n "$k" ]] && SETUP_HAS[$k]=1
-  done < <(podman secret ls --format '{{.Name}}' 2>/dev/null)
+  # Read anew after each save: a secret stored in a pipeline (setup_save)
+  # does not reach this shell's list. A failed listing marks none, and the
+  # menu still works on config.env.
+  if secret_ids_read 2>/dev/null; then
+    for k in "${!SECRET_IDS[@]}"; do SETUP_HAS[$k]=1; done
+  else
+    echo "agentbox setup: cannot list the Podman secrets; they show as MISSING" >&2
+  fi
 }
 
 setup_current() {  # <key>: "set <value>" or "unset", pending changes included
@@ -101,9 +106,6 @@ setup_record_list() {  # <key> <list> [default when unset]
   else SETUP_NEW[$1]="set $2"; fi
 }
 
-# The name check run.sh applies to modules, groups and sources.
-SETUP_NAME_RE='^[a-z0-9][a-z0-9-]*$'
-
 # What an egress group opens: its hosts. What a skill source is: its URL.
 # "(yours)" for a file in your directory.
 setup_describe() {  # <egress|skill> <file>
@@ -131,11 +133,6 @@ setup_names() {  # <conf|mcp> <dirs...>
   done | sort -u
 }
 
-setup_file_of() {  # <name> <dirs...>: the first <dir>/<name>.conf
-  local name="$1" d
-  shift
-  for d in "$@"; do [[ -f "$d/$name.conf" ]] && { echo "$d/$name.conf"; return; }; done
-}
 
 # A module's description, settings, required settings, secrets and secret
 # help (entries split by a tab), read in a subshell, so that a broken module
@@ -381,9 +378,9 @@ setup_show() {
              text="(cannot be read)"
            fi ;;
       skill) in_list "$name" "$skills" && mark="[x]" || mark="[ ]"
-             text="$(setup_describe skill "$(setup_file_of "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
+             text="$(setup_describe skill "$(conf_find "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
       egress) in_list "$name" "$egress" && mark="[x]" || mark="[ ]"
-              text="$(setup_describe egress "$(setup_file_of "$name" "${EGRESS_DIRS[@]}")")" ;;
+              text="$(setup_describe egress "$(conf_find "$name" "${EGRESS_DIRS[@]}")")" ;;
       other)
         for entry in "${SETUP_OTHER[@]}"; do [[ "${entry%% *}" == "$name" ]] && break; done
         entry="${entry#* }"
@@ -396,7 +393,7 @@ setup_show() {
         fi
         ;;
     esac
-    if [[ "$kind" != other && ! "$name" =~ $SETUP_NAME_RE ]]; then
+    if [[ "$kind" != other && ! "$name" =~ $AB_NAME_RE ]]; then
       mark="[-]"; text="cannot be used: names are a-z, 0-9 and - only"; status=""
     fi
     printf '%3d %s %-14s %s\n' "$i" "$mark" "$([[ "$kind" == other ]] || echo "$name")" "$text"
@@ -413,7 +410,7 @@ setup_act() {  # <number> [e]
   read -r kind name < <(setup_entries | sed -n "${1}p")
   [[ -n "$kind" ]] || { echo "no entry $1"; return; }
   if [[ -n "${2:-}" && "$kind" != mcp ]]; then echo "  e is for MCP modules; $1 is not one"; return; fi
-  if [[ "$kind" != other && ! "$name" =~ $SETUP_NAME_RE ]]; then
+  if [[ "$kind" != other && ! "$name" =~ $AB_NAME_RE ]]; then
     echo "  '$name' cannot be used: run.sh takes names of a-z, 0-9 and - only; rename its file"; return
   fi
   case "$kind" in

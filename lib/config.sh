@@ -57,6 +57,18 @@ warnings_review() {  # <the session's arguments...>
   rm -f -- "$AB_WARNINGS_FILE"
 }
 
+# Names of MCP modules, egress groups and skill sources (run.sh and
+# agentbox setup), and of a module's servers.
+AB_NAME_RE='^[a-z0-9][a-z0-9-]*$'
+
+# The first <dir>/<name>.conf over <dirs>: yours before the shared ones.
+conf_find() {  # <name> <dirs...>
+  local name="$1" d
+  shift
+  for d in "$@"; do [[ -f "$d/$name.conf" ]] && { printf '%s\n' "$d/$name.conf"; return 0; }; done
+  return 1
+}
+
 CONFIG_KEYS=(AB_MCP AB_EGRESS AB_FORWARD AB_SKILLS AB_SKILLS_DIR AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES AB_GRAPHIFY_EXTRAS AB_TRIVY
   AB_PYTHON_VERSIONS AB_GO_VERSION AB_GOLANGCI_LINT_VERSION AB_WARNINGS_ASK)
 CONFIG_FILE="${AB_CONFIG:-$USER_CONFIG}"

@@ -28,20 +28,16 @@ EGRESS_DEFAULT="anthropic openai pypi go"
 # (MCP_EGRESS_ALL).
 # Result: EGRESS_HOSTS, one "host[:port]" each.
 egress_init() {
-  local name d file line host seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" n entry
+  local name file line host seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" n entry
   EGRESS_HOSTS=()
   for name in ${list//,/ }; do
-    if [[ ! "$name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
       echo "error: AB_EGRESS: invalid group name '$name'" >&2
       exit 2
     fi
     [[ "$seen" == *" $name "* ]] && continue
     seen+="$name "
-    file=""
-    for d in "${EGRESS_DIRS[@]}"; do
-      if [[ -f "$d/$name.conf" ]]; then file="$d/$name.conf"; break; fi
-    done
-    if [[ -z "$file" ]]; then
+    if ! file="$(conf_find "$name" "${EGRESS_DIRS[@]}")"; then
       echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.conf and egress.d/$name.conf)" >&2
       exit 2
     fi

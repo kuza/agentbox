@@ -45,8 +45,8 @@ dbhub_config() {  # <dbhub.toml>
   dst="$dir/dbhub.toml"
   [[ -r "$1" ]] || { ab_error "cannot read $1"; return 1; }
   # Also the image that parses: another Python there could read it otherwise.
-  image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" && [[ -n "$image_id" ]] \
-    || { ab_error "no image $IMAGE to read $1 with"; return 1; }
+  agentbox_image_id || { ab_error "no image $IMAGE to read $1 with"; return 1; }
+  image_id="$AGENTBOX_IMAGE_ID"
   # One read of dbhub.toml for both the hash and the parse: saved in between,
   # a parse of the new file would be kept under the old file's hash.
   in="$(mktemp "$dir/input.XXXXXX")" || { ab_error "cannot write in $dir"; return 1; }

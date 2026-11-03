@@ -82,7 +82,7 @@ fwd_label() {  # <index>: which start owns the sidecar
 forward_start() {
   local i c net image_id
   (( ${#FWD_NAMES[@]} )) || return 0
-  image_id="$(podman image inspect -f '{{.Id}}' "$IMAGE")"
+  agentbox_image_id; image_id="$AGENTBOX_IMAGE_ID"
   for i in "${!FWD_NAMES[@]}"; do
     c="$(fwd_container "$i")"
     if [[ "${FWD_SCOPES[$i]}" == global ]]; then net=ab-forward; else net="ab-fwd-$FWD_KEY"; fi
