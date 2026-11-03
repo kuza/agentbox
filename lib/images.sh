@@ -18,17 +18,19 @@ RETIRED_IMAGES="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images"
 # fingerprint is not the current one (a changed AB_TRIVY or AB_GO_VERSION, a
 # release with a new Containerfile).
 build_image() {  # [podman build options...]: the agentbox image
-  build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$(agentbox_fingerprint)" \
+  build_local "$IMAGE" "$SCRIPT_DIR/Containerfile" "$(agentbox_fingerprint)" - \
     "$@" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 }
 
 build_squid_image() {  # [podman build options...]: the egress proxy
-  build_local "$IMG_SQUID" "$SCRIPT_DIR/Containerfile.squid" "$(squid_fingerprint)" "$@"
+  build_local "$IMG_SQUID" "$SCRIPT_DIR/Containerfile.squid" "$(squid_fingerprint)" - "$@"
 }
 
-build_local() {  # <image> <containerfile> <fingerprint> [podman build options...]
-  local image="$1" file="$2" fp="$3" ctx rc=0
-  shift 3
+# <context>: the build context directory; "-" for an empty one. Also for
+# the images MCP modules build (mcp/bb4).
+build_local() {  # <image> <containerfile> <fingerprint> <context> [podman build options...]
+  local image="$1" file="$2" fp="$3" dir="$4" ctx rc=0
+  shift 4
   # When the base image was last pulled: a rebuild for a changed setting
   # keeps the old base, and its date, for the update check's reminder.
   local pulled=""
@@ -41,10 +43,10 @@ build_local() {  # <image> <containerfile> <fingerprint> [podman build options..
       || pulled="$(podman image inspect -f '{{.Created.Unix}}' "$image" 2>/dev/null)" || pulled=""
     [[ "$pulled" =~ ^[0-9]+$ ]] || pulled=""
   fi
-  ctx="$(mktemp -d)"
+  if [[ "$dir" == - ]]; then ctx="$(mktemp -d)"; else ctx="$dir"; fi
   podman build --layers=false "$@" --label "agentbox.build=$fp" ${pulled:+--label "agentbox.pulled=$pulled"} \
     -t "$image" -f "$file" "$ctx" || rc=$?
-  rmdir -- "$ctx"
+  [[ "$dir" != - ]] || rmdir -- "$ctx"
   return "$rc"
 }
 

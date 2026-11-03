@@ -274,7 +274,7 @@ Other settings
 number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit
 ```
 
-The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet).
+The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet). If the start would leave the module out (a setting that is not correct, or a fault in its `mcp.sh`), the menu shows "NOT USABLE" and the reason.
 
 - A number enables or disables an entry, or asks for a value. For a value, Enter keeps the current value, and `-` unsets it.
 - When you enable a module, the menu asks for its settings. It also asks, with hidden input, for the secrets that the module does not have. The prompt tells what to type, and the module changes that input into the secret (the Graylog token becomes its basic-auth value). If you disable the module again before you save, the menu discards what you typed for it.
@@ -452,7 +452,7 @@ AB_EGRESS=anthropic openai pypi go test-data
 - Use exact hosts, not domains, where possible. `.amazonaws.com` is all of AWS. Each API that accepts uploads with a token is an exfiltration path (see [Security model](#security-model)), because the agent can use a token that a prompt injection planted. An S3 bucket host is narrower than the regional endpoint.
 - Put the credentials for these services in a [per-project environment](#per-project-environment) file. The agent can see them. Use test credentials with the least rights, read-only where possible.
 - Squid sees only host names. Thus, squid allows all paths and all methods to an allowed host, on port 443 (HTTPS) and port 80 (plain HTTP). For other ports, use `host:port` entries.
-- The list is the same for all sessions, because all sessions share squid.
+- The list is the same for all sessions, because all sessions share squid. Each start writes the list again. If you run two agentbox versions at the same time, a start of the older version removes the hosts of modules that it does not have. Sessions of the newer version then cannot reach those hosts (bb4: 403).
 - Only HTTP(S) goes through squid. Databases and queues are [local services](#local-services) or [test servers](#test-servers).
 
 ## Agents
@@ -633,17 +633,18 @@ A module can lack a setting or a secret, can be absent from this version, or can
 
 #### Writing a module
 
-`mcp.sh` is a bash script that `run.sh` sources on the host. It sets variables. If the server needs a sidecar, it also defines `mcp_start`. The code outside `mcp_start` runs without `set -e`: if a command there fails, the start does not stop. Put checks in `mcp_start`, which can exit with `$MCP_TAKE_AWAY`. Or, if a value is not correct, leave the URL empty:
+`mcp.sh` is a bash script that `run.sh` sources on the host. It sets variables. If the server needs a sidecar, it also defines `mcp_start`. The code outside the functions runs without `set -e`: if a command there fails, the start does not stop. Put the checks of the settings in `mcp_check`:
 
 | | |
 |---|---|
 | `MCP_URL` | Required if `MCP_SERVERS` is not set. The URL that the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar. For a remote server, the URL of the server (and put its host in `MCP_EGRESS`) |
 | `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`). Each item is `"<name>\|<url>\|<caller or ->\|<description>"`. The items replace the one server that has the name of the module. `caller`: the agents send the caller token of the module to the server. `-`: the agents send no token (a remote server). `caller` needs `MCP_CALLER_SECRET`. Each server name must be different from the other server names in the module and in other modules. If a module does not obey a rule, the start leaves it out and gives the reason. As for `MCP_URL`, the agents reach a host without a dot without the proxy, unless the host is in `MCP_EGRESS` |
 | `MCP_DESCRIPTION` | One line that pi shows |
-| `MCP_CONFIG=(...)` | The `config.env` keys that the module reads. `run.sh` accepts them only while the module is enabled |
+| `MCP_CONFIG=(...)` | The `config.env` keys that the module reads. `run.sh` accepts them only while the module is enabled. Write the array on one line: if the `mcp.sh` does not parse, agentbox reads this line as text |
 | `MCP_REQUIRED_CONFIG=(...)` | The keys from `MCP_CONFIG` that must have a value |
 | `MCP_SECRETS=(...)` | Podman secrets that must exist, for example the API token of the service |
 | `MCP_SECRET_HELP=(...)` | Optional: `"<secret>: what to type"` for each secret. `agentbox setup` shows it when it asks for the secret |
+| `mcp_check()` | Optional: checks the settings of the module. It prints one line for each problem, and nothing if the settings are correct. It must not start or change anything, because `agentbox setup` also runs it. If it prints a problem, the start leaves the module out and removes what the module runs, as for an empty setting. `agentbox setup` shows the problem as "NOT USABLE" |
 | `mcp_secret_value()` | Optional: `<secret> <what was typed>` → the value to store. Use it for a secret that agentbox does not store as typed (`graylog` stores `base64("<token>:token")`) |
 | `MCP_OWN_SECRETS=(...)` | Podman secrets that `mcp_start` creates itself. `agentbox uninstall --all` removes them |
 | `MCP_CALLER_SECRET` | The name of a caller token secret. agentbox generates the token on first use. The agents send `Authorization: Bearer <token>`, and the sidecar checks it. In the session, the environment variable `AB_MCP_TOKEN_<NAME>` holds the token |
@@ -1129,7 +1130,7 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section and th
 |---|---|---|
 | Claude Code, pi | **Automatically**, at most every 6 hours, in a separate short-lived container, each into its own volume | `AB_UPDATE=1 agentbox` / `AB_UPDATE=1 agentbox pi` to force |
 | Sidecar images (`mcp-grafana`, `github-mcp-server`, nginx) | **Checked at most every 6 hours**, updated after you confirm (see below). podman never pulls an image again on its own | Answer `y` at the prompt, or run `AB_UPGRADE=1 agentbox` |
-| Base image (Debian packages, git, Python) and the squid image (the squid of Debian, `Containerfile.squid`) | Built here, so only when you ask: a cached build never runs `apt-get` again. The update check reminds you when the base image of their last build was pulled a month ago | `AB_UPGRADE=1 agentbox` |
+| Base image (Debian packages, git, Python), the squid image (the squid of Debian, `Containerfile.squid`) and the images that modules build (`mcp/bb4`) | Built here, so only when you ask: a cached build never runs `apt-get` again. The update check reminds you when the base image of their last build was pulled a month ago | `AB_UPGRADE=1 agentbox` |
 | graphify | Pinned in `Containerfile` | Increase `GRAPHIFY_VERSION`; the next start rebuilds |
 | Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Increase `TRIVY_VERSION`; the next start rebuilds. `AB_UPDATE=1 agentbox` gets the database now |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. `Containerfile` sets both | `AB_UPGRADE=1 agentbox` |
@@ -1227,7 +1228,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 |---|---|
 | The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. A typical cause: your own `podman run -v .:/dst:Z ...` in the repo. For code that you also open in the box, use lowercase `:z` (shared label). If the whole repo got a new label, the next session start restores it. Single files stay private, because podman does not relabel a volume that it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. The sidecars and sessions of agentbox mount copies of the agentbox files from the cache, so they do not cause this. Also, the files of an installed version are read-only, so podman cannot relabel them |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. |
-| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A server in its `MCP_SERVERS` that does not have the correct form, `caller` without `MCP_CALLER_SECRET`, or a server name that another module also has: fix the `mcp.sh` of the module. The session starts without the module. |
+| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A setting that is not correct: the reason names it; `agentbox setup` shows it too. A server in its `MCP_SERVERS` that does not have the correct form, `caller` without `MCP_CALLER_SECRET`, or a server name that another module also has: fix the `mcp.sh` of the module. The session starts without the module. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a necessary host. The error names it. Find `DENIED` in the squid log, and add the host to a group in `egress.local.d/` (see [Egress](#egress)). The next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed. Add other registries deliberately: each one makes egress wider. |

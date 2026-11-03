@@ -159,7 +159,8 @@ services_attach
 # new image. AB_UPGRADE updates everything anyway.
 # ---------------------------------------------------------------------------
 if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
-  AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" "$SCRIPT_DIR/check-updates.sh" --if-due
+  AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" AB_WARNINGS_TO="$AB_WARNINGS_FILE" \
+    "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
 # ---------------------------------------------------------------------------

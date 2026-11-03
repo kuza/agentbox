@@ -47,7 +47,10 @@ source "$SCRIPT_DIR/lib/skills.sh"   # source_value, as run.sh reads the records
 # shellcheck source=lib/release.sh
 source "$SCRIPT_DIR/lib/release.sh"
 # shellcheck source=lib/config.sh
-source "$SCRIPT_DIR/lib/config.sh"   # IMAGE, IMG_SQUID
+source "$SCRIPT_DIR/lib/config.sh"   # IMAGE, IMG_SQUID, ab_warn
+# Run by run.sh: the warnings go to its list too, for warnings_review.
+# Not "could not check": offline it would come, and ask, at every start.
+AB_WARNINGS_FILE="${AB_WARNINGS_TO:-}"
 TIMEOUT=5
 EVERY="${AB_UPDATE_EVERY:-21600}"
 if [[ ! "$EVERY" =~ ^[0-9]+$ ]]; then
@@ -167,7 +170,7 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
       # The replaced image is removed by run.sh once nothing uses it.
       image_retire "$img"
       podman pull -q "$img" >/dev/null \
-        || { say "warning: pull of $img failed"; outstanding=1; }
+        || { ab_warn "pull of $img failed"; outstanding=1; }
     done
     for name in "${!image_of[@]}"; do
       img="${image_of[$name]}"
@@ -183,18 +186,24 @@ if (( ${#stale[@]} + ${#old_containers[@]} )); then
   fi
 fi
 
-# Images built here (the agentbox image, its squid) are as current as the
-# base image they were last built on: a reminder once that pull is a month
-# old (label agentbox.pulled; the build date for images without it).
-# AB_UPGRADE=1 rebuilds them with today's packages and security updates.
-for img in "$IMAGE" "$IMG_SQUID"; do
+# Images built here (the agentbox image, its squid, those of MCP modules:
+# mcp/bb4) are as current as the base image they were last built on: a
+# reminder once that pull is a month old (label agentbox.pulled; the build
+# date for images without it). AB_UPGRADE=1 rebuilds them with today's
+# packages and security updates.
+built="$(podman images --filter label=agentbox.build --format '{{.Repository}}' 2>/dev/null \
+  | grep '^localhost/agentbox-' | grep -vxF "$IMG_SQUID" | sort -u)" || built=""
+for img in "$IMAGE" "$IMG_SQUID" $built; do
   created="$(podman image inspect -f '{{index .Labels "agentbox.pulled"}}' "$img" 2>/dev/null)" || continue
   [[ "$created" =~ ^[0-9]+$ ]] \
     || created="$(podman image inspect -f '{{.Created.Unix}}' "$img" 2>/dev/null)" || continue
   [[ "$created" =~ ^[0-9]+$ ]] || continue
   age=$(( ($(date +%s) - created) / 86400 ))
   if (( age > 30 )); then
-    say "image $img was built on a base pulled $age days ago; AB_UPGRADE=1 agentbox rebuilds it with current packages"
+    more=""
+    [[ "$img" == "$IMAGE" || "$img" == "$IMG_SQUID" ]] \
+      || more=" while its module is in AB_MCP; if it is not, remove the image: podman rmi $img"
+    say "image $img was built on a base pulled $age days ago; AB_UPGRADE=1 agentbox rebuilds it with current packages$more"
   fi
 done
 
@@ -221,7 +230,7 @@ for f in "$SKILLS_DIR"/.sources/*; do
   # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
   [[ -n "$(source_value "$f" REF)" ]] && continue
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    say "warning: $f: bad URL or COMMIT, skipped"
+    ab_warn "$f: bad URL or COMMIT, skipped"
     continue
   fi
   # Outside any repository, so no local git config or hooks apply.
@@ -243,7 +252,7 @@ for f in "$SKILLS_DIR"/.sources/*; do
   if ask "update skills from $slug?"; then
     SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$source_name" SKILLS_PIN="" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
-      || { say "warning: skills update from $slug failed"; outstanding=1; }
+      || { ab_warn "skills update from $slug failed"; outstanding=1; }
   else
     outstanding=1
     interactive || pending=1

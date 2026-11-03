@@ -34,7 +34,7 @@ SETUP_OTHER=(
 # Pending changes: SETUP_NEW[key]="set <value>" or "unset"; secrets to store
 # in SETUP_SECRETS[name]=value. Caches for one run of the menu, emptied when
 # saved: what config.env holds, module info, which secrets exist.
-declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_INFO=() SETUP_HAS=()
+declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_INFO=() SETUP_HAS=() SETUP_PROBLEM=()
 
 # The value of <key> in config.env, as run.sh reads it: "set <value>" or
 # "unset". The environment does not count here. From setup_prime.
@@ -82,6 +82,7 @@ setup_has_secret() {  # <secret>: 0 if it exists or one is pending
 # Records a change of <key>; one that brings back the file's value is no
 # change.
 setup_record() {  # <key> <"set <value>" | unset>
+  SETUP_PROBLEM=()   # a setting changed: setup_module_problem asks again
   if [[ "$2" == "$(setup_file_value "$1")" ]]; then unset "SETUP_NEW[$1]"; else SETUP_NEW[$1]="$2"; fi
 }
 
@@ -142,6 +143,7 @@ setup_file_of() {  # <name> <dirs...>: the first <dir>/<name>.conf
 setup_module_info() {  # <name>: five lines
   if [[ -z "${SETUP_INFO[$1]+x}" ]]; then
     SETUP_INFO[$1]="$(
+      mcp_parses "$1" || exit 1
       mcp_load "$1" >/dev/null 2>&1 || exit 1
       echo "${MCP_DESCRIPTION:-}"
       echo "${MCP_CONFIG[*]-}"
@@ -170,6 +172,7 @@ setup_secret_help() {  # <module> <secret>: what to type, from MCP_SECRET_HELP
 # mcp_secret_value, or as typed.
 setup_secret_value() {  # <module> <secret> <typed>
   (
+    mcp_parses "$1" || exit 1
     mcp_load "$1" >/dev/null 2>&1 || exit 1
     if declare -F mcp_secret_value >/dev/null; then mcp_secret_value "$2" "$3"; else printf '%s' "$3"; fi
   )
@@ -268,6 +271,41 @@ setup_module_settings() {  # <name> [all]
   for s in $(setup_module_line "$1" 4); do setup_ask_secret "$s" "$1" ${2:+replace}; done
 }
 
+# What run.sh would leave module <name> out for, with the settings as they
+# are now in the menu (saved or not; the environment wins, as for run.sh):
+# its mcp_check and its server lines (lib/mcp.sh), the first problem only.
+# Nothing while a required setting is missing: the status says NEEDED.
+# Kept in SETUP_PROBLEM[<name>] until a setting changes: call it in the
+# menu's own shell, not in $(...), and read the array.
+setup_module_problem() {  # <name>
+  [[ -n "${SETUP_PROBLEM[$1]+x}" ]] || SETUP_PROBLEM[$1]="$(setup_module_problem_now "$1")"
+}
+
+setup_module_problem_now() {  # <name>
+  (
+    local k v
+    setup_module_info "$1" >/dev/null || exit 0
+    for k in $(setup_module_line "$1" 2); do
+      [[ -n "${!k+x}" ]] && continue
+      v="$(setup_get "$k")"
+      [[ -n "$v" ]] && printf -v "$k" '%s' "$v"
+    done
+    for k in $(setup_module_line "$1" 3); do [[ -n "${!k:-}" ]] || exit 0; done
+    mcp_load "$1" >/dev/null 2>&1
+    if declare -F mcp_check >/dev/null; then
+      v="$(mcp_check 2>/dev/null || true)"; v="${v%%$'\n'*}"
+      [[ -z "$v" ]] || { echo "$v"; exit 0; }
+    fi
+    mcp_servers_problem "$1" " " 2>/dev/null || true
+  ) 2>/dev/null | head -1
+}
+
+setup_module_warn() {  # <name>: says so when run.sh would leave it out
+  local problem
+  setup_module_problem "$1"; problem="${SETUP_PROBLEM[$1]}"
+  [[ -z "$problem" ]] || echo "  note: agentbox leaves $1 out of the start until this is fixed: $problem"
+}
+
 # Forgets the pending settings and secrets of module <name>, turned off
 # before they were saved.
 setup_module_forget() {  # <name>
@@ -279,9 +317,10 @@ setup_module_forget() {  # <name>
 # The status line under module <name>, number <n>: its settings, whether
 # its secrets are there. Empty for a module with neither.
 setup_module_status() {  # <name> <n>
-  local keys req secrets k v out=""
+  local keys req secrets k v out="" problem
   keys="$(setup_module_line "$1" 2)"; req="$(setup_module_line "$1" 3)"; secrets="$(setup_module_line "$1" 4)"
-  [[ -n "$keys$secrets" ]] || return 0
+  problem="${SETUP_PROBLEM[$1]:-}"   # setup_show fills it
+  [[ -n "$keys$secrets$problem" ]] || return 0
   for k in $keys; do
     v="$(setup_get "$k")"
     if [[ -n "${!k+x}" ]]; then out+=" · $k=${!k} (environment)"
@@ -294,7 +333,8 @@ setup_module_status() {  # <name> <n>
     elif setup_has_secret "$k"; then out+=" · secret $k: stored"
     else out+=" · secret $k: MISSING"; fi
   done
-  echo "${out# · } · e $2"
+  [[ -z "$problem" ]] || out+=" · NOT USABLE: $problem"
+  if [[ -n "$keys$secrets" ]]; then echo "${out# · } · e $2"; else echo "${out# · }"; fi
 }
 
 # The menu, one entry per line: "<kind> <key or name>"; printed by
@@ -333,6 +373,7 @@ setup_show() {
       mcp) in_list "$name" "$mcp" && mark="[x]" || mark="[ ]"
            if text="$(setup_module_line "$name" 1)" && setup_module_info "$name" >/dev/null; then
              [[ -f "$USER_MCP_DIR/$name/mcp.sh" ]] && text="(yours) $text"
+             setup_module_problem "$name"
              status="$(setup_module_status "$name" "$i")"
              read -ra more <<<"$(setup_module_line "$name" 2)"
              keys+=(${more[@]+"${more[@]}"})
@@ -377,14 +418,14 @@ setup_act() {  # <number> [e]
   fi
   case "$kind" in
     mcp)
-      if [[ -n "${2:-}" ]]; then setup_module_settings "$name" all; return; fi
+      if [[ -n "${2:-}" ]]; then setup_module_settings "$name" all; setup_module_warn "$name"; return; fi
       list="$(setup_get AB_MCP)"; list="${list//,/ }"
       # One that cannot be read can only go: run.sh would stop on it.
       if ! in_list "$name" "$list" && ! setup_module_info "$name" >/dev/null; then
         echo "  module $name cannot be read (run agentbox to see why); not turned on"; return
       fi
       setup_record_list AB_MCP "$(list_toggle "$name" "$list")"
-      if in_list "$name" "$list"; then setup_module_forget "$name"; else setup_module_settings "$name"; fi ;;
+      if in_list "$name" "$list"; then setup_module_forget "$name"; else setup_module_settings "$name"; setup_module_warn "$name"; fi ;;
     skill)
       list="$(setup_get AB_SKILLS)"; list="${list//,/ }"
       setup_record_list AB_SKILLS "$(list_toggle "$name" "$list")" ;;

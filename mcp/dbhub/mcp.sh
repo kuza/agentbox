@@ -58,12 +58,19 @@ dbhub_config() {  # <dbhub.toml>
     return 0
   fi
   tmp="$(mktemp "$dst.XXXXXX")" || { rm -f -- "$in"; ab_error "cannot write in $dir"; return 1; }
-  if ! podman run --rm -i --network none --entrypoint python3 "$IMAGE" \
-         -I -c "$(cat "$MCP_DIR/config.py")" "$1" < "$in" > "$tmp"; then
-    rm -f -- "$tmp" "$in"
+  # Its messages (what is wrong with dbhub.toml) become the reason the
+  # warning before the session gives.
+  # The messages may quote dbhub.toml: mode 600, like the rest.
+  if ! (umask 077; podman run --rm -i --network none --entrypoint python3 "$IMAGE" \
+         -I -c "$(cat "$MCP_DIR/config.py")" "$1" < "$in" > "$tmp" 2> "$in.err"); then
+    # All of it on the terminal; the first lines are the reason.
+    cat -- "$in.err" >&2
+    [[ ! -s "$in.err" ]] || ab_reason "$(sed 's/^error: //; s/^Error: //' "$in.err" | head -3 | paste -sd ';' -)"
+    rm -f -- "$tmp" "$in" "$in.err"
     return 1
   fi
-  rm -f -- "$in"
+  cat -- "$in.err" >&2
+  rm -f -- "$in" "$in.err"
   if ! mv -f -- "$tmp" "$dst" || ! (umask 077; printf '%s\n' "$src" > "$dst.src"); then
     rm -f -- "$tmp"
     ab_error "cannot write $dst"

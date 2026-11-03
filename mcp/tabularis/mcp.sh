@@ -38,28 +38,29 @@ MCP_IMAGES=("$IMG_NGINX")
 #   AB_TABULARIS_WAIT  seconds to wait for supergateway to listen (default: 60)
 # Both settings end up in a systemd command line, which expands $ and %:
 # only plain characters are accepted.
-mcp_start() {
+TABULARIS_PLAIN='^[A-Za-z0-9_./:=+ -]+$'
+mcp_check() {
   local cmd="${TABULARIS_CMD:-tabularis}" port="${TABULARIS_PORT:-47821}"
-  local wait="${AB_TABULARIS_WAIT:-60}" plain='^[A-Za-z0-9_./:=+ -]+$'
-  local node npm tab key bridge image_id i state
-  if [[ ! "$cmd" =~ $plain || "$cmd" == " "* ]]; then
-    ab_error "TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'"
-    exit 2
-  fi
+  if [[ ! "$cmd" =~ $TABULARIS_PLAIN || "$cmd" == " "* ]]; then
+    echo "TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'"
   # The service runs in your home directory, not here: a relative path
   # would point elsewhere.
-  if [[ "${cmd%% *}" == */* && "${cmd%% *}" != /* ]]; then
-    ab_error "TABULARIS_CMD: give the command by name or as an absolute path, got '${cmd%% *}'"
-    exit 2
+  elif [[ "${cmd%% *}" == */* && "${cmd%% *}" != /* ]]; then
+    echo "TABULARIS_CMD: give the command by name or as an absolute path, got '${cmd%% *}'"
   fi
-  if [[ ! "$port" =~ ^[1-9][0-9]*$ ]] || (( port < 1024 || port > 65535 )); then
-    ab_error "TABULARIS_PORT must be a port from 1024 to 65535, got '$port'"
-    exit 2
+  if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( port < 1024 || port > 65535 )); then
+    echo "TABULARIS_PORT must be a port from 1024 to 65535, got '$port'"
   fi
-  if [[ ! "$wait" =~ ^[0-9]+$ ]]; then
-    ab_error "AB_TABULARIS_WAIT must be a number of seconds, got '$wait'"
-    exit 2
+  if [[ ! "${AB_TABULARIS_WAIT:-60}" =~ ^[0-9]+$ ]]; then
+    echo "AB_TABULARIS_WAIT must be a number of seconds, got '${AB_TABULARIS_WAIT:-}'"
   fi
+  return 0
+}
+
+mcp_start() {
+  local cmd="${TABULARIS_CMD:-tabularis}" port="${TABULARIS_PORT:-47821}"
+  local wait="${AB_TABULARIS_WAIT:-60}"
+  local node npm tab key bridge image_id i state
   if ! host_units_available; then
     ab_error "the tabularis module needs a systemd user session on the host (systemctl --user);" \
          "over SSH it needs lingering (README, Tabularis (MCP))"
@@ -88,7 +89,7 @@ mcp_start() {
     exit 1
   fi
   bridge="$(tabularis_bridge_dir)"
-  if [[ ! "$key$node$tab$bridge" =~ $plain ]]; then
+  if [[ ! "$key$node$tab$bridge" =~ $TABULARIS_PLAIN ]]; then
     ab_error "the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $node, $tab, $bridge)"
     exit 2
   fi

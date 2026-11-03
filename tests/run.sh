@@ -244,13 +244,22 @@ test_mcp_failed_start_skips_that_module_only() {
   ab_run --
   assert_rc 0
   run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started once fixed"
-  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=ci.example#' "$CFG/config.env"
+  config "WOODPECKER_CA=$T/missing-ca.pem"
   ab_run --
   assert_skipped woodpecker
   grep -q '^podman rm -f.* ab-mcp-woodpecker' "$STUB_DIR/calls" && fail "open sessions lost woodpecker"
   [[ " $(started) " == *" ab-mcp-woodpecker-srv "* ]] || fail "woodpecker's server stopped"
-  # ...unless the module says access must go: a network with a way out.
+  sed -i '/^WOODPECKER_CA=/d' "$CFG/config.env"
+  # ...unless access must go: a setting that does not check out (mcp_check),
+  # as for an emptied one...
+  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=ci.example#' "$CFG/config.env"
+  ab_run --
+  assert_skipped woodpecker
+  grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "kept for a setting that does not check out"
+  # ...or the module says so: a network with a way out.
   sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=https://ci.example#' "$CFG/config.env"
+  ab_run --
+  run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started again"
   ab_run STUB_NET_INTERNAL=false --
   assert_skipped woodpecker
   grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "left running on a network with a way out"
@@ -430,11 +439,19 @@ test_mcp_server_names_and_urls_checked() {
   ab_run --
   assert_skipped c
   assert_out "its MCP_SERVERS has the server 's' twice"
-  # One that does not parse is left out.
-  printf 'MCP_URL=https://c.example/mcp\nif\n' > "$CFG/mcp.local/c/mcp.sh"
+  # One that does not parse is left out; its settings are no unknown keys.
+  printf 'MCP_URL=https://c.example/mcp\nMCP_CONFIG=(C_URL C_X)\nif\n' > "$CFG/mcp.local/c/mcp.sh"
+  config "C_X=1"
   ab_run --
   assert_skipped c
   assert_out "c' left out of this session: its mcp.sh does not parse"
+  assert_no_out "unknown key 'C_X'"
+  sed -i '/^C_X=/d' "$CFG/config.env"
+  # A problem from mcp_check counts also when it returns non-zero.
+  printf 'MCP_URL=https://c.example/mcp\nmcp_check() { echo "C is bad"; return 1; }\n' > "$CFG/mcp.local/c/mcp.sh"
+  ab_run --
+  assert_skipped c
+  assert_out "c' left out of this session: C is bad"
   # A module whose last line is false still loads.
   printf 'MCP_URL=https://c.example/mcp\nMCP_EGRESS=(c.example)\n[[ -n "${NOPE:-}" ]] && X=1\n' > "$CFG/mcp.local/c/mcp.sh"
   ab_run --
@@ -479,10 +496,13 @@ test_mcp_unknown_module() {
   assert_skipped jira
   assert_out "MCP module 'jira' left out of this session: this agentbox has no such module"
   grep -q '"grafana"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "grafana left out too"
-  # Its sidecars, of another version's sessions, stay.
-  printf 'ab-mcp-jira x\n' >> "$STUB_DIR/running"
+  # Its sidecars, of another version's sessions, stay: by their mark only,
+  # not by name (a typo "jira" would keep an unmarked ab-mcp-jira-old).
+  printf 'ab-mcp-jira x\nab-mcp-jira-old x\n' >> "$STUB_DIR/running"
+  printf 'ab-mcp-jira agentbox.module=jira\n' >> "$STUB_DIR/labels"
   ab_run --
-  grep -q 'rm -f -v ab-mcp-jira' "$STUB_DIR/calls" && fail "another version's sidecar removed"
+  grep -qx 'podman rm -f -v ab-mcp-jira' "$STUB_DIR/calls" && fail "another version's sidecar removed"
+  grep -qx 'podman rm -f -v ab-mcp-jira-old' "$STUB_DIR/calls" || fail "an unmarked sidecar kept by its name"
   return 0
 }
 
@@ -948,6 +968,8 @@ TOML
   ab_run --
   assert_skipped dbhub
   assert_out "dbhub.toml: not valid TOML"
+  # The reason is in the warning, not "see the output above".
+  assert_out "dbhub' left out of this session: .*dbhub.toml: not valid TOML"
   # DBHub reads - as _ in tool names.
   printf '[[sources]]\nid = "prod-db"\n[[sources]]\nid = "prod_db"\n' > "$CFG/dbhub.toml"
   ab_run --
@@ -1730,7 +1752,7 @@ test_release_environment_file_settled() {
 # The README shows exactly what agentbox writes.
 test_environment_file_in_readme() {
   local readme
-  readme="$(awk '/^`~\/.local\/bin` must come first/ { on = 1 } on && /^```$/ { n++; next } on && n == 1 { print } n == 2 { exit }' "$ROOT/README.md")"
+  readme="$(awk '/^`~\/.local\/bin` must be first/ { on = 1 } on && /^```$/ { n++; next } on && n == 1 { print } n == 2 { exit }' "$ROOT/README.md")"
   assert_eq "$readme" "$(bash -c "source '$ROOT/lib/release.sh'; release_environment_content")" "README block"
 }
 
@@ -2173,6 +2195,12 @@ test_updates_local_images_age() {
   assert_out "image localhost/agentbox-squid was built on a base pulled 40 days ago"
   assert_out "image localhost/agentbox was built on a base pulled 40 days ago"
   grep -q 'localhost' "$T/urls" 2>/dev/null && fail "registry asked about a local image"
+  # An image a module built here (mcp/bb4): reminded too.
+  echo "localhost/agentbox-bb4-devtools abc" >> "$STUB_DIR/image_labels"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+      STUB_IMAGE_CREATED="$(( $(date +%s) - 40 * 86400 ))" bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_out "image localhost/agentbox-bb4-devtools was built on a base pulled 40 days ago"
+  sed -i '/agentbox-bb4-devtools/d' "$STUB_DIR/image_labels"
   # Rebuilt today for a setting, on a base pulled 40 days ago: still reminded.
   echo "localhost/agentbox $(( $(date +%s) - 40 * 86400 ))" > "$STUB_DIR/image_pulled"
   env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
@@ -2370,6 +2398,19 @@ test_setup_values_names_input() {
   assert_out "my group .*cannot be used"
   assert_out "module broken cannot be read"
   assert_out "nothing to save"
+  # A module run.sh would leave out: its own check (mcp_check) or a
+  # malformed server line, shown in the menu and when it is turned on.
+  rm "$CFG/mcp.local/broken/mcp.sh"
+  mkdir -p "$CFG/mcp.local/odd"
+  printf 'MCP_CONFIG=(ODD_PORT)\nMCP_URL=https://odd.example/mcp\nmcp_check() { [[ "${ODD_PORT:-1}" == 1 ]] || echo "ODD_PORT must be 1"; }\n' > "$CFG/mcp.local/odd/mcp.sh"
+  local odd; odd="$(setup_entry odd)"
+  setup_run "$odd\n2\nq\ny\n"
+  assert_out "note: agentbox leaves odd out of the start until this is fixed: ODD_PORT must be 1"
+  assert_out "NOT USABLE: ODD_PORT must be 1"
+  printf 'MCP_SERVERS=("a|https://odd.example/1|caller|A")\n' > "$CFG/mcp.local/odd/mcp.sh"
+  setup_run "q\n"
+  assert_out "NOT USABLE: its server 'a' is marked caller"
+  rm -r "$CFG/mcp.local/odd"
   # No config.env and the directory not writable: nothing left behind.
   rm "$CFG/config.env"*
   chmod a-w "$CFG"
@@ -2730,6 +2771,16 @@ test_updates_registry_down_warns() {
   assert_rc 0
   assert_out "could not check docker.io/grafana/mcp-grafana:latest"
   [[ -f "$T/home/.cache/agentbox.updates.checked" ]] && fail "stamp set after a failed check"
+  # Run by run.sh: not in the start's list (warnings_review), which would
+  # ask at every start while offline...
+  : > "$T/warnings"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_WARNINGS_TO="$T/warnings" \
+      bash "$AB/check-updates.sh" --if-due > "$T/out" 2>&1 < /dev/null
+  assert_out "could not check docker.io/grafana/mcp-grafana:latest"
+  [[ -s "$T/warnings" ]] && fail "a failed check asks before the session: $(cat "$T/warnings")"
+  # ...but a failed update is.
+  grep -q 'ab_warn "pull of' "$AB/check-updates.sh" || fail "a failed pull not in the start's list"
+  grep -q "AB_WARNINGS_TO=" "$AB/run.sh" || fail "run.sh does not pass its warnings file"
 }
 
 test_updates_skills_behind() {

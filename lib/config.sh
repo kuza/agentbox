@@ -27,6 +27,12 @@ ab_error() {  # <message...>
   if [[ -n "$AB_MODULE_ERRORS" ]]; then printf '%s\n' "$*" >> "$AB_MODULE_ERRORS"; fi
 }
 
+# The reason of a module's failed start, not printed: for an error that is
+# already on the terminal in full.
+ab_reason() {  # <message...>
+  if [[ -n "$AB_MODULE_ERRORS" ]]; then printf '%s\n' "$*" >> "$AB_MODULE_ERRORS"; fi
+}
+
 # At a terminal, the warnings of this start again, right before the
 # session, which starts on Enter and not on "n". No question without a
 # terminal, with AB_WARNINGS_ASK=0, for an agent run with -p or --print, or

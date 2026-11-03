@@ -34,16 +34,21 @@ MCP_IMAGES=("$WOODPECKER_MCP_IMAGE" "$IMG_NGINX")
 #   WOODPECKER_CA   optional: a CA certificate file on the host for an https
 #                   Woodpecker signed by your own CA (default: the public
 #                   CAs nginx's image trusts)
+# WOODPECKER_URL without trailing slashes and /api.
+WOODPECKER_BASE="${WOODPECKER_URL:-}"
+WOODPECKER_BASE="${WOODPECKER_BASE%"${WOODPECKER_BASE##*[!/]}"}"; WOODPECKER_BASE="${WOODPECKER_BASE%/api}"
+WOODPECKER_BASE="${WOODPECKER_BASE%"${WOODPECKER_BASE##*[!/]}"}"
+
+# It goes into nginx's config: plain URL characters only, no ; { } $ # or
+# quotes, which would change the config, and no user:password@, which
+# proxy_pass cannot take.
+mcp_check() {
+  [[ "$WOODPECKER_BASE" =~ ^https?://[A-Za-z0-9._~:/%+=,!*-]+$ ]] \
+    || echo "WOODPECKER_URL must be an http:// or https:// URL of plain characters, got '${WOODPECKER_URL:-}'"
+}
+
 mcp_start() {
-  local url="$WOODPECKER_URL" ca=/etc/ssl/certs/ca-certificates.crt ca_mount=() srv_id f
-  url="${url%"${url##*[!/]}"}"; url="${url%/api}"; url="${url%"${url##*[!/]}"}"
-  # It goes into nginx's config: plain URL characters only, no ; { } $ # or
-  # quotes, which would change the config, and no user:password@, which
-  # proxy_pass cannot take.
-  if [[ ! "$url" =~ ^https?://[A-Za-z0-9._~:/%+=,!*-]+$ ]]; then
-    ab_error "WOODPECKER_URL must be an http:// or https:// URL of plain characters, got '$WOODPECKER_URL'"
-    exit 2
-  fi
+  local url="$WOODPECKER_BASE" ca=/etc/ssl/certs/ca-certificates.crt ca_mount=() srv_id f
   if [[ "$url" == http://* ]]; then
     ab_warn "WOODPECKER_URL is http://: the Woodpecker token, which can do all its user can," \
          "goes over the network unencrypted"

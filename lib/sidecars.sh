@@ -127,9 +127,13 @@ sidecar_remove() {  # <container>
 
 # 0 if <module> is one this start left out with "keep" (MCP_SKIPPED,
 # lib/mcp.sh): what it runs stays for the sessions using it. A sidecar made
-# before the mark has no module: its name tells, ab-mcp-<module>[-*].
+# before the mark has no module: its name tells, ab-mcp-<module>[-*]. For a
+# module this version does not have (MCP_UNKNOWN), only the mark counts.
 skipped_keeps() {  # <owning module, may be empty> <container or unit name>
   local m
+  for m in ${MCP_UNKNOWN[@]+"${MCP_UNKNOWN[@]}"}; do
+    [[ -n "$1" && "$1" == "$m" ]] && return 0
+  done
   for m in ${MCP_SKIPPED[@]+"${MCP_SKIPPED[@]}"}; do
     if [[ -n "$1" ]]; then
       [[ "$1" == "$m" ]] && return 0

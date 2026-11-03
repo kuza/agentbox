@@ -15,6 +15,27 @@ the steps a release needs from you, such as a rebuild.
   mcp.sh sets no `MCP_URL` (its URL may come from its settings; emptied,
   its sidecars go) and one whose mcp.sh does not parse, which both stopped
   the whole start before.
+- `agentbox setup` shows "NOT USABLE" and the reason under a module that
+  the start would leave out: a setting that is not correct, or a fault in
+  its server lines. It says so when you enable the module, too.
+- Modules check their settings in a new optional `mcp_check`, which the
+  start and `agentbox setup` both run. A setting of woodpecker or tabularis
+  that is not correct now removes what the module runs, as bb4 already
+  did and as an emptied setting does. Before, open sessions kept it. A
+  module left out for a setting or secret is removed at once, not at the
+  end of the start.
+- The warnings of the update check (an image or skill source that could
+  not be updated, a skill record that is not correct) are in the list
+  before the session too. "Could not check" is not: offline, it would ask
+  at every start.
+- When `dbhub.toml` is refused, the warning gives the reason, not "see the
+  output above".
+- The update check also reminds you when the base of an image that a
+  module builds here (bb4's `agentbox-bb4-devtools`) is a month old.
+- A module in `AB_MCP` that this version does not have keeps only the
+  sidecars that carry its mark, not all of those with its name prefix.
+- A module whose mcp.sh does not parse adds no "unknown key" warnings for
+  its settings.
 
 Action: rename `mcp__chrome-devtools__` to `mcp__bb4-devtools__` in
 permission rules (`.claude/settings*.json`) and anything else that names

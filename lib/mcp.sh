@@ -29,6 +29,15 @@
 #   MCP_IMAGES=()        images AB_UPGRADE pulls, on one line: agentbox
 #                        uninstall reads them as text, literal or "$VAR"
 #                        with a VAR="..." line of the module's own
+#   mcp_check()          optional: checks the module's settings once they
+#                        are read; prints what is wrong, one line each, and
+#                        nothing when they are fine. It must not start or
+#                        change anything: agentbox setup runs it too. A
+#                        problem leaves the module out of the start, and
+#                        what it runs goes (as for an emptied setting).
+#                        Keep MCP_CONFIG=(...) on one line: for a module
+#                        that does not parse, mcp_init reads it as text.
+#                        Code outside the functions runs without set -e.
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
 #                        its files through sidecar_copy, never directly. Name
@@ -65,21 +74,24 @@ mcp_find() {  # <name>: prints the module's directory; 1 if there is none
   return 1
 }
 
+# 0 if module <name>'s mcp.sh parses (bash -n). Checked once, by mcp_init
+# and agentbox setup: mcp_load sources it without asking again.
+mcp_parses() {  # <name>
+  local dir
+  dir="$(mcp_find "$1")" && bash -n "$dir/mcp.sh" 2>/dev/null
+}
+
 mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
-  unset -f mcp_start mcp_secret_value
+  unset -f mcp_start mcp_secret_value mcp_check
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   if ! MCP_DIR="$(mcp_find "$1")"; then
     echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
     exit 2
   fi
-  # A module that does not parse: 1. One that does is sourced, and its last
-  # line's status does not count (a false "[[ ... ]] && ..." there would
-  # end the start under set -e).
-  if ! bash -n "$MCP_DIR/mcp.sh" 2>/dev/null; then
-    echo "error: $MCP_DIR/mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)" >&2
-    return 1
-  fi
+  # Its last line's status does not count: a false "[[ ... ]] && ..." there
+  # would end the start under set -e. "|| true" turns set -e off for the
+  # whole file (README, Writing a module).
   # shellcheck source=/dev/null
   source "$MCP_DIR/mcp.sh" || true
   return 0
@@ -163,14 +175,18 @@ mcp_init() {
       ab_warn "MCP module '$name' left out of this session: this agentbox has no such module" \
               "(looked for $USER_MCP_DIR/$name/mcp.sh and mcp/$name/mcp.sh). Sidecars of it that run stay;" \
               "take it out of AB_MCP to have them removed"
-      MCP_SKIPPED+=("$name")
+      MCP_UNKNOWN+=("$name")
       continue
     fi
-    if ! mcp_load "$name" 2>/dev/null; then
+    if ! mcp_parses "$name"; then
       ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $(mcp_find "$name")/mcp.sh)"
       MCP_SKIPPED+=("$name")
+      # Its settings in config.env are known keys still: read as text, the
+      # MCP_CONFIG=(...) line, not "unknown key" warnings pointing elsewhere.
+      MCP_CONFIG_KEYS+=($(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$(mcp_find "$name")/mcp.sh"))
       continue
     fi
+    mcp_load "$name"
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done
@@ -179,19 +195,26 @@ mcp_init() {
 # A module that cannot run is left out of this start, with a warning: the
 # session starts without it rather than not at all. With "keep" (sidecars
 # and host services only: its MCP_EGRESS hosts leave squid), what it
-# already runs (marked with its name, lib/sidecars.sh) stays for the sessions using it: the cleanups skip MCP_SKIPPED. That is
-# for a start that failed. A setting or secret that is gone says access
-# should go, and so does an mcp_start that exits $MCP_TAKE_AWAY (mcp/dbhub,
-# mcp/woodpecker, mcp/tabularis): then its sidecars, their copies in the
-# cache and its host services are removed like a disabled module's.
+# already runs (marked with its name, lib/sidecars.sh) stays for the
+# sessions using it: the cleanups skip MCP_SKIPPED. That is for a start that
+# failed. Access goes for a setting or secret that is gone, a setting that
+# mcp_check refuses (check settings there, not in mcp_start), no URL, and an
+# mcp_start that exits $MCP_TAKE_AWAY (mcp/dbhub, mcp/woodpecker): then
+# mcp_skip removes its sidecars, their copies in the cache and its host
+# services at once, like a disabled module's.
 # The status of an mcp_start that wants its module's access taken away.
 # Not 1-3, which common tools use (systemctl is-active returns 3).
 MCP_TAKE_AWAY=97
 MCP_SKIPPED=()
+# Modules this version does not have: what of theirs carries their mark
+# stays, nothing by name alone (a typo "git" would keep ab-mcp-git-lab).
+MCP_UNKNOWN=()
 mcp_skip() {  # <name> <why> [keep]
   local n kept=()
-  [[ "${3:-}" == keep ]] && MCP_SKIPPED+=("$1")
   ab_warn "MCP module '$1' left out of this session: $2"
+  # Without "keep", what it runs goes now, not at the cleanup at the end of
+  # the start: a later step that fails would leave it serving.
+  if [[ "${3:-}" == keep ]]; then MCP_SKIPPED+=("$1"); else module_remove "$1"; fi
   for n in "${MCP_ENABLED[@]}"; do [[ "$n" == "$1" ]] || kept+=("$n"); done
   MCP_ENABLED=("${kept[@]}")
 }
@@ -210,6 +233,16 @@ mcp_check_secrets() {
         continue 2
       fi
     done
+    # Settings that do not check out: access goes, as for an emptied one.
+    if declare -F mcp_check >/dev/null; then
+      # Its status does not count, only what it prints.
+      why="$(mcp_check || true)"
+      why="$(printf '%s\n' "$why" | head -3 | paste -sd ';' -)"
+      if [[ -n "$why" ]]; then
+        mcp_skip "$name" "$why"
+        continue
+      fi
+    fi
     missing=()
     for s in ${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"}; do
       secret_exists "$s" || missing+=("$s")
@@ -342,9 +375,6 @@ mcp_start_all() {
     why="${why:-its start failed, see the output above}"
     if (( rc == MCP_TAKE_AWAY )); then
       mcp_skip "$name" "$why; what it ran is removed"
-      # Now, not at the cleanup at the end of the start: a later step that
-      # fails would leave them serving.
-      module_remove "$name"
       skipped=1; continue
     elif (( rc != 0 )); then
       mcp_skip "$name" "$why; open sessions keep what it already runs" keep
