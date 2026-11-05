@@ -4,6 +4,18 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.13
+
+- New shared sources for ponytail (DietrichGebert/ponytail), a "lazy
+  senior dev" prompt. The skill source `ponytail` gives both agents the
+  skill and `/ponytail-review`, `/ponytail-audit` and other commands.
+- The pi extension `ponytail` adds the rules at each turn of pi, with
+  `/ponytail lite|full|ultra|off`. Its commands call the skills, so enable
+  both sources for pi. agentbox does not enable them by default.
+- A skill source can set `SUBDIR`: the directory in its repository where
+  agentbox looks for skills. Use it for a repository that also keeps copies
+  of its skills for other agents, as ponytail does.
+
 ## v0.1.12
 
 - pi extensions from git. The sources are in `pi-extensions.d/` (shared:

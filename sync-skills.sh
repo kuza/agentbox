@@ -38,6 +38,9 @@
 # Environment:
 #   SKILLS_ONLY      comma-separated skill names to install, as named upstream
 #                    (without the prefix; default: all)
+#   SKILLS_SUBDIR    directory in the repository to look for skills in
+#                    (default: all of it); for a repository that has copies
+#                    of its skills for other agents (.openclaw/skills/...)
 #   SKILLS_PREFIX    prefix for installed skill names (default: the repo owner,
 #                    lowercased); set it empty to install names unchanged
 #   AB_SKILLS_DIR    target directory (default: ~/.config/agentbox/skills), same
@@ -101,8 +104,33 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf -- "${SCRATCH:?}"' EXIT
 VENDOR="$SCRATCH/repo"
 commit="$(git_source_clone "$URL" "$VENDOR" "$REF")"; commit="${commit:0:7}"
+# Its real path, as SEARCH is one: the messages cut this prefix off.
+VENDOR="$(realpath -- "$VENDOR")"
 
 # --- 2. collect skills ------------------------------------------------------
+SUBDIR="${SKILLS_SUBDIR:-}"
+SUBDIR="${SUBDIR%/}"
+[[ "$SUBDIR" == . ]] && SUBDIR=""
+SEARCH="$VENDOR"
+if [[ -n "$SUBDIR" ]]; then
+  if [[ ! "$SUBDIR" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+    echo "error: SKILLS_SUBDIR '$SUBDIR' must be a plain path in the repository" >&2
+    exit 1
+  fi
+  if [[ ! -d "$VENDOR/$SUBDIR" ]]; then
+    echo "error: $URL has no directory '$SUBDIR'" >&2
+    exit 1
+  fi
+  # Its real path, also through "..", a leading "/" or a symlink: it must
+  # stay in the clone. find searches the real path, as it does not follow
+  # a symlink at its start point.
+  SEARCH="$(realpath -- "$VENDOR/$SUBDIR")"
+  root="$(realpath -- "$VENDOR")"
+  if [[ "$SEARCH" != "$root" && "$SEARCH" != "$root"/* ]]; then
+    echo "error: SKILLS_SUBDIR '$SUBDIR' in $URL leads out of the repository" >&2
+    exit 1
+  fi
+fi
 declare -A src_of=()
 while IFS= read -r -d '' f; do
   dir="$(dirname "$f")"
@@ -118,10 +146,10 @@ while IFS= read -r -d '' f; do
     exit 1
   fi
   src_of[$name]="$dir"
-done < <(find "$VENDOR" -name SKILL.md -not -path '*/.git/*' -not -path '*/node_modules/*' -print0)
+done < <(find "$SEARCH" -name SKILL.md -not -path '*/.git/*' -not -path '*/node_modules/*' -print0)
 
 if (( ${#src_of[@]} == 0 )); then
-  echo "error: no SKILL.md found in $URL" >&2
+  echo "error: no SKILL.md found in $URL${SUBDIR:+ under $SUBDIR}" >&2
   exit 1
 fi
 
@@ -220,6 +248,7 @@ done
   echo "COMMIT=$(git -C "$VENDOR" rev-parse HEAD)"
   echo "SKILLS_ONLY=${SKILLS_ONLY:-}"
   echo "SKILLS_PREFIX=$PREFIX"
+  echo "SKILLS_SUBDIR=$SUBDIR"
   echo "SOURCE=${SKILLS_SOURCE:-}"
   echo "REF=${SKILLS_PIN:-}"
   printf 'SKILL=%s\n' "${installed[@]}"

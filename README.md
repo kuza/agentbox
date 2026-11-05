@@ -526,7 +526,7 @@ An extension is code that pi runs in the box, with the same access as the agent.
 
 | Directory | |
 |---|---|
-| `pi-extensions.d/<name>.conf` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts) |
+| `pi-extensions.d/<name>.conf` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`) |
 | `pi-extensions.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
 
 A source is `KEY=VALUE` data, and agentbox never runs it. `URL` is the git URL of the repository (required). `REF` is a branch, tag or commit to pin to (optional). Without `REF`, agentbox installs the default branch and offers updates.
@@ -600,7 +600,7 @@ A skill source is a git repository of skills, described in a small file:
 
 | Directory | |
 |---|---|
-| `skills.d/<name>.conf` | Shared sources, in git: `mattpocock` |
+| `skills.d/<name>.conf` | Shared sources, in git: `mattpocock`, `ponytail` |
 | `skills.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `skills.d/` replaces that source |
 
 `AB_SKILLS` in `config.env` lists the enabled sources (`AB_SKILLS=mattpocock`). Nobody gets skills that they did not enable. The `.conf` file is `KEY=VALUE` data, and agentbox never runs it. Each repository can be only one source. If two sources have the same `URL`, the start stops with an error. In that case, list the skills of both sources in one `ONLY`.
@@ -609,8 +609,11 @@ A skill source is a git repository of skills, described in a small file:
 |---|---|
 | `URL` | Required. Git URL of the repository |
 | `ONLY` | Comma-separated skills to install, as the repository names them. Default: all |
+| `SUBDIR` | The directory in the repository where agentbox looks for skills. Default: the full repository |
 | `PREFIX` | Prefix for the installed names. Default: the repository owner; `PREFIX=` (empty) for none |
 | `REF` | Branch, tag or commit to pin to. Default: the default branch, with updates that the [update check](#update-check) offers |
+
+Use `SUBDIR` for a repository that also keeps copies of its skills for other agents, as `ponytail` does (`SUBDIR=skills`). Without it, the same skill name occurs twice, and the sync stops.
 
 At each start, `run.sh` compares each enabled source with the installed skills. If they are different, `run.sh` syncs on the host: it installs a new source, syncs again a source whose `.conf` changed, and removes the skills of a source that you removed from `AB_SKILLS`. It syncs a changed source at the installed commit, so a changed `ONLY` does not also upgrade it. If nothing changed, there is no network access. If a sync fails, `run.sh` shows a warning, and the session starts with the installed skills.
 
@@ -618,7 +621,7 @@ Read the skills that you enable. Skills are instructions that the agent obeys, a
 
 ##### How a source is installed: `sync-skills.sh`
 
-`run.sh` calls `sync-skills.sh`, and you can also run it by hand for a one-off repository. It makes a new clone of the repository in a temporary directory. It does not keep the clone: the clone would be in a location that a session which mounts agentbox can write, and a hook planted in it would run on the host. It finds each directory with a `SKILL.md` at any depth. It copies each of these directories **flat** into `skills/<name>/`, because Claude Code looks only one level deep.
+`run.sh` calls `sync-skills.sh`, and you can also run it by hand for a one-off repository. It makes a new clone of the repository in a temporary directory. It does not keep the clone: the clone would be in a location that a session which mounts agentbox can write, and a hook planted in it would run on the host. It finds each directory with a `SKILL.md` at any depth, in the whole repository or under `SUBDIR`. It copies each of these directories **flat** into `skills/<name>/`, because Claude Code looks only one level deep.
 
 It records in `skills/.sources/<owner>__<repo>` what it installed, from where and at which commit. It removes skills that the upstream repository dropped or that you deselected. It never overwrites a skill that it did not install. It does not install a skill that contains symlinks: the link could point at a file on your host, and that file would then be in the skills of the agent.
 
@@ -627,6 +630,7 @@ Installed skills get a prefix, by default the repo owner: `code-review` from `ma
 ```bash
 ./sync-skills.sh <git-url> [ref]               # ref: branch, tag or commit; default: remote default branch
 SKILLS_ONLY=a,b,c ./sync-skills.sh <git-url>    # install a subset; upstream names, without the prefix
+SKILLS_SUBDIR=skills ./sync-skills.sh <git-url> # look for skills only in that directory of the repo
 SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX= (empty) installs names unchanged
 ./sync-skills.sh --remove <git-url>             # remove what it installed from there
 ```
@@ -1173,7 +1177,7 @@ You do not need it after you change a build setting (`AB_TRIVY`, `AB_PYTHON_VERS
 
 - **Sidecar images.** For each agentbox sidecar container, it asks the registry for the digest of the image tag and compares it with the local image. This is an anonymous `HEAD` request: it pulls nothing and does not count against the pull limit of Docker Hub. It also reports sidecars that still run an image older than the local one. If you answer `y`, it pulls the new images and removes the affected sidecars, and `run.sh` recreates them immediately. Other open sessions lose those MCP servers until they restart.
 - **pi extensions.** The same check for the sources in `AB_PI_EXTENSIONS` that are not pinned, from the records in `pi-extensions.sources/`. An extension is code, so it installs an update only on `y` at a terminal.
-- **Vendored skills.** `sync-skills.sh` records each sync in `skills/.sources/<owner>__<repo>` (URL, installed commit, `SKILLS_ONLY`, prefix, source, pin, installed names). The check compares that commit with the remote default branch (`git ls-remote`). It prints a GitHub compare link to read before you update. On `y`, it does the sync again with the same settings.
+- **Vendored skills.** `sync-skills.sh` records each sync in `skills/.sources/<owner>__<repo>` (URL, installed commit, `SKILLS_ONLY`, `SKILLS_SUBDIR`, prefix, source, pin, installed names). The check compares that commit with the remote default branch (`git ls-remote`). It prints a GitHub compare link to read before you update. On `y`, it does the sync again with the same settings.
 
 Without a terminal (`run.sh -p ...` from a script), it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it. `AB_UPGRADE=1` also skips it, because that updates the images anyway. To check without a session start, run `./check-updates.sh` alone.
 

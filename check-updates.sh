@@ -269,6 +269,7 @@ for f in "$SKILLS_DIR"/.sources/*; do
   slug="$(basename "$f")"
   git_source_offer "$f" "skills from $slug" \
     env SKILLS_ONLY="$(source_value "$f" SKILLS_ONLY)" SKILLS_PREFIX="$(source_value "$f" SKILLS_PREFIX)" \
+        SKILLS_SUBDIR="$(source_value "$f" SKILLS_SUBDIR)" \
         AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$(source_value "$f" SOURCE)" SKILLS_PIN="" \
         "$SCRIPT_DIR/sync-skills.sh"
 done

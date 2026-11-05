@@ -11,6 +11,8 @@
 # sync-skills.sh. Its .conf is KEY=VALUE data, never run:
 #   URL      git URL of the repository (required)
 #   ONLY     comma-separated skills to install, as named there (default: all)
+#   SUBDIR   directory in the repository to look for skills in (default:
+#            all of it)
 #   PREFIX   prefix for the installed names (default: the repository owner;
 #            empty: none)
 #   REF      branch, tag or commit to pin to (default: the default branch,
@@ -107,12 +109,13 @@ sorted_list() {  # <comma-separated list>: sorted, no spaces
 }
 
 skills_sources() {
-  local list="${AB_SKILLS:-}" name conf url only prefix ref slug sync want have at f src
+  local list="${AB_SKILLS:-}" name conf url only subdir prefix ref slug sync want have at f src
   local -A enabled_url=() source_of_slug=()
   for name in ${list//,/ }; do
     conf="$(source_conf AB_SKILLS "skill source" "$name" "${SKILLS_SOURCE_DIRS[@]}")" || exit 2
     url="$(source_value "$conf" URL)"
     only="$(sorted_list "$(source_value "$conf" ONLY)")"
+    subdir="$(source_value "$conf" SUBDIR)"; subdir="${subdir%/}"; [[ "$subdir" == . ]] && subdir=""
     slug="$(repo_slug "$url")"
     # The sync record is per repository: two sources of one repository
     # would overwrite each other's skills on every start.
@@ -131,10 +134,10 @@ skills_sources() {
     enabled_url[$name]="$url"
 
     sync="$SKILLS_DIR/.sources/$slug"
-    want="$url|$only|$prefix|$name|$ref"
+    want="$url|$only|$prefix|$name|$ref|$subdir"
     have=""
     if [[ -f "$sync" ]]; then
-      have="$(source_value "$sync" URL)|$(sorted_list "$(source_value "$sync" SKILLS_ONLY)")|$(source_value "$sync" SKILLS_PREFIX)|$(source_value "$sync" SOURCE)|$(source_value "$sync" REF)"
+      have="$(source_value "$sync" URL)|$(sorted_list "$(source_value "$sync" SKILLS_ONLY)")|$(source_value "$sync" SKILLS_PREFIX)|$(source_value "$sync" SOURCE)|$(source_value "$sync" REF)|$(source_value "$sync" SKILLS_SUBDIR)"
     fi
     [[ "$want" == "$have" ]] && continue
 
@@ -145,7 +148,7 @@ skills_sources() {
       at="$(source_value "$sync" COMMIT)"
     fi
     echo "agentbox: syncing skills from '$name' ($url)" >&2
-    if ! SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" \
+    if ! SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" SKILLS_SUBDIR="$subdir" AB_SKILLS_DIR="$SKILLS_DIR" \
          SKILLS_SOURCE="$name" SKILLS_PIN="$ref" \
          "$SCRIPT_DIR/sync-skills.sh" "$url" ${at:+"$at"} >&2; then
       ab_warn "could not sync skills from '$name'; continuing with what is installed"

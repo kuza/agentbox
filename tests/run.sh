@@ -2908,6 +2908,41 @@ test_sync_refuses_foreign_skill() {
   assert_eq "$(cat "$CFG/skills/acme-tdd/SKILL.md")" "mine"
 }
 
+test_sync_subdir() {
+  ss_setup "${FUNCNAME[0]}"
+  # A copy of a skill for another agent: the same name twice.
+  mkdir -p "$SRC/.other/skills/tdd" "$SRC/out"
+  cp "$SRC/eng/tdd/SKILL.md" "$SRC/.other/skills/tdd/"
+  ln -s ../.. "$SRC/out/up"
+  git -C "$SRC" -c user.name=t -c user.email=t@t add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m copies
+  ss_run
+  assert_rc 1
+  assert_out "skill name 'tdd' appears twice"
+  ss_run SKILLS_SUBDIR=eng
+  assert_rc 0
+  assert_eq "$(ls "$CFG/skills" | paste -sd' ' -)" "acme-review acme-tdd"
+  assert_file_has "$CFG/skills/.sources/acme__skills" '^SKILLS_SUBDIR=eng$'
+  local bad
+  for bad in ../x /etc eng/../.. out/up; do
+    ss_run SKILLS_SUBDIR="$bad"
+    assert_rc 1
+  done
+  ss_run SKILLS_SUBDIR=nope
+  assert_rc 1
+  assert_out "has no directory 'nope'"
+  # A symlink inside the clone works; "." is the whole repository.
+  ln -s eng "$SRC/linked"
+  git -C "$SRC" -c user.name=t -c user.email=t@t add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m link
+  ss_run SKILLS_SUBDIR=linked
+  assert_rc 0
+  assert_eq "$(ls "$CFG/skills" | paste -sd' ' -)" "acme-review acme-tdd"
+  ss_run SKILLS_SUBDIR=.
+  assert_rc 1
+  assert_out "skill name 'tdd' appears twice"
+}
+
 test_sync_bad_prefix() {
   ss_setup "${FUNCNAME[0]}"
   ss_run SKILLS_PREFIX=Bad
@@ -3182,6 +3217,27 @@ src_conf() {  # <dir: skills.d|skills.local.d> <name> <lines...>
   printf '%s\n' "$@" > "$dir/$name.conf"
 }
 installed() { ls "$CFG/skills" 2>/dev/null | grep -v '^graphify$' | paste -sd' ' -; }
+
+test_skills_source_subdir() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "URL=$SRC" "SUBDIR=misc" "PREFIX="
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(installed)" "notes"
+  # A changed SUBDIR syncs again.
+  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng" "PREFIX="
+  ab_run --
+  assert_eq "$(installed)" "review tdd"
+  # A trailing slash is the same SUBDIR: no new sync.
+  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng/" "PREFIX="
+  ab_run --
+  assert_no_out "syncing skills from 'acme'"
+  # The shared source: skills/ only, no prefix.
+  assert_file_has "$AB/skills.d/ponytail.conf" '^SUBDIR=skills$'
+  assert_file_has "$AB/skills.d/ponytail.conf" '^PREFIX=$'
+  assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^URL=https://github.com/DietrichGebert/ponytail$'
+}
 
 test_skills_source_installed_once() {
   ss_setup "${FUNCNAME[0]}"
