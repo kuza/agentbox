@@ -5,9 +5,12 @@
 #   - pins server behaviour headers so the client cannot change them.
 # Only variables defined in the environment are substituted; nginx's own
 # variables ($http_authorization, $proxy_host) are left untouched.
+# mcp.sh repeats the account block for each owner in GH_OWNERS, at
+# /o/<owner>/mcp with that owner's PAT (GH_PAT_<n>).
 server {
     listen 8080;
 
+    # --- account ---
     location = /mcp {
         if ($http_authorization != "Bearer ${GH_CALLER_TOKEN}") {
             return 401;
@@ -31,6 +34,7 @@ server {
         proxy_buffering off;
         proxy_read_timeout 300s;
     }
+    # --- end account ---
 
     location / { return 404; }
 }

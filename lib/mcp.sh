@@ -18,6 +18,11 @@
 #   MCP_SECRET_HELP=()   "<secret>: what to type for it", for agentbox setup
 #   mcp_secret_value()   optional: <secret> <what was typed> -> the secret's
 #                        value, when it is not stored as typed (graylog)
+#   MCP_SECRETS_BY_SETTING=()  optional, one line, one entry: "<KEY> <prefix>" for
+#                        secrets named <prefix><value> for each value of
+#                        setting KEY (github: "GH_OWNERS github_pat_");
+#                        agentbox uninstall --all removes those, read from
+#                        config.env
 #   MCP_OWN_SECRETS=()   podman secrets mcp_start creates itself; agentbox
 #                        uninstall --all removes them
 #   MCP_CALLER_SECRET    a caller token secret, generated on first use. The
@@ -85,7 +90,7 @@ mcp_parses() {  # <name> [its directory, from mcp_find]
 
 mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
   unset -f mcp_start mcp_secret_value mcp_check
-  MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=()
+  MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   if ! MCP_DIR="$(mcp_find "$1")"; then
     echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2

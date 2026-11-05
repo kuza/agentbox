@@ -62,6 +62,10 @@ setup_prime() {
       if [[ -n "${!k+x}" ]]; then printf '%s\tset %s\n' "$k" "${!k}"; else printf '%s\tunset\n' "$k"; fi
     done
   )
+  # Again, now with the values of config.env: a module's secrets can follow
+  # a setting there (github: GH_OWNERS).
+  SETUP_INFO=()
+  while IFS= read -r n; do setup_module_info "$n" >/dev/null || true; done < <(setup_names mcp "${MCP_DIRS[@]}")
   # Read anew after each save: a secret stored in a pipeline (setup_save)
   # does not reach this shell's list. A failed listing marks none, and the
   # menu still works on config.env.
@@ -87,7 +91,9 @@ setup_has_secret() {  # <secret>: 0 if it exists or one is pending
 # Records a change of <key>; one that brings back the file's value is no
 # change.
 setup_record() {  # <key> <"set <value>" | unset>
-  SETUP_PROBLEM=()   # a setting changed: setup_module_problem asks again
+  # A setting changed: the module info (its secrets can follow a setting)
+  # and setup_module_problem are made again.
+  SETUP_PROBLEM=(); SETUP_INFO=()
   if [[ "$2" == "$(setup_file_value "$1")" ]]; then unset "SETUP_NEW[$1]"; else SETUP_NEW[$1]="$2"; fi
 }
 
@@ -141,6 +147,10 @@ setup_module_info() {  # <name>: five lines
   if [[ -z "${SETUP_INFO[$1]+x}" ]]; then
     SETUP_INFO[$1]="$(
       mcp_parses "$1" || exit 1
+      mcp_load "$1" >/dev/null 2>&1 || exit 1
+      # Its settings as they are now in the menu, then again: secrets and
+      # servers can follow a setting (github: GH_OWNERS).
+      setup_apply_settings ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}
       mcp_load "$1" >/dev/null 2>&1 || exit 1
       echo "${MCP_DESCRIPTION:-}"
       echo "${MCP_CONFIG[*]-}"
@@ -268,6 +278,18 @@ setup_module_settings() {  # <name> [all]
   for s in $(setup_module_line "$1" 4); do setup_ask_secret "$s" "$1" ${2:+replace}; done
 }
 
+# Sets <keys> as they are now in the menu, saved or not; the environment
+# wins, as for run.sh. For a subshell that loads a module.
+setup_apply_settings() {  # <keys...>
+  local k v
+  for k in "$@"; do
+    [[ -n "${!k+x}" ]] && continue
+    v="$(setup_get "$k")"
+    [[ -n "$v" ]] && printf -v "$k" '%s' "$v"
+  done
+  return 0
+}
+
 # What run.sh would leave module <name> out for, with the settings as they
 # are now in the menu (saved or not; the environment wins, as for run.sh):
 # its mcp_check and its server lines (lib/mcp.sh), the first problem only.
@@ -282,11 +304,8 @@ setup_module_problem_now() {  # <name>
   (
     local k v
     setup_module_info "$1" >/dev/null || exit 0
-    for k in $(setup_module_line "$1" 2); do
-      [[ -n "${!k+x}" ]] && continue
-      v="$(setup_get "$k")"
-      [[ -n "$v" ]] && printf -v "$k" '%s' "$v"
-    done
+    # shellcheck disable=SC2046  # the keys are words
+    setup_apply_settings $(setup_module_line "$1" 2)
     for k in $(setup_module_line "$1" 3); do [[ -n "${!k:-}" ]] || exit 0; done
     mcp_load "$1" >/dev/null 2>&1
     if declare -F mcp_check >/dev/null; then
@@ -307,8 +326,10 @@ setup_module_warn() {  # <name>: says so when run.sh would leave it out
 # before they were saved.
 setup_module_forget() {  # <name>
   local k
-  for k in $(setup_module_line "$1" 2); do unset "SETUP_NEW[$k]"; done
   for k in $(setup_module_line "$1" 4); do unset "SETUP_SECRETS[$k]"; done
+  for k in $(setup_module_line "$1" 2); do unset "SETUP_NEW[$k]"; done
+  # Its settings changed: its info (secrets from a setting) is made again.
+  SETUP_INFO=(); SETUP_PROBLEM=()
 }
 
 # The status line under module <name>, number <n>: its settings, whether
@@ -533,7 +554,17 @@ setup_save() {
       return 1
     fi
   fi
+  # Only the secrets that a module lists now, enabled or not: one typed
+  # for an owner that was then taken out of GH_OWNERS is not stored, and
+  # the save says so.
+  local wanted=" " m
+  while IFS= read -r m; do wanted+="$(setup_module_line "$m" 4) "; done < <(setup_names mcp "${MCP_DIRS[@]}")
   for name in "${!SETUP_SECRETS[@]}"; do
+    if [[ "$wanted" != *" $name "* ]]; then
+      echo "agentbox: not storing the Podman secret $name: no module uses it now"
+      unset "SETUP_SECRETS[$name]"
+      continue
+    fi
     if printf '%s' "${SETUP_SECRETS[$name]}" | secret_store "$name"; then
       echo "agentbox: stored the Podman secret $name"
       unset "SETUP_SECRETS[$name]"

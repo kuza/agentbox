@@ -38,6 +38,27 @@ uninstall_names() {  # <MCP_ variable>
   done | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
 }
 
+# The Podman secrets whose names come from a setting of a module:
+# MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For github,
+# ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner that
+# config.env lists, in lowercase. Only those: a secret of the same prefix
+# that agentbox does not use stays.
+uninstall_secrets_by_setting() {
+  local f key prefix v vals list
+  for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
+    [[ -f "$f" ]] || continue
+    sed -n 's/^[[:space:]]*MCP_SECRETS_BY_SETTING=(\(.*\))[[:space:]]*$/\1/p' "$f" | tr -d "\"'"
+  done | while read -r key prefix; do
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ && -f "$CONFIG_FILE" ]] || continue
+    vals="$(unset "$key"; load_config "$CONFIG_FILE" 0 "$key"; printf '%s' "${!key:-}")"
+    IFS=', ' read -ra list <<<"$vals"
+    for v in ${list[@]+"${list[@]}"}; do
+      v="${v,,}"
+      [[ "$v" =~ ^[a-z0-9][a-z0-9-]*$ ]] && printf '%s%s\n' "$prefix" "$v"
+    done
+  done | sort -u
+}
+
 agentbox_uninstall() {
   local yes="" all="" reply secrets_too="" files_too="" a c v n id
   for a in "$@"; do
@@ -101,7 +122,8 @@ agentbox_uninstall() {
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then
-    for v in claude_oauth openai_api_key llm_openai_caller $(uninstall_names MCP_SECRETS) $(uninstall_names MCP_OWN_SECRETS) $(uninstall_names MCP_CALLER_SECRET); do
+    for v in claude_oauth openai_api_key llm_openai_caller $(uninstall_names MCP_SECRETS) $(uninstall_names MCP_OWN_SECRETS) \
+             $(uninstall_names MCP_CALLER_SECRET) $(uninstall_secrets_by_setting); do
       podman secret inspect "$v" >/dev/null 2>&1 && podman secret rm "$v" >/dev/null && echo "removed secret $v"
     done
   fi

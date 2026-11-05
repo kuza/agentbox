@@ -20,6 +20,12 @@ the steps a release needs from you, such as a rebuild.
   it.
 - A disabled pi extension whose install stopped before its record is
   removed too.
+- github: more resource owners. A fine-grained token has one owner, so
+  `GH_OWNERS` lists the others. Each owner gets its token
+  `github_pat_<owner>` and the MCP server `github-<owner>`. The same nginx
+  serves them and keeps the tokens. `agentbox setup` asks for the tokens.
+  `agentbox uninstall --all` removes the tokens of the owners in
+  `config.env`, and no other secret with that prefix.
 
 ## v0.1.12
 

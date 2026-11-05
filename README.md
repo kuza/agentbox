@@ -750,14 +750,26 @@ read -rsp 'GitHub token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman se
 
 Add `github` to `AB_MCP` in `config.env`. The next start creates `github_mcp_caller` and the sidecars. To check, use `/mcp` in a session.
 
+#### 3. More resource owners (optional)
+
+A fine-grained token has one resource owner: your account or one organization. If the agent works on repositories of more owners, it needs a token for each owner.
+
+1. List the other owners in `GH_OWNERS`, space- or comma-separated (`GH_OWNERS=myorg`). `github_pat` stays the token of the first owner.
+2. For each owner, create a token as in step 1, with that owner as resource owner.
+3. Store it as `github_pat_<owner>`, in lowercase (`github_pat_myorg`). `agentbox setup` asks for these secrets when you enter `GH_OWNERS`.
+
+For each owner, the agent gets one more MCP server, `github-<owner>`, with the same tools. The name of the server holds the owner, so the agent can select the server for a repository. pi also gets a description that names the owner; Claude Code gets only the names. The same nginx serves it at `/o/<owner>/mcp` and injects the token of that owner. The tokens stay in nginx, as the first one does. If the secret of one owner is missing, the start leaves out the full `github` module and names the secret. In Claude Code, permission rules are per server: `mcp__github__...` and `mcp__github-myorg__...`.
+
 #### Disable
 
 Remove `github` from `AB_MCP`, then:
 
 ```bash
 podman rm -f ab-mcp-github ab-mcp-github-srv
-podman secret rm github_pat github_mcp_caller
+podman secret rm github_pat github_mcp_caller   # and github_pat_<owner> for each owner
 ```
+
+`agentbox uninstall --all` removes the tokens of the owners that `GH_OWNERS` lists at that time. Remove the token of an owner that you took out of `GH_OWNERS` yourself.
 
 #### GitHub read access (optional)
 
@@ -1339,6 +1351,7 @@ agentbox . -p "say ok"
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
 | `AB_UPDATE_EVERY` | `21600` | The time in seconds between automatic agent updates, and between update checks for sidecar images and vendored skills |
 | `GH_TOOLSETS` | `context,repos,issues,pull_requests,actions` | A setting of the `github` module: the toolsets, which nginx enforces |
+| `GH_OWNERS` | unset | A setting of the `github` module: more resource owners, each with its own token `github_pat_<owner>` and server `github-<owner>`. See [GitHub (MCP)](#github-mcp) |
 | `TABULARIS_CMD` | `tabularis` | A setting of the `tabularis` module: the command that runs Tabularis on the host. `--mcp` is appended to it. Use only letters, digits, spaces and `_./:=+-` |
 | `WOODPECKER_URL` | unset | A setting of the `woodpecker` module: the base URL of Woodpecker, without `/api` (needs the `woodpecker_token` secret) |
 | `WOODPECKER_CA` | unset | A setting of the `woodpecker` module: a CA certificate file for an https Woodpecker that your own CA signed |

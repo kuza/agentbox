@@ -1067,6 +1067,40 @@ test_github_nginx_follows_its_server() {
   run_line ab-mcp-github >/dev/null || fail "nginx kept the old server's address"
 }
 
+test_github_more_owners() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github" "GH_OWNERS=MyOrg, other-org myorg"
+  secrets github_pat github_pat_myorg
+  # A token for each owner: without one, the module is left out.
+  ab_run --
+  assert_skipped github
+  assert_out "missing podman secrets github_pat_other-org"
+  secrets github_pat github_pat_myorg github_pat_other-org
+  ab_run --
+  assert_rc 0
+  # A server for each owner (lowercase, once), at its own path of nginx.
+  local j; j="$(cache mcp-claude.json)"
+  grep -q '"github": { "type": "http", "url": "http://ab-mcp-github:8080/mcp"' "$j" || fail "main server missing"
+  grep -q '"github-myorg": { "type": "http", "url": "http://ab-mcp-github:8080/o/myorg/mcp"' "$j" || fail "github-myorg missing"
+  grep -q '"github-other-org": .*/o/other-org/mcp"' "$j" || fail "github-other-org missing"
+  assert_eq "$(grep -c '"github' "$j")" 3 "servers"
+  # nginx gets each PAT under a numbered name, and a location for each.
+  run_line ab-mcp-github | grep -q -- '--secret github_pat_myorg,type=env,target=GH_PAT_1 ' || fail "PAT of myorg not GH_PAT_1"
+  run_line ab-mcp-github | grep -q -- '--secret github_pat_other-org,type=env,target=GH_PAT_2 ' || fail "PAT of other-org not GH_PAT_2"
+  local t; t="$(cache sidecars/ab-mcp-github/default.conf.template)"
+  assert_file_has "$t" 'location = /mcp \{'
+  assert_file_has "$t" 'location = /o/myorg/mcp \{'
+  assert_file_has "$t" 'location = /o/other-org/mcp \{'
+  assert_eq "$(grep -c 'Bearer \${GH_PAT_1}' "$t")" 1 "GH_PAT_1 uses"
+  assert_eq "$(grep -c 'Bearer \${GH_PAT}"' "$t")" 1 "GH_PAT uses"
+  assert_eq "$(grep -c 'location / { return 404; }' "$t")" 1 "catch-all"
+  # A name that is not a GitHub name: left out, with the reason.
+  sed -i 's/^GH_OWNERS=.*/GH_OWNERS=bad_name/' "$CFG/config.env"
+  ab_run --
+  assert_skipped github
+  assert_out "GH_OWNERS must hold GitHub user or organization names, got: bad_name"
+}
+
 # tab_setup <test name>: the tabularis module enabled, with stand-ins for
 # node, npm, Tabularis and ss on the host. The stub systemd has no cgroups, so ss
 # never shows the bridge as the one listening: the module would take any
@@ -2010,11 +2044,12 @@ test_uninstall() {
   make_release v1.0.0
   ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
   echo "AB_SERVICES=redis" >> "$CFG/config.env"
+  echo "GH_OWNERS=MyOrg" >> "$CFG/config.env"
   printf '%s\n' "ab-mcp-grafana x" "ab-claude-7 localhost/agentbox" "redis docker.io/library/redis:7" > "$STUB_DIR/running"
   printf '%s\n' ab-claude-home ab-cache mydata > "$STUB_DIR/volumes"
   printf '%s\n' ab-internal ab-services podman > "$STUB_DIR/networks"
   printf '%s\n' "ab-services redis" "ab-services ab-claude-7" > "$STUB_DIR/netconns"
-  printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine > "$STUB_DIR/secrets"
+  printf '%s\n' claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key github_pat_myorg github_pat_ci mine > "$STUB_DIR/secrets"
   printf '%s\n' "agentbox-mcp-tabularis.service agentbox host service [abc]" "agentbox-mine.service my own" > "$STUB_DIR/units"
   # A module of yours: indented, in single quotes, ${VAR}.
   mkdir -p "$CFG/mcp.local/mine"
@@ -2036,7 +2071,7 @@ test_uninstall() {
              ghcr.io/me/mine:1 ghcr.io/me/other:2; do
     grep -qx "podman rmi $img" "$STUB_DIR/calls" || fail "module image $img left behind"
   done
-  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key mine" "secrets kept"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key github_pat_myorg github_pat_ci mine" "secrets kept"
   assert_eq "$(awk '{ print $1 }' "$STUB_DIR/units")" "agentbox-mine.service" "host services left"
   [[ -e "$T/home/.local/share/agentbox" ]] && fail "installed versions left"
   [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
@@ -2048,7 +2083,9 @@ test_uninstall() {
   env HOME="$T/home" PATH="$T/bin:$PATH" bash "$T/rel/agentbox-v1.0.0/agentbox" uninstall --yes --all > "$T/out" 2>&1 < /dev/null
   RC=$?
   assert_rc 0
-  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "mine" "secrets after --all"
+  # The secret of an owner in GH_OWNERS goes; one of the same prefix that
+  # agentbox does not use stays.
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci mine" "secrets after --all"
   [[ -e "$CFG" ]] && fail "your files left after --all"
 }
 
@@ -2365,6 +2402,23 @@ test_setup_secrets() {
   setup_run "$grafana\nhttps://grafana.example\nsa-token\n$grafana\ns\n"
   [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret of a module turned off stored"
   grep -q GRAFANA_URL "$CFG/config.env" && fail "setting of a module turned off saved"
+  # github: the secret of an owner typed into GH_OWNERS is asked for at once.
+  local github; github="$(setup_entry github)"
+  setup_run "$github\n\nacme\nghp_main\nghp_acme\ns\n"
+  assert_out "secret github_pat_acme for github \(a fine-grained personal access token with resource owner acme"
+  grep -qx 'GH_OWNERS=acme' "$CFG/config.env" || fail "GH_OWNERS not saved"
+  assert_eq "$(cat "$STUB_DIR/secret-github_pat_acme")" "ghp_acme" "owner secret"
+  # The token of an owner in config.env shows as MISSING at once, before
+  # any change in the menu.
+  rm -f "$STUB_DIR/secret-github_pat_acme"; sed -i '/^github_pat_acme$/d' "$STUB_DIR/secrets"
+  setup_run "q\n"
+  assert_out "secret github_pat_acme: MISSING"
+  # An owner typed, its token typed, then the owner changed: that token is
+  # not stored, and the save says so.
+  rm -f "$STUB_DIR/secret-github_pat_old"
+  setup_run "e $github\n\nold\n\nghp_old\ne $github\n\nacme\n\n\ns\n"
+  [[ -e "$STUB_DIR/secret-github_pat_old" ]] && fail "the token of a dropped owner stored"
+  assert_out "not storing the Podman secret github_pat_old"
   # e on an entry that is not a module changes nothing.
   local anthropic; anthropic="$(setup_entry anthropic)"
   setup_run "e $anthropic\ns\n"
