@@ -108,21 +108,15 @@ commit="$(git_source_clone "$URL" "$VENDOR" "$REF")"; commit="${commit:0:7}"
 VENDOR="$(realpath -- "$VENDOR")"
 
 # --- 2. collect skills ------------------------------------------------------
-SUBDIR="${SKILLS_SUBDIR:-}"
-SUBDIR="${SUBDIR%/}"
-[[ "$SUBDIR" == . ]] && SUBDIR=""
+SUBDIR="$(git_source_subdir "${SKILLS_SUBDIR:-}")" || exit 1
 SEARCH="$VENDOR"
 if [[ -n "$SUBDIR" ]]; then
-  if [[ ! "$SUBDIR" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-    echo "error: SKILLS_SUBDIR '$SUBDIR' must be a plain path in the repository" >&2
-    exit 1
-  fi
   if [[ ! -d "$VENDOR/$SUBDIR" ]]; then
     echo "error: $URL has no directory '$SUBDIR'" >&2
     exit 1
   fi
-  # Its real path, also through "..", a leading "/" or a symlink: it must
-  # stay in the clone. find searches the real path, as it does not follow
+  # Its real path, also through ".." or a symlink: it must stay in the
+  # clone. find searches the real path, as it does not follow
   # a symlink at its start point.
   SEARCH="$(realpath -- "$VENDOR/$SUBDIR")"
   root="$(realpath -- "$VENDOR")"

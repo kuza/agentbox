@@ -15,6 +15,11 @@ the steps a release needs from you, such as a rebuild.
 - A skill source can set `SUBDIR`: the directory in its repository where
   agentbox looks for skills. Use it for a repository that also keeps copies
   of its skills for other agents, as ponytail does.
+- A pi extension source can set `NEEDS_SKILLS`. The start of pi says so
+  when such a skill source is not in `AB_SKILLS`. The ponytail extension sets
+  it.
+- A disabled pi extension whose install stopped before its record is
+  removed too.
 
 ## v0.1.12
 

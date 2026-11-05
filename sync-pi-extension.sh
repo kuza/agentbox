@@ -53,10 +53,11 @@ source "$SCRIPT_DIR/lib/git-source.sh"
 EXT_DIR="$USER_PI_EXTENSIONS"
 # In each extension that this script installs, written before the move: a
 # directory with it is ours, also if the script stopped before the record.
-# It holds the name, so a copy under another name is not ours.
+# It holds the name on its first line, so a copy under another name is not
+# ours, and SOURCE=1 when run.sh installed it, as the record does.
 MARK=".agentbox-source"
 ours() {  # <name>: 0 if <pi-extensions>/<name> has our mark for that name
-  [[ "$(cat -- "$EXT_DIR/$1/$MARK" 2>/dev/null)" == "$1" ]]
+  [[ "$(head -n1 -- "$EXT_DIR/$1/$MARK" 2>/dev/null)" == "$1" ]]
 }
 REC_DIR="$USER_PI_EXTENSIONS_RECORDS"
 
@@ -157,7 +158,7 @@ fi
 mkdir -p "$EXT_DIR" "$REC_DIR"
 STAGE="$(mktemp -d "$AB_HOME_DIR/.pi-extension-$name.XXXXXX")"
 cp -R -- "$SRC/." "$STAGE/"
-printf '%s\n' "$name" > "$STAGE/$MARK"
+printf '%s\nSOURCE=%s\n' "$name" "${AB_PI_EXTENSIONS_SOURCE:-}" > "$STAGE/$MARK"
 chmod 755 "$STAGE"
 # The old one goes aside first, then the new one moves in: mv -T fails
 # rather than put the stage inside a directory that another start made.

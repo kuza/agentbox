@@ -224,14 +224,15 @@ fi
 # The record <file> of a git source (URL, COMMIT, REF) against the default
 # branch of its remote. On a newer commit, it says so with a link to the
 # changes, and on a yes it runs <command...> with the URL as the last
-# argument. A record without a URL (from before URLs were recorded) and a
-# pinned one (REF in its .conf: updated by changing it) are skipped.
+# argument. A pinned record (REF in its .conf: updated by changing it) is
+# skipped. So is a skill record without a URL, from before URLs were
+# recorded; a pi extension record always has one.
 git_source_offer() {  # <file> <what> <command...>
-  local f="$1" what="$2" url commit latest
+  local f="$1" what="$2" url commit latest link=""
   shift 2
   url="$(source_value "$f" URL)"
   commit="$(source_value "$f" COMMIT)"
-  [[ -z "$url" ]] && return 0
+  [[ -z "$url" && "$what" == "skills from "* ]] && return 0
   [[ -n "$(source_value "$f" REF)" ]] && return 0
   # A plain ssh URL works for the install, but the check needs https.
   if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
@@ -253,9 +254,9 @@ git_source_offer() {  # <file> <what> <command...>
   [[ "$latest" == "$commit" ]] && return 0
 
   say "update available: $what, ${commit:0:7} -> ${latest:0:7}"
-  [[ "$url" == https://github.com/* ]] \
-    && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
-  if ask "read the changes; update $what?"; then
+  [[ "$url" == https://github.com/* ]] && link="${url%.git}/compare/${commit:0:7}...${latest:0:7}"
+  [[ -z "$link" ]] || say "  changes: $link"
+  if ask "${link:+read the changes; }update $what?"; then
     "$@" "$url" >&2 || { ab_warn "update of $what failed"; outstanding=1; }
   else
     outstanding=1

@@ -21,13 +21,21 @@
 PI_EXTENSION_SOURCE_DIRS=("$USER_PI_EXTENSIONS_CONF_DIR" "$SCRIPT_DIR/pi-extensions.d")
 
 pi_extensions_sources() {
-  local list="${AB_PI_EXTENSIONS:-}" name conf url ref rec want have f
+  local list="${AB_PI_EXTENSIONS:-}" name conf url ref rec want have f d need skills
   local -A enabled=()
   for name in ${list//,/ }; do
     conf="$(source_conf AB_PI_EXTENSIONS "pi extension source" "$name" "${PI_EXTENSION_SOURCE_DIRS[@]}")" || exit 2
     url="$(source_value "$conf" URL)"
     ref="$(source_value "$conf" REF)"
     enabled[$name]=1
+    # An extension that needs the skills of a skill source (NEEDS_SKILLS):
+    # its commands fail without them, the rest works. A plain message, not
+    # a warning that asks before each session.
+    for need in $(source_value "$conf" NEEDS_SKILLS | tr ',' ' '); do
+      skills="${AB_SKILLS:-}"
+      [[ " ${skills//,/ } " == *" $need "* ]] \
+        || echo "agentbox: pi extension '$name' uses the skill source '$need'; without it in AB_SKILLS, its skill commands fail" >&2
+    done
     rec="$USER_PI_EXTENSIONS_RECORDS/$name"
     want="$url|$ref|1"
     have=""
@@ -47,6 +55,17 @@ pi_extensions_sources() {
     [[ "$name" =~ $AB_NAME_RE ]] || continue
     [[ -n "${enabled[$name]:-}" ]] && continue
     [[ "$(source_value "$f" SOURCE)" == 1 ]] || continue
+    echo "agentbox: removing pi extension '$name', no longer in AB_PI_EXTENSIONS" >&2
+    "$SCRIPT_DIR/sync-pi-extension.sh" --remove "$name" >&2 \
+      || ab_warn "could not remove pi extension '$name'"
+  done
+  # The same for one whose install stopped before its record: its mark says
+  # that the start installed it.
+  for d in "$USER_PI_EXTENSIONS"/*/; do
+    name="$(basename "$d")"
+    [[ "$name" =~ $AB_NAME_RE && -z "${enabled[$name]:-}" && ! -f "$USER_PI_EXTENSIONS_RECORDS/$name" ]] || continue
+    [[ "$(head -n1 -- "$d.agentbox-source" 2>/dev/null)" == "$name" ]] || continue
+    grep -qx 'SOURCE=1' "$d.agentbox-source" 2>/dev/null || continue
     echo "agentbox: removing pi extension '$name', no longer in AB_PI_EXTENSIONS" >&2
     "$SCRIPT_DIR/sync-pi-extension.sh" --remove "$name" >&2 \
       || ab_warn "could not remove pi extension '$name'"

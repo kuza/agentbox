@@ -28,3 +28,20 @@ git_source_clone() {  # <url> <dir> [ref]
     || return 1
   printf '%s\n' "$commit"
 }
+
+# A SUBDIR of a skill source as one form, for sync-skills.sh and the record
+# comparison in lib/skills.sh: without a trailing "/", and empty for the
+# whole repository ("" or "."). 1 for a value that is not a plain path, or
+# that names nothing ("/").
+git_source_subdir() {  # <value>: prints the normal form
+  local d="$1"
+  [[ -z "$d" ]] && return 0
+  if [[ ! "$d" =~ ^[A-Za-z0-9._/-]+$ || "$d" =~ ^/+$ ]]; then
+    echo "error: SUBDIR '$d' must be a plain path in the repository" >&2
+    return 1
+  fi
+  # All trailing slashes: the result is the same when it runs on it again.
+  while [[ "$d" == */ ]]; do d="${d%/}"; done
+  [[ "$d" == . ]] && return 0
+  printf '%s\n' "$d"
+}

@@ -529,7 +529,7 @@ An extension is code that pi runs in the box, with the same access as the agent.
 | `pi-extensions.d/<name>.conf` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`) |
 | `pi-extensions.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
 
-A source is `KEY=VALUE` data, and agentbox never runs it. `URL` is the git URL of the repository (required). `REF` is a branch, tag or commit to pin to (optional). Without `REF`, agentbox installs the default branch and offers updates.
+A source is `KEY=VALUE` data, and agentbox never runs it. `URL` is the git URL of the repository (required). `REF` is a branch, tag or commit to pin to (optional). Without `REF`, agentbox installs the default branch and offers updates. `NEEDS_SKILLS` lists the skill sources that the extension uses (optional). If one of them is not in `AB_SKILLS`, the start of pi says so. The extension works without it, but its skill commands fail.
 
 `AB_PI_EXTENSIONS` in `config.env` lists the enabled sources (`AB_PI_EXTENSIONS=pi-subagents pi-prompt-history`), or you enable them in `agentbox setup`. At the next start of pi (not of Claude Code), `sync-pi-extension.sh` installs each source into `pi-extensions/<name>/` on the host:
 

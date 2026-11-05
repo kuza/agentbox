@@ -115,7 +115,10 @@ skills_sources() {
     conf="$(source_conf AB_SKILLS "skill source" "$name" "${SKILLS_SOURCE_DIRS[@]}")" || exit 2
     url="$(source_value "$conf" URL)"
     only="$(sorted_list "$(source_value "$conf" ONLY)")"
-    subdir="$(source_value "$conf" SUBDIR)"; subdir="${subdir%/}"; [[ "$subdir" == . ]] && subdir=""
+    if ! subdir="$(git_source_subdir "$(source_value "$conf" SUBDIR)")"; then
+      echo "error: $conf: SUBDIR" >&2
+      exit 2
+    fi
     slug="$(repo_slug "$url")"
     # The sync record is per repository: two sources of one repository
     # would overwrite each other's skills on every start.

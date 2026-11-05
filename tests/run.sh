@@ -2928,6 +2928,9 @@ test_sync_subdir() {
     ss_run SKILLS_SUBDIR="$bad"
     assert_rc 1
   done
+  ss_run SKILLS_SUBDIR=/
+  assert_rc 1
+  assert_out "must be a plain path"
   ss_run SKILLS_SUBDIR=nope
   assert_rc 1
   assert_out "has no directory 'nope'"
@@ -3142,6 +3145,22 @@ test_pi_extension_sources_at_start() {
   [[ -e "$(px_dir myext)" ]] && fail "disabled extension left"
   [[ -f "$(px_dir handmade)/index.ts" ]] || fail "an extension copied by hand removed"
   [[ -f "$(px_dir byhand)/src/index.ts" ]] || fail "an extension installed with the script by hand removed"
+  # Its install stopped before the record, then disabled: the mark says that
+  # the start installed it, so the start removes it.
+  config "AB_PI_EXTENSIONS=myext"
+  ab_run AB_AGENT=pi --
+  rm "$(px_rec myext)"
+  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  ab_run AB_AGENT=pi --
+  [[ -e "$(px_dir myext)" ]] && fail "a disabled extension without its record left"
+  [[ -f "$(px_dir byhand)/src/index.ts" ]] || fail "an extension installed by hand removed"
+  # NEEDS_SKILLS: a warning while that skill source is not enabled.
+  printf '%s\n' "URL=$SRC" "NEEDS_SKILLS=acme" > "$CFG/pi-extensions.local.d/myext.conf"
+  config "AB_PI_EXTENSIONS=myext"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_out "pi extension 'myext' uses the skill source 'acme'"
+  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
   # An unknown source stops the start, like AB_SKILLS.
   config "AB_PI_EXTENSIONS=nope"
   ab_run AB_AGENT=pi --
@@ -3178,6 +3197,12 @@ test_updates_pi_extension_behind() {
   cu_run
   assert_no_out "pi extension myext"
   assert_out "evil: bad URL or COMMIT, skipped"
+  # A pi extension record without a URL: a warning (a skill record from
+  # before URLs were recorded is skipped quietly).
+  printf '%s\n' "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" > "$CFG/pi-extensions.sources/nourl"
+  cu_run
+  assert_out "nourl: bad URL or COMMIT, skipped"
+  rm "$CFG/pi-extensions.sources/nourl"
   # An ssh URL: no check, and no warning for the list before the session.
   rm "$CFG/pi-extensions.sources/evil"
   printf '%s\n' "URL=git@github.com:acme/pi-ext.git" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" > "$CFG/pi-extensions.sources/myext"
@@ -3229,14 +3254,15 @@ test_skills_source_subdir() {
   src_conf skills.d acme "URL=$SRC" "SUBDIR=eng" "PREFIX="
   ab_run --
   assert_eq "$(installed)" "review tdd"
-  # A trailing slash is the same SUBDIR: no new sync.
-  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng/" "PREFIX="
+  # Trailing slashes are the same SUBDIR: no new sync.
+  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng//" "PREFIX="
   ab_run --
   assert_no_out "syncing skills from 'acme'"
   # The shared source: skills/ only, no prefix.
   assert_file_has "$AB/skills.d/ponytail.conf" '^SUBDIR=skills$'
   assert_file_has "$AB/skills.d/ponytail.conf" '^PREFIX=$'
   assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^URL=https://github.com/DietrichGebert/ponytail$'
+  assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^NEEDS_SKILLS=ponytail$'
 }
 
 test_skills_source_installed_once() {
