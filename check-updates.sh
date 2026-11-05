@@ -24,6 +24,9 @@
 #            default <script dir>/skills), compares the installed commit with
 #            the remote default branch (git ls-remote). Sources pinned to a ref
 #            are skipped.
+#   pi extensions  the same, for the records sync-pi-extension.sh keeps in
+#            <AB_HOME>/pi-extensions.sources/<name>; an update is installed
+#            only on a yes at a terminal.
 #
 # The skills directory is writable from a session that has the agentbox
 # directory mounted, so the records are parsed as data, never sourced, and
@@ -229,6 +232,11 @@ for f in "$SKILLS_DIR"/.sources/*; do
   [[ -z "$url" ]] && continue
   # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
   [[ -n "$(source_value "$f" REF)" ]] && continue
+  # A plain ssh URL works for the sync, but the check needs https.
+  if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    say "skills from $slug: updates are checked only for an https:// URL"
+    continue
+  fi
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     ab_warn "$f: bad URL or COMMIT, skipped"
     continue
@@ -253,6 +261,62 @@ for f in "$SKILLS_DIR"/.sources/*; do
     SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$source_name" SKILLS_PIN="" \
       "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
       || { ab_warn "skills update from $slug failed"; outstanding=1; }
+  else
+    outstanding=1
+    interactive || pending=1
+  fi
+done
+
+# --- pi extensions ----------------------------------------------------------
+
+# Installed by sync-pi-extension.sh for AB_PI_EXTENSIONS: their records. An
+# extension is code that pi runs: the update is offered with the link to its
+# changes, and installed only on a yes. Not at a start of another agent
+# (run.sh passes it): only a start of pi installs them. Run by hand, the
+# enabled list comes from config.env.
+if [[ -z "${AB_PI_EXTENSIONS_ENABLED+x}" && -f "$CONFIG_FILE" ]]; then
+  AB_PI_EXTENSIONS_ENABLED=" $(unset AB_PI_EXTENSIONS; load_config "$CONFIG_FILE" 0 AB_PI_EXTENSIONS; echo "${AB_PI_EXTENSIONS:-}") "
+fi
+pi_records=("$USER_PI_EXTENSIONS_RECORDS"/*)
+[[ "${AB_CHECK_AGENT:-pi}" == pi ]] || pi_records=()
+for f in ${pi_records[@]+"${pi_records[@]}"}; do
+  name="$(basename "$f")"
+  [[ "$name" =~ $AB_NAME_RE ]] || continue
+  url="$(source_value "$f" URL)"
+  commit="$(source_value "$f" COMMIT)"
+  # Pinned to a ref (REF in its .conf): updated by changing it.
+  [[ -n "$(source_value "$f" REF)" ]] && continue
+  # Run by run.sh: a source that is disabled now, whose record only the next
+  # start of pi removes, gets no offer.
+  if [[ -n "${AB_PI_EXTENSIONS_ENABLED+x}" && "$(source_value "$f" SOURCE)" == 1 ]]; then
+    list="${AB_PI_EXTENSIONS_ENABLED//,/ }"
+    [[ "$list" == *" $name "* ]] || continue
+  fi
+  # A plain ssh URL works for the install, but the check needs https.
+  if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    say "pi extension $name: updates are checked only for an https:// URL"
+    continue
+  fi
+  if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+    ab_warn "$f: bad URL or COMMIT, skipped"
+    continue
+  fi
+  latest="$(cd / && GIT_TERMINAL_PROMPT=0 timeout "$TIMEOUT" \
+              git ls-remote "$url" HEAD 2>/dev/null | awk '{print $1}')"
+  if [[ -z "$latest" ]]; then
+    say "warning: could not check $url for updates"
+    outstanding=1
+    continue
+  fi
+  [[ "$latest" == "$commit" ]] && continue
+
+  say "update available: pi extension $name, ${commit:0:7} -> ${latest:0:7}"
+  [[ "$url" == https://github.com/* ]] \
+    && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
+  if ask "read the changes; update pi extension $name?"; then
+    AB_PI_EXTENSIONS_PIN="" AB_PI_EXTENSIONS_SOURCE="$(source_value "$f" SOURCE)" \
+      "$SCRIPT_DIR/sync-pi-extension.sh" "$name" "$url" >&2 \
+      || { ab_warn "update of pi extension $name failed"; outstanding=1; }
   else
     outstanding=1
     interactive || pending=1

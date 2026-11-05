@@ -51,8 +51,8 @@ setup() {
   CFG="$T/home/.config/agentbox"
   mkdir -p "$AB" "$CFG" "$STUB_DIR" "$T/bin" "$T/home" "$REPO/.git/hooks"
   touch "$REPO/.git/config"
-  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/Containerfile" "$ROOT/Containerfile.squid" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" \
-        "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$AB/" 2>/dev/null
+  cp -R "$ROOT/run.sh" "$ROOT/pi.sh" "$ROOT/Containerfile" "$ROOT/Containerfile.squid" "$ROOT/lib" "$ROOT/mcp" "$ROOT/squid.conf" "$ROOT/egress.d" "$ROOT/skills.d" "$ROOT/pi-extensions.d" \
+        "$ROOT/check-updates.sh" "$ROOT/sync-skills.sh" "$ROOT/sync-pi-extension.sh" "$AB/" 2>/dev/null
   # Files the copy could not read (a sidecar's private SELinux label on the
   # source, see README, Troubleshooting) get a placeholder.
   local f
@@ -2915,6 +2915,252 @@ test_sync_bad_prefix() {
   assert_out "must be lowercase"
 }
 
+
+# --- pi extensions (AB_PI_EXTENSIONS, sync-pi-extension.sh) -----------------
+
+# A local "remote" repository at $T/src/acme/pi-ext: a pi extension with a
+# package.json manifest; with "deps", also a dependency and its lock file.
+px_setup() {  # <test name> [deps]
+  setup "$1"
+  local src="$T/src/acme/pi-ext"
+  mkdir -p "$src/src"
+  echo 'export default function () {}' > "$src/src/index.ts"
+  if [[ "${2:-}" == deps ]]; then
+    printf '%s\n' '{ "name": "pi-ext", "dependencies": { "nanoid": "^5" }, "pi": { "extensions": ["./src/index.ts"] } }' > "$src/package.json"
+    printf '%s\n' '{ "lockfileVersion": 3, "packages": { "": { "name": "pi-ext" },' \
+      '"node_modules/nanoid": { "version": "5.1.6", "resolved": "https://registry.npmjs.org/nanoid/-/nanoid-5.1.6.tgz" } } }' \
+      > "$src/package-lock.json"
+    echo 'registry=https://evil.example/' > "$src/.npmrc"
+  else
+    printf '%s\n' '{ "name": "pi-ext", "pi": { "extensions": ["./src/index.ts"] } }' > "$src/package.json"
+  fi
+  git -C "$src" init -q -b main
+  git -C "$src" -c user.name=t -c user.email=t@t add -A
+  git -C "$src" -c user.name=t -c user.email=t@t commit -q -m init
+  SRC="$src"
+  # Fake npm: records its arguments and whether the repo's .npmrc is gone.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "{ echo \"npm \$*\"; [[ -e .npmrc ]] && echo 'npmrc present'; } >> '$T/npm-calls'" \
+    'mkdir -p node_modules/nanoid && echo x > node_modules/nanoid/index.js' > "$T/bin/npm"
+  chmod +x "$T/bin/npm"
+}
+px_run() {  # <args...>
+  env HOME="$T/home" PATH="$T/bin:$PATH" bash "$AB/sync-pi-extension.sh" "$@" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+px_dir() { echo "$CFG/pi-extensions/$1"; }
+px_rec() { echo "$CFG/pi-extensions.sources/$1"; }
+
+test_pi_extension_sync_installs_and_records() {
+  px_setup "${FUNCNAME[0]}"
+  px_run myext "$SRC"
+  assert_rc 0
+  [[ -f "$(px_dir myext)/src/index.ts" && -f "$(px_dir myext)/package.json" ]] || fail "extension not installed"
+  [[ -e "$(px_dir myext)/.git" ]] && fail ".git installed"
+  assert_file_has "$(px_rec myext)" "^URL=$SRC\$"
+  assert_file_has "$(px_rec myext)" '^COMMIT=[0-9a-f]{40}$'
+  assert_file_has "$(px_rec myext)" '^REF=$'
+  [[ -e "$T/npm-calls" ]] && fail "npm run for an extension without dependencies"
+  # The record is outside the directory that sessions mount.
+  [[ -e "$CFG/pi-extensions/.sources" ]] && fail "record inside the mounted directory"
+  px_run --remove myext
+  assert_rc 0
+  [[ -e "$(px_dir myext)" || -e "$(px_rec myext)" ]] && fail "not removed"
+  return 0
+}
+
+test_pi_extension_sync_dependencies() {
+  px_setup "${FUNCNAME[0]}" deps
+  px_run myext "$SRC"
+  assert_rc 0
+  assert_file_has "$T/npm-calls" '^npm ci --omit=dev --omit=peer --ignore-scripts --no-bin-links'
+  assert_file_lacks "$T/npm-calls" 'npmrc present'
+  [[ -f "$(px_dir myext)/node_modules/nanoid/index.js" ]] || fail "dependencies not installed"
+  # A dependency from git: npm would run its scripts on the host. Refused.
+  sed -i 's#https://registry.npmjs.org/nanoid/-/nanoid-5.1.6.tgz#git+https://evil.example/x.git\#abc#' "$SRC/package-lock.json"
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -am "git dependency"
+  : > "$T/npm-calls"
+  px_run myext "$SRC"
+  assert_rc 1
+  assert_out "node_modules/nanoid is not from the npm registry: git\+https://evil.example"
+  [[ -s "$T/npm-calls" ]] && fail "npm run for a lock file with a git dependency"
+  # Dependencies without a lock file: refused, the installed one stays.
+  git -C "$SRC" rm -q package-lock.json
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m "no lock"
+  px_run myext "$SRC"
+  assert_rc 1
+  assert_out "has dependencies but no package-lock.json"
+  [[ -f "$(px_dir myext)/package-lock.json" ]] || fail "the installed version was replaced by a failed sync"
+}
+
+test_pi_extension_sync_ref_branch_tag_commit() {
+  px_setup "${FUNCNAME[0]}"
+  local first; first="$(git -C "$SRC" rev-parse HEAD)"
+  git -C "$SRC" tag v1
+  git -C "$SRC" branch stable
+  echo 'export const x = 2' > "$SRC/src/two.ts"
+  git -C "$SRC" -c user.name=t -c user.email=t@t add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m two
+  local r
+  for r in stable v1 "$first"; do
+    px_run "x-$r" "$SRC" "$r"
+    assert_rc 0
+    [[ -e "$(px_dir "x-$r")/src/two.ts" ]] && fail "REF $r: the newer commit installed"
+    assert_file_has "$(px_rec "x-$r")" "^COMMIT=$first\$"
+  done
+  # Installed again over itself: no copy nested inside.
+  px_run x-stable "$SRC" stable
+  assert_rc 0
+  compgen -G "$(px_dir x-stable)/.pi-extension-*" >/dev/null && fail "stage nested in the extension"
+  # An option for git is refused.
+  px_run evil "--upload-pack=touch $T/pwned"
+  assert_rc 1
+  [[ -e "$T/pwned" ]] && fail "a URL ran as a git option"
+  # A relative local path works.
+  (cd "$(dirname "$SRC")" && env HOME="$T/home" PATH="$T/bin:$PATH" bash "$AB/sync-pi-extension.sh" rel ./pi-ext > "$T/out" 2>&1)
+  [[ -f "$(px_dir rel)/src/index.ts" ]] || fail "a relative path did not work: $(cat "$T/out")"
+  px_run evil "$SRC" "--orphan=x"
+  assert_rc 1
+  assert_out "must not start with '-'"
+  return 0
+}
+
+test_pi_extension_sync_refusals() {
+  px_setup "${FUNCNAME[0]}"
+  # Not a pi extension.
+  printf '%s\n' '{ "name": "x" }' > "$SRC/package.json"
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -am "not one"
+  px_run myext "$SRC"
+  assert_rc 1
+  assert_out "is not a pi extension"
+  # A symlink.
+  printf '%s\n' '{ "name": "x", "pi": { "extensions": ["./src/index.ts"] } }' > "$SRC/package.json"
+  ln -s /etc/passwd "$SRC/src/leak"
+  git -C "$SRC" -c user.name=t -c user.email=t@t add -A
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m link
+  px_run myext "$SRC"
+  assert_rc 1
+  assert_out "contains symlinks"
+  # A directory of yours with that name is not replaced.
+  git -C "$SRC" rm -q src/leak
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -m unlink
+  mkdir -p "$(px_dir mine)"; echo mine > "$(px_dir mine)/index.ts"
+  px_run mine "$SRC"
+  assert_rc 1
+  assert_out "was not installed by agentbox"
+  assert_eq "$(cat "$(px_dir mine)/index.ts")" mine "your extension"
+  px_run --remove mine
+  [[ -f "$(px_dir mine)/index.ts" ]] || fail "--remove took an extension without a record"
+  # An empty dependencies object needs neither a lock file nor npm.
+  printf '%s\n' '{ "name": "x", "dependencies": {}, "pi": { "extensions": ["./src/index.ts"] } }' > "$SRC/package.json"
+  git -C "$SRC" -c user.name=t -c user.email=t@t commit -q -am "empty deps"
+  rm -f "$T/bin/npm"
+  px_run other "$SRC"
+  assert_rc 0
+  # No staging directory left next to the mounted one.
+  compgen -G "$CFG/.pi-extension-*" >/dev/null && fail "staging directory left"
+  return 0
+}
+
+test_pi_extension_sources_at_start() {
+  px_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/pi-extensions.local.d"
+  printf '%s\n' "URL=$SRC" > "$CFG/pi-extensions.local.d/myext.conf"
+  mkdir -p "$(px_dir handmade)"; echo x > "$(px_dir handmade)/index.ts"
+  config "AB_PI_EXTENSIONS=myext"
+  # A start of Claude Code does not install them: only pi mounts them.
+  ab_run --
+  assert_rc 0
+  [[ -e "$(px_dir myext)" ]] && fail "installed at a start of Claude Code"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  [[ -f "$(px_dir myext)/src/index.ts" ]] || fail "enabled source not installed at the start"
+  # Unchanged: not installed again.
+  ab_run AB_AGENT=pi --
+  assert_no_out "installing pi extension"
+  # A pin installs it again at that ref, recorded as the pin.
+  local first; first="$(git -C "$SRC" rev-parse HEAD)"
+  printf '%s\n' "URL=$SRC" "REF=$first" > "$CFG/pi-extensions.local.d/myext.conf"
+  ab_run AB_AGENT=pi --
+  assert_out "installing pi extension 'myext'"
+  assert_file_has "$(px_rec myext)" "^REF=$first\$"
+  # Its directory gone: installed again.
+  rm -rf "$(px_dir myext)"
+  ab_run AB_AGENT=pi --
+  [[ -f "$(px_dir myext)/src/index.ts" ]] || fail "a removed directory not installed again"
+  # One that you installed with the script yourself.
+  px_run byhand "$SRC"
+  # Disabled: removed; one copied in by hand or installed by hand stays.
+  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  [[ -e "$(px_dir myext)" ]] && fail "disabled extension left"
+  [[ -f "$(px_dir handmade)/index.ts" ]] || fail "an extension copied by hand removed"
+  [[ -f "$(px_dir byhand)/src/index.ts" ]] || fail "an extension installed with the script by hand removed"
+  # An unknown source stops the start, like AB_SKILLS.
+  config "AB_PI_EXTENSIONS=nope"
+  ab_run AB_AGENT=pi --
+  assert_out "no pi extension source 'nope'"
+  return 0
+}
+
+test_pi_extension_shared_sources_and_setup() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  local n
+  for n in pi-subagents pi-prompt-history; do
+    assert_file_has "$AB/pi-extensions.d/$n.conf" '^URL=https://github.com/'
+  done
+  echo "AB_MCP=" > "$CFG/config.env"
+  local sub; sub="$(setup_entry pi-subagents)"
+  [[ -n "$sub" ]] || fail "pi-subagents not in the setup menu"
+  setup_run "$sub\ns\n"
+  assert_out "pi extensions \(AB_PI_EXTENSIONS"
+  grep -qx 'AB_PI_EXTENSIONS=pi-subagents' "$CFG/config.env" || fail "not saved: $(grep AB_PI_EXTENSIONS "$CFG/config.env")"
+}
+
+test_updates_pi_extension_behind() {
+  cu_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/pi-extensions.sources"
+  printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" > "$CFG/pi-extensions.sources/myext"
+  printf 'b%.0s' {1..40} > "$T/remote_head"
+  cu_run
+  assert_out "update available: pi extension myext, aaaaaaa -> bbbbbbb"
+  assert_out "github.com/acme/pi-ext/compare/aaaaaaa...bbbbbbb"
+  # Pinned: not checked. A bad record: skipped.
+  sed -i 's/^REF=$/REF=v1/' "$CFG/pi-extensions.sources/myext"
+  printf '%s\n' "URL=ext::sh -c id" "COMMIT=abc" > "$CFG/pi-extensions.sources/evil"
+  cu_run
+  assert_no_out "pi extension myext"
+  assert_out "evil: bad URL or COMMIT, skipped"
+  # An ssh URL: no check, and no warning for the list before the session.
+  rm "$CFG/pi-extensions.sources/evil"
+  printf '%s\n' "URL=git@github.com:acme/pi-ext.git" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" > "$CFG/pi-extensions.sources/myext"
+  : > "$T/warnings"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_WARNINGS_TO="$T/warnings" \
+      bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_out "pi extension myext: updates are checked only for an https:// URL"
+  [[ -s "$T/warnings" ]] && fail "an ssh URL warns before each session: $(cat "$T/warnings")"
+  # A start of Claude Code: no offer (only a start of pi installs them).
+  printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" > "$CFG/pi-extensions.sources/myext"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_AGENT=claude \
+      bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_no_out "pi extension myext"
+  # Run by hand: the enabled list comes from config.env.
+  printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" "SOURCE=1" > "$CFG/pi-extensions.sources/myext"
+  config "AB_PI_EXTENSIONS=other"
+  cu_run
+  assert_no_out "pi extension myext"
+  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  # Disabled (run.sh passes the enabled list): no offer.
+  printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" "SOURCE=1" > "$CFG/pi-extensions.sources/myext"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_PI_EXTENSIONS_ENABLED=" other " \
+      bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_no_out "pi extension myext"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_PI_EXTENSIONS_ENABLED=" myext " \
+      bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
+  assert_out "update available: pi extension myext"
+}
 
 # --- run.sh: skill sources (AB_SKILLS) --------------------------------------
 

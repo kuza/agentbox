@@ -56,6 +56,8 @@ URL="${1:?usage: $0 [--remove] <git-url> [ref]}"
 REF="${2:-}"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
+# shellcheck source=lib/git-source.sh
+source "$SCRIPT_DIR/lib/git-source.sh"
 SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 
 # owner__repo from https://github.com/owner/repo(.git) or git@github.com:owner/repo(.git)
@@ -98,12 +100,7 @@ mkdir -p "$SKILLS_DIR/.sources"
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf -- "${SCRATCH:?}"' EXIT
 VENDOR="$SCRATCH/repo"
-git -c core.hooksPath=/dev/null clone --quiet "$URL" "$VENDOR"
-if [[ -z "$REF" ]]; then
-  REF="origin/$(git -C "$VENDOR" symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^origin/##')"
-fi
-git -C "$VENDOR" -c core.hooksPath=/dev/null -c advice.detachedHead=false checkout --quiet --detach "$REF"
-commit="$(git -C "$VENDOR" rev-parse --short HEAD)"
+commit="$(git_source_clone "$URL" "$VENDOR" "$REF")"; commit="${commit:0:7}"
 
 # --- 2. collect skills ------------------------------------------------------
 declare -A src_of=()

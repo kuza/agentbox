@@ -516,9 +516,31 @@ Read-only is important here. pi runs the extensions that it finds in its agent d
 
 pi runs with `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0`: pi does not refresh the model catalog, check the version or send telemetry.
 
-#### Extensions and skills
+#### Skills
 
-MCP support is built into pi, so you do not need an extension. `pi install ...` does not work in the box (no npm access), and it would also write to the agent directory. To allow an extension, read it. Then copy it into `~/.config/agentbox/pi-extensions/` on the host. Skills come from `skills/`, the same directory that Claude Code uses, so `sync-skills.sh` covers both agents. Some skills for Claude Code use Claude-specific features such as subagents, and these skills can work less well in pi.
+Skills come from `skills/`, the same directory that Claude Code uses, so `sync-skills.sh` covers both agents. Some skills for Claude Code use Claude-specific features such as subagents, and these skills can work less well in pi. MCP support is built into pi, so you do not need an extension for it.
+
+#### pi extensions
+
+An extension is code that pi runs in the box, with the same access as the agent. Read an extension before you enable it. `pi install ...` does not work in the box (no npm access), and it would also write to the agent directory. agentbox installs extensions on the host instead.
+
+| Directory | |
+|---|---|
+| `pi-extensions.d/<name>.conf` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts) |
+| `pi-extensions.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
+
+A source is `KEY=VALUE` data, and agentbox never runs it. `URL` is the git URL of the repository (required). `REF` is a branch, tag or commit to pin to (optional). Without `REF`, agentbox installs the default branch and offers updates.
+
+`AB_PI_EXTENSIONS` in `config.env` lists the enabled sources (`AB_PI_EXTENSIONS=pi-subagents pi-prompt-history`), or you enable them in `agentbox setup`. At the next start of pi (not of Claude Code), `sync-pi-extension.sh` installs each source into `pi-extensions/<name>/` on the host:
+
+1. It makes a new clone in a scratch directory, with hooks off, and checks out `REF` or the default branch.
+2. It checks that the repository is a pi extension: a `package.json` with `pi.extensions`, or an `index.ts` or `index.js`. It refuses symlinks.
+3. If the extension has `dependencies`, it runs `npm ci --omit=dev --omit=peer --ignore-scripts --no-bin-links` from its `package-lock.json`. This needs Node.js and npm on the host. It removes the `.npmrc` of the repository first. pi gives the extension its own packages (the peer dependencies). It refuses an extension with dependencies and no lock file. It also refuses a package that is not from the npm registry (a git, file or link dependency). The reason: npm runs the scripts of a git dependency on the host, also with `--ignore-scripts`.
+4. It copies the result into place in one step, so a session that starts meanwhile does not see a part of it. It records the URL, the commit and the pin in `pi-extensions.sources/<name>`, outside the directory that sessions mount.
+
+A source that you disable is removed at the next start of pi. agentbox does not change or remove an extension that you copied into `pi-extensions/` yourself, or one that you installed with `sync-pi-extension.sh <name> <url>` yourself. The update check offers new commits of a source that is not pinned (see [Update check](#update-check)). It needs an `https://` URL for this. Read the changes before you answer `y`.
+
+`pi-subagents` can give a sub-agent a git worktree in `/tmp` of the box, if the model or an agent file asks for `isolation: "worktree"` (the default is off). If that sub-agent changed files, it commits them (`git commit --no-verify`) on a new branch `pi-agent-<id>` in your repo. To prevent this in a repo, put `{ "worktreeIsolation": false }` in its `.pi/subagents.json`, or use `/agents` → Settings → Worktree isolation. To remove leftover worktree entries on the host, use `git worktree prune`.
 
 ### Memory and personal instructions
 
@@ -1150,6 +1172,7 @@ You do not need it after you change a build setting (`AB_TRIVY`, `AB_PYTHON_VERS
 `run.sh` runs `check-updates.sh` before it starts the sidecars, at most every `AB_UPDATE_EVERY` seconds (6 hours by default, the same interval as the agent update). Only a check that finds nothing to update resets the interval. If you decline an update, an update fails or a registry is not reachable, the next session checks again. If you run `./check-updates.sh` manually, it always checks.
 
 - **Sidecar images.** For each agentbox sidecar container, it asks the registry for the digest of the image tag and compares it with the local image. This is an anonymous `HEAD` request: it pulls nothing and does not count against the pull limit of Docker Hub. It also reports sidecars that still run an image older than the local one. If you answer `y`, it pulls the new images and removes the affected sidecars, and `run.sh` recreates them immediately. Other open sessions lose those MCP servers until they restart.
+- **pi extensions.** The same check for the sources in `AB_PI_EXTENSIONS` that are not pinned, from the records in `pi-extensions.sources/`. An extension is code, so it installs an update only on `y` at a terminal.
 - **Vendored skills.** `sync-skills.sh` records each sync in `skills/.sources/<owner>__<repo>` (URL, installed commit, `SKILLS_ONLY`, prefix, source, pin, installed names). The check compares that commit with the remote default branch (`git ls-remote`). It prints a GitHub compare link to read before you update. On `y`, it does the sync again with the same settings.
 
 Without a terminal (`run.sh -p ...` from a script), it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it. `AB_UPGRADE=1` also skips it, because that updates the images anyway. To check without a session start, run `./check-updates.sh` alone.
@@ -1316,6 +1339,7 @@ agentbox . -p "say ok"
 | `WOODPECKER_URL` | unset | A setting of the `woodpecker` module: the base URL of Woodpecker, without `/api` (needs the `woodpecker_token` secret) |
 | `WOODPECKER_CA` | unset | A setting of the `woodpecker` module: a CA certificate file for an https Woodpecker that your own CA signed |
 | `TABULARIS_PORT` | `47821` | A setting of the `tabularis` module: the port of supergateway on `127.0.0.1` |
+| `AB_PI_EXTENSIONS` | unset | The pi extension sources to enable, space- or comma-separated, from `pi-extensions.local.d/` or `pi-extensions.d/`. See [pi extensions](#pi-extensions) |
 | `AB_SKILLS` | unset | The skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | The personal skills directory, mounted read-only |
 | `AB_GRAPHIFY_EXTRAS` | unset | The graphify extras baked into the image, for example `[terraform]`. If you change the value, the next start rebuilds the image. See [Graphify](#graphify) |
@@ -1359,6 +1383,8 @@ AB_RESTART=1 agentbox .
 | `agents/AGENTS.md.example` | The template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | The Claude Code status line (context use, subscription limits, cost). A copy from `~/.cache/agentbox/session/claude/` is mounted read-only. Claude Code uses it unless you set your own `statusLine`. See [Status line](#status-line) |
 | `skills.d/<name>.conf` | Skill sources (git repositories of skills), which you enable with `AB_SKILLS`. See [Skills](#skills) |
+| `pi-extensions.d/<name>.conf` | pi extension sources, which you enable with `AB_PI_EXTENSIONS`. See [pi extensions](#pi-extensions) |
+| `sync-pi-extension.sh` | Installs a pi extension from git on the host. See [pi extensions](#pi-extensions) |
 | `completions/agentbox.bash` | Tab completion for the `agentbox` command in bash. The install and every update link it into `~/.local/share/bash-completion/completions/` |
 | `git-guard` | A host-side git wrapper, installed as `~/.local/bin/git`. It refuses repositories whose `.git` a session redirected. See [Git on the host](#git-on-the-host) |
 | `sync-skills.sh` | Host-side: it installs a skills repository into your `skills/` (flattened). `run.sh` runs it for the sources in `AB_SKILLS` |
@@ -1379,7 +1405,9 @@ Your settings and data are apart from the code, in `~/.config/agentbox/` (`AB_HO
 | `skills.local.d/<name>.conf` | Your own skill sources |
 | `egress.local.d/<name>.conf` | Your own egress groups |
 | `dbhub.toml` | Optional. The databases of the `dbhub` module, with their passwords; mode 600. See [DBHub (MCP)](#dbhub-mcp) |
-| `pi-extensions/` | The pi extensions that you allow, mounted read-only. The first start of pi creates it empty |
+| `pi-extensions/` | The pi extensions that you allow, mounted read-only. The first start of pi creates it empty. agentbox installs the sources in `AB_PI_EXTENSIONS` here |
+| `pi-extensions.local.d/<name>.conf` | Your own pi extension sources |
+| `pi-extensions.sources/` | The records of the pi extensions that agentbox installed (URL, commit, pin) |
 
 `run.sh` refuses to mount a repo that is, contains or lies inside one of these: agentbox's code, any installed version (`~/.local/share/agentbox`; `agentbox rollback` would run it), git-guard (`~/.local/bin/git`), or the files above. Otherwise, a session could change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
 

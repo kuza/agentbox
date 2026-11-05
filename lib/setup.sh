@@ -2,7 +2,7 @@
 #
 #   agentbox setup
 #
-# Lists the MCP modules, skill sources and egress groups there are (shared
+# Lists the MCP modules, skill sources, pi extensions and egress groups there are (shared
 # and yours) with what is enabled, and agentbox's other settings; under a
 # module, its settings and secrets and whether they are there. A number
 # toggles an entry or edits a value; turning a module on asks for its
@@ -16,7 +16,7 @@
 #
 # Reads its input from stdin: piped input works too, for scripts and tests.
 # Needs SCRIPT_DIR and lib/paths.sh, config.sh, sidecars.sh (secret_store),
-# mcp.sh, egress.sh and skills.sh.
+# mcp.sh, egress.sh, skills.sh and pi-extensions.sh.
 
 # Settings in "Other": key, kind (flag: 1 or unset; else a value), text.
 SETUP_OTHER=(
@@ -96,7 +96,7 @@ same_set() {  # <list> <list>
   [[ "$(tr ', ' '\n\n' <<<"$1" | sed '/^$/d' | sort -u)" == "$(tr ', ' '\n\n' <<<"$2" | sed '/^$/d' | sort -u)" ]]
 }
 
-# Records a list key (AB_MCP, AB_SKILLS, AB_EGRESS) toggled to <list>: no
+# Records a list key (AB_MCP, AB_SKILLS, AB_PI_EXTENSIONS, AB_EGRESS) toggled to <list>: no
 # change if it names what the file gives, the default for an unset key
 # included, so an unset AB_EGRESS keeps following EGRESS_DEFAULT.
 setup_record_list() {  # <key> <list> [default when unset]
@@ -341,14 +341,16 @@ setup_entries() {
   # Line by line: a file name with a space or * stays one name.
   while IFS= read -r n; do [[ "$n" == context7 ]] || echo "mcp $n"; done < <(setup_names mcp "${MCP_DIRS[@]}")
   while IFS= read -r n; do echo "skill $n"; done < <(setup_names conf "${SKILLS_SOURCE_DIRS[@]}")
+  while IFS= read -r n; do echo "piext $n"; done < <(setup_names conf "${PI_EXTENSION_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "egress $n"; done < <(setup_names conf "${EGRESS_DIRS[@]}")
   for n in "${SETUP_OTHER[@]}"; do echo "other ${n%% *}"; done
 }
 
 setup_show() {
-  local i=0 kind name section="" mcp skills egress mark text status entry key env="" keys=() more=()
+  local i=0 kind name section="" mcp skills piexts egress mark text status entry key env="" keys=() more=()
   mcp="$(setup_get AB_MCP)"; mcp="${mcp//,/ }"
   skills="$(setup_get AB_SKILLS)"; skills="${skills//,/ }"
+  piexts="$(setup_get AB_PI_EXTENSIONS)"; piexts="${piexts//,/ }"
   egress="$(setup_get AB_EGRESS "$EGRESS_DEFAULT")"; egress="${egress//,/ }"
   echo
   echo -n "agentbox setup: $CONFIG_FILE"
@@ -362,6 +364,7 @@ setup_show() {
       case "$kind" in
         mcp) echo "MCP servers (AB_MCP; context7 is always on)" ;;
         skill) echo "Skill sources (AB_SKILLS)" ;;
+        piext) echo "pi extensions (AB_PI_EXTENSIONS; code that pi runs: read it first)" ;;
         egress) echo "Hosts the agent may reach (AB_EGRESS)" ;;
         other) echo "Other settings" ;;
       esac
@@ -379,6 +382,8 @@ setup_show() {
            fi ;;
       skill) in_list "$name" "$skills" && mark="[x]" || mark="[ ]"
              text="$(setup_describe skill "$(conf_find "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
+      piext) in_list "$name" "$piexts" && mark="[x]" || mark="[ ]"
+             text="$(setup_describe skill "$(conf_find "$name" "${PI_EXTENSION_SOURCE_DIRS[@]}")")" ;;
       egress) in_list "$name" "$egress" && mark="[x]" || mark="[ ]"
               text="$(setup_describe egress "$(conf_find "$name" "${EGRESS_DIRS[@]}")")" ;;
       other)
@@ -426,6 +431,9 @@ setup_act() {  # <number> [e]
     skill)
       list="$(setup_get AB_SKILLS)"; list="${list//,/ }"
       setup_record_list AB_SKILLS "$(list_toggle "$name" "$list")" ;;
+    piext)
+      list="$(setup_get AB_PI_EXTENSIONS)"; list="${list//,/ }"
+      setup_record_list AB_PI_EXTENSIONS "$(list_toggle "$name" "$list")" ;;
     egress)
       list="$(setup_get AB_EGRESS "$EGRESS_DEFAULT")"; list="${list//,/ }"
       setup_record_list AB_EGRESS "$(list_toggle "$name" "$list")" "$EGRESS_DEFAULT"

@@ -67,7 +67,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
-for lib in config release images agent sidecars mcp egress forward services skills trivy session; do
+for lib in config release images agent sidecars mcp egress forward services skills pi-extensions trivy session; do
   # shellcheck source=/dev/null
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
@@ -160,6 +160,7 @@ services_attach
 # ---------------------------------------------------------------------------
 if [[ "${AB_CHECK_UPDATES:-1}" != 0 && "${AB_UPGRADE:-}" != 1 ]]; then
   AB_UPDATE_EVERY="$UPDATE_EVERY" AB_SKILLS_DIR="$SKILLS_DIR" AB_WARNINGS_TO="$AB_WARNINGS_FILE" \
+    AB_PI_EXTENSIONS_ENABLED=" ${AB_PI_EXTENSIONS:-} " AB_CHECK_AGENT="$AGENT" \
     "$SCRIPT_DIR/check-updates.sh" --if-due
 fi
 
@@ -213,6 +214,8 @@ forward_cleanup
 images_cleanup
 
 skills_prepare
+# Only pi mounts them: a start of Claude Code does not clone or run npm.
+if [[ "$AGENT" == pi ]]; then pi_extensions_sources; fi
 session_git_env
 session_tz
 session_git_mounts

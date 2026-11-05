@@ -9,6 +9,8 @@
 #   skills.local.d/    your skill sources
 #   egress.local.d/    your egress groups
 #   pi-extensions/     pi extensions you allow
+#   pi-extensions.local.d/  your pi extension sources
+#   pi-extensions.sources/  records of the pi extensions agentbox installed
 #
 # The code can then be replaced (a new version, a fresh clone) without
 # touching them, and a session that has agentbox's code open as its repo
@@ -28,6 +30,15 @@ USER_MCP_DIR="$AB_HOME_DIR/mcp.local"
 USER_SKILLS_SOURCES_DIR="$AB_HOME_DIR/skills.local.d"
 USER_EGRESS_DIR="$AB_HOME_DIR/egress.local.d"
 USER_PI_EXTENSIONS="$AB_HOME_DIR/pi-extensions"
+# The records of the extensions that sync-pi-extension.sh installed, and
+# your extension sources. The records are outside the extensions directory,
+# which sessions mount.
+USER_PI_EXTENSIONS_RECORDS="$AB_HOME_DIR/pi-extensions.sources"
+USER_PI_EXTENSIONS_CONF_DIR="$AB_HOME_DIR/pi-extensions.local.d"
+
+# Names of MCP modules, egress groups, skill sources and pi extensions, and
+# of the servers of a module.
+AB_NAME_RE='^[a-z0-9][a-z0-9-]*$'
 
 # Old place next to the code -> name in AB_HOME.
 OLD_PLACES=(
