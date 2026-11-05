@@ -219,27 +219,28 @@ if release_installed; then
   fi
 fi
 
-# --- skills -----------------------------------------------------------------
+# --- skills and pi extensions -----------------------------------------------
 
-
-SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
-shopt -s nullglob
-for f in "$SKILLS_DIR"/.sources/*; do
-  slug="$(basename "$f")"
+# The record <file> of a git source (URL, COMMIT, REF) against the default
+# branch of its remote. On a newer commit, it says so with a link to the
+# changes, and on a yes it runs <command...> with the URL as the last
+# argument. A record without a URL (from before URLs were recorded) and a
+# pinned one (REF in its .conf: updated by changing it) are skipped.
+git_source_offer() {  # <file> <what> <command...>
+  local f="$1" what="$2" url commit latest
+  shift 2
   url="$(source_value "$f" URL)"
   commit="$(source_value "$f" COMMIT)"
-  # A record from before URLs were recorded: nothing to compare with.
-  [[ -z "$url" ]] && continue
-  # Pinned to a ref (REF in skills.d/<source>.conf): updated by changing it.
-  [[ -n "$(source_value "$f" REF)" ]] && continue
-  # A plain ssh URL works for the sync, but the check needs https.
+  [[ -z "$url" ]] && return 0
+  [[ -n "$(source_value "$f" REF)" ]] && return 0
+  # A plain ssh URL works for the install, but the check needs https.
   if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    say "skills from $slug: updates are checked only for an https:// URL"
-    continue
+    say "$what: updates are checked only for an https:// URL"
+    return 0
   fi
   if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
     ab_warn "$f: bad URL or COMMIT, skipped"
-    continue
+    return 0
   fi
   # Outside any repository, so no local git config or hooks apply.
   latest="$(cd / && GIT_TERMINAL_PROMPT=0 timeout "$TIMEOUT" \
@@ -247,33 +248,34 @@ for f in "$SKILLS_DIR"/.sources/*; do
   if [[ -z "$latest" ]]; then
     say "warning: could not check $url for updates"
     outstanding=1
-    continue
+    return 0
   fi
-  [[ "$latest" == "$commit" ]] && continue
+  [[ "$latest" == "$commit" ]] && return 0
 
-  say "update available: skills from $slug, ${commit:0:7} -> ${latest:0:7}"
+  say "update available: $what, ${commit:0:7} -> ${latest:0:7}"
   [[ "$url" == https://github.com/* ]] \
     && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
-  only="$(source_value "$f" SKILLS_ONLY)"
-  prefix="$(source_value "$f" SKILLS_PREFIX)"
-  source_name="$(source_value "$f" SOURCE)"
-  if ask "update skills from $slug?"; then
-    SKILLS_ONLY="$only" SKILLS_PREFIX="$prefix" AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$source_name" SKILLS_PIN="" \
-      "$SCRIPT_DIR/sync-skills.sh" "$url" >&2 \
-      || { ab_warn "skills update from $slug failed"; outstanding=1; }
+  if ask "read the changes; update $what?"; then
+    "$@" "$url" >&2 || { ab_warn "update of $what failed"; outstanding=1; }
   else
     outstanding=1
     interactive || pending=1
   fi
+}
+
+SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
+shopt -s nullglob
+for f in "$SKILLS_DIR"/.sources/*; do
+  slug="$(basename "$f")"
+  git_source_offer "$f" "skills from $slug" \
+    env SKILLS_ONLY="$(source_value "$f" SKILLS_ONLY)" SKILLS_PREFIX="$(source_value "$f" SKILLS_PREFIX)" \
+        AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$(source_value "$f" SOURCE)" SKILLS_PIN="" \
+        "$SCRIPT_DIR/sync-skills.sh"
 done
 
-# --- pi extensions ----------------------------------------------------------
-
-# Installed by sync-pi-extension.sh for AB_PI_EXTENSIONS: their records. An
-# extension is code that pi runs: the update is offered with the link to its
-# changes, and installed only on a yes. Not at a start of another agent
-# (run.sh passes it): only a start of pi installs them. Run by hand, the
-# enabled list comes from config.env.
+# pi extensions: an extension is code that pi runs, so an update needs a
+# yes. Not at a start of another agent (run.sh passes it): only a start of
+# pi installs them. Run by hand, the enabled list comes from config.env.
 if [[ -z "${AB_PI_EXTENSIONS_ENABLED+x}" && -f "$CONFIG_FILE" ]]; then
   AB_PI_EXTENSIONS_ENABLED=" $(unset AB_PI_EXTENSIONS; load_config "$CONFIG_FILE" 0 AB_PI_EXTENSIONS; echo "${AB_PI_EXTENSIONS:-}") "
 fi
@@ -282,45 +284,15 @@ pi_records=("$USER_PI_EXTENSIONS_RECORDS"/*)
 for f in ${pi_records[@]+"${pi_records[@]}"}; do
   name="$(basename "$f")"
   [[ "$name" =~ $AB_NAME_RE ]] || continue
-  url="$(source_value "$f" URL)"
-  commit="$(source_value "$f" COMMIT)"
-  # Pinned to a ref (REF in its .conf): updated by changing it.
-  [[ -n "$(source_value "$f" REF)" ]] && continue
-  # Run by run.sh: a source that is disabled now, whose record only the next
-  # start of pi removes, gets no offer.
+  # A source that is disabled now, whose record only the next start of pi
+  # removes, gets no offer.
   if [[ -n "${AB_PI_EXTENSIONS_ENABLED+x}" && "$(source_value "$f" SOURCE)" == 1 ]]; then
     list="${AB_PI_EXTENSIONS_ENABLED//,/ }"
     [[ "$list" == *" $name "* ]] || continue
   fi
-  # A plain ssh URL works for the install, but the check needs https.
-  if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    say "pi extension $name: updates are checked only for an https:// URL"
-    continue
-  fi
-  if [[ ! "$url" =~ ^https://[A-Za-z0-9./_-]+$ || ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
-    ab_warn "$f: bad URL or COMMIT, skipped"
-    continue
-  fi
-  latest="$(cd / && GIT_TERMINAL_PROMPT=0 timeout "$TIMEOUT" \
-              git ls-remote "$url" HEAD 2>/dev/null | awk '{print $1}')"
-  if [[ -z "$latest" ]]; then
-    say "warning: could not check $url for updates"
-    outstanding=1
-    continue
-  fi
-  [[ "$latest" == "$commit" ]] && continue
-
-  say "update available: pi extension $name, ${commit:0:7} -> ${latest:0:7}"
-  [[ "$url" == https://github.com/* ]] \
-    && say "  changes: ${url%.git}/compare/${commit:0:7}...${latest:0:7}"
-  if ask "read the changes; update pi extension $name?"; then
-    AB_PI_EXTENSIONS_PIN="" AB_PI_EXTENSIONS_SOURCE="$(source_value "$f" SOURCE)" \
-      "$SCRIPT_DIR/sync-pi-extension.sh" "$name" "$url" >&2 \
-      || { ab_warn "update of pi extension $name failed"; outstanding=1; }
-  else
-    outstanding=1
-    interactive || pending=1
-  fi
+  git_source_offer "$f" "pi extension $name" \
+    env AB_PI_EXTENSIONS_PIN="" AB_PI_EXTENSIONS_SOURCE="$(source_value "$f" SOURCE)" \
+        "$SCRIPT_DIR/sync-pi-extension.sh" "$name"
 done
 
 (( pending )) && say "to update, run $SCRIPT_DIR/check-updates.sh in a terminal"

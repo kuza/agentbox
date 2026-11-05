@@ -16,7 +16,7 @@
 # sync-pi-extension.sh yourself stays.
 #
 # Sourced by run.sh and agentbox setup. Needs lib/paths.sh, lib/config.sh
-# (conf_find, ab_warn) and lib/skills.sh (source_value).
+# (conf_find, ab_warn) and lib/skills.sh (source_conf, source_value).
 
 PI_EXTENSION_SOURCE_DIRS=("$USER_PI_EXTENSIONS_CONF_DIR" "$SCRIPT_DIR/pi-extensions.d")
 
@@ -24,20 +24,8 @@ pi_extensions_sources() {
   local list="${AB_PI_EXTENSIONS:-}" name conf url ref rec want have f
   local -A enabled=()
   for name in ${list//,/ }; do
-    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
-      echo "error: AB_PI_EXTENSIONS: invalid source name '$name'" >&2
-      exit 2
-    fi
-    if ! conf="$(conf_find "$name" "${PI_EXTENSION_SOURCE_DIRS[@]}")"; then
-      echo "error: AB_PI_EXTENSIONS: no pi extension source '$name'" \
-           "(looked for $USER_PI_EXTENSIONS_CONF_DIR/$name.conf and pi-extensions.d/$name.conf)" >&2
-      exit 2
-    fi
+    conf="$(source_conf AB_PI_EXTENSIONS "pi extension source" "$name" "${PI_EXTENSION_SOURCE_DIRS[@]}")" || exit 2
     url="$(source_value "$conf" URL)"
-    if [[ -z "$url" ]]; then
-      echo "error: $conf does not set URL" >&2
-      exit 2
-    fi
     ref="$(source_value "$conf" REF)"
     enabled[$name]=1
     rec="$USER_PI_EXTENSIONS_RECORDS/$name"

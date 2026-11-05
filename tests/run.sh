@@ -2963,6 +2963,16 @@ test_pi_extension_sync_installs_and_records() {
   [[ -e "$T/npm-calls" ]] && fail "npm run for an extension without dependencies"
   # The record is outside the directory that sessions mount.
   [[ -e "$CFG/pi-extensions/.sources" ]] && fail "record inside the mounted directory"
+  # Stopped after the move, before the record: still its own, installed again.
+  rm "$(px_rec myext)"
+  px_run myext "$SRC"
+  assert_rc 0
+  [[ -f "$(px_rec myext)" ]] || fail "an extension without its record not installed again"
+  # A copy under another name carries the mark of the first: not ours.
+  cp -R "$(px_dir myext)" "$(px_dir mycopy)"
+  px_run mycopy "$SRC"
+  assert_rc 1
+  assert_out "was not installed by agentbox"
   px_run --remove myext
   assert_rc 0
   [[ -e "$(px_dir myext)" || -e "$(px_rec myext)" ]] && fail "not removed"

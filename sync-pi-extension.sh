@@ -30,8 +30,9 @@
 #      <AB_HOME>/pi-extensions.sources/<name>. check-updates.sh and run.sh
 #      read the record as data (KEY=VALUE lines).
 #
-# It never replaces a directory that it did not install. An extension that
-# you copied there yourself stays, and the sync stops.
+# It never replaces a directory that it did not install (a directory without
+# its record and without the file .agentbox-source). An extension that you
+# copied there yourself stays, and the sync stops.
 #
 # Environment:
 #   AB_PI_EXTENSIONS_PIN     the REF of the source, recorded as a pin (set
@@ -50,12 +51,19 @@ source "$SCRIPT_DIR/lib/paths.sh"
 # shellcheck source=lib/git-source.sh
 source "$SCRIPT_DIR/lib/git-source.sh"
 EXT_DIR="$USER_PI_EXTENSIONS"
+# In each extension that this script installs, written before the move: a
+# directory with it is ours, also if the script stopped before the record.
+# It holds the name, so a copy under another name is not ours.
+MARK=".agentbox-source"
+ours() {  # <name>: 0 if <pi-extensions>/<name> has our mark for that name
+  [[ "$(cat -- "$EXT_DIR/$1/$MARK" 2>/dev/null)" == "$1" ]]
+}
 REC_DIR="$USER_PI_EXTENSIONS_RECORDS"
 
 if [[ "${1:-}" == --remove ]]; then
   name="${2:?usage: $0 --remove <name>}"
   [[ "$name" =~ $AB_NAME_RE ]] || { echo "error: invalid name '$name'" >&2; exit 2; }
-  if [[ -f "$REC_DIR/$name" ]]; then
+  if [[ -f "$REC_DIR/$name" ]] || ours "$name"; then
     rm -rf -- "${EXT_DIR:?}/$name"
     rm -f -- "$REC_DIR/$name"
     echo "removed  pi extension $name"
@@ -68,7 +76,7 @@ URL="${2:?usage: $0 <name> <git-url> [ref]}"
 REF="${3:-}"
 [[ "$name" =~ $AB_NAME_RE ]] || { echo "error: invalid name '$name' (a-z, 0-9 and -)" >&2; exit 2; }
 
-if [[ -e "$EXT_DIR/$name" && ! -f "$REC_DIR/$name" ]]; then
+if [[ -e "$EXT_DIR/$name" && ! -f "$REC_DIR/$name" ]] && ! ours "$name"; then
   echo "error: $EXT_DIR/$name exists and was not installed by agentbox; not replacing it" >&2
   exit 1
 fi
@@ -149,6 +157,7 @@ fi
 mkdir -p "$EXT_DIR" "$REC_DIR"
 STAGE="$(mktemp -d "$AB_HOME_DIR/.pi-extension-$name.XXXXXX")"
 cp -R -- "$SRC/." "$STAGE/"
+printf '%s\n' "$name" > "$STAGE/$MARK"
 chmod 755 "$STAGE"
 # The old one goes aside first, then the new one moves in: mv -T fails
 # rather than put the stage inside a directory that another start made.
