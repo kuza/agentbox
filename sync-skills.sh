@@ -108,7 +108,7 @@ commit="$(git_source_clone "$URL" "$VENDOR" "$REF")"; commit="${commit:0:7}"
 VENDOR="$(realpath -- "$VENDOR")"
 
 # --- 2. collect skills ------------------------------------------------------
-SUBDIR="$(git_source_subdir "${SKILLS_SUBDIR:-}")" || exit 1
+SUBDIR="$(git_source_subdir "${SKILLS_SUBDIR:-}" SKILLS_SUBDIR)" || exit 1
 SEARCH="$VENDOR"
 if [[ -n "$SUBDIR" ]]; then
   if [[ ! -d "$VENDOR/$SUBDIR" ]]; then

@@ -24,6 +24,9 @@
 # It compares with <skills>/.sources/<owner>__<repo>, the record
 # sync-skills.sh keeps; skills synced by hand, without a source, are left
 # alone.
+#
+# Needs lib/paths.sh, lib/config.sh (conf_find, ab_warn) and, for
+# skills_sources, lib/git-source.sh (git_source_subdir).
 
 SKILLS_SOURCE_DIRS=("$USER_SKILLS_SOURCES_DIR" "$SCRIPT_DIR/skills.d")
 
@@ -115,10 +118,7 @@ skills_sources() {
     conf="$(source_conf AB_SKILLS "skill source" "$name" "${SKILLS_SOURCE_DIRS[@]}")" || exit 2
     url="$(source_value "$conf" URL)"
     only="$(sorted_list "$(source_value "$conf" ONLY)")"
-    if ! subdir="$(git_source_subdir "$(source_value "$conf" SUBDIR)")"; then
-      echo "error: $conf: SUBDIR" >&2
-      exit 2
-    fi
+    subdir="$(git_source_subdir "$(source_value "$conf" SUBDIR)" "$conf: SUBDIR")" || exit 2
     slug="$(repo_slug "$url")"
     # The sync record is per repository: two sources of one repository
     # would overwrite each other's skills on every start.

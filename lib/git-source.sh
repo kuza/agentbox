@@ -33,11 +33,11 @@ git_source_clone() {  # <url> <dir> [ref]
 # comparison in lib/skills.sh: without a trailing "/", and empty for the
 # whole repository ("" or "."). 1 for a value that is not a plain path, or
 # that names nothing ("/").
-git_source_subdir() {  # <value>: prints the normal form
-  local d="$1"
+git_source_subdir() {  # <value> [its name, for messages]: prints the normal form
+  local d="$1" label="${2:-SUBDIR}"
   [[ -z "$d" ]] && return 0
   if [[ ! "$d" =~ ^[A-Za-z0-9._/-]+$ || "$d" =~ ^/+$ ]]; then
-    echo "error: SUBDIR '$d' must be a plain path in the repository" >&2
+    echo "error: $label '$d' must be a plain path in the repository" >&2
     return 1
   fi
   # All trailing slashes: the result is the same when it runs on it again.

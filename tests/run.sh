@@ -2930,7 +2930,7 @@ test_sync_subdir() {
   done
   ss_run SKILLS_SUBDIR=/
   assert_rc 1
-  assert_out "must be a plain path"
+  assert_out "SKILLS_SUBDIR '/' must be a plain path"
   ss_run SKILLS_SUBDIR=nope
   assert_rc 1
   assert_out "has no directory 'nope'"
@@ -3160,6 +3160,26 @@ test_pi_extension_sources_at_start() {
   ab_run AB_AGENT=pi --
   assert_rc 0
   assert_out "pi extension 'myext' uses the skill source 'acme'"
+  # A source of yours with another name for the same repository counts.
+  mkdir -p "$CFG/skills.local.d"
+  printf '%s\n' "URL=$T/nowhere/acme/skills" > "$CFG/skills.local.d/acme.conf"
+  printf '%s\n' "URL=$T/nowhere/acme/skills" > "$CFG/skills.local.d/mine.conf"
+  ab_run AB_AGENT=pi AB_SKILLS=mine AB_CHECK_UPDATES=0 --
+  assert_no_out "uses the skill source 'acme'"
+  # A comma list, and ".git" on one URL: the same repository.
+  printf '%s\n' "URL=$T/nowhere/acme/skills.git" > "$CFG/skills.local.d/mine.conf"
+  printf '%s\n' "URL=$T/nowhere/other/skills" > "$CFG/skills.local.d/other.conf"
+  ab_run AB_AGENT=pi AB_SKILLS=other,mine AB_CHECK_UPDATES=0 --
+  assert_rc 0
+  assert_no_out "uses the skill source 'acme'"
+  ab_run AB_AGENT=pi AB_SKILLS=other,acme AB_CHECK_UPDATES=0 --
+  assert_rc 0
+  assert_no_out "uses the skill source 'acme'"
+  # Neither under its name nor by its repository: the message.
+  ab_run AB_AGENT=pi AB_SKILLS=other AB_CHECK_UPDATES=0 --
+  assert_out "uses the skill source 'acme'"
+  rm "$CFG/skills.local.d/other.conf"
+  rm "$CFG/skills.local.d/acme.conf" "$CFG/skills.local.d/mine.conf"
   sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
   # An unknown source stops the start, like AB_SKILLS.
   config "AB_PI_EXTENSIONS=nope"

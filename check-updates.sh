@@ -225,14 +225,14 @@ fi
 # branch of its remote. On a newer commit, it says so with a link to the
 # changes, and on a yes it runs <command...> with the URL as the last
 # argument. A pinned record (REF in its .conf: updated by changing it) is
-# skipped. So is a skill record without a URL, from before URLs were
-# recorded; a pi extension record always has one.
-git_source_offer() {  # <file> <what> <command...>
-  local f="$1" what="$2" url commit latest link=""
-  shift 2
+# skipped. So is a record without a URL when <old-ok> is 1: a skill record
+# from before URLs were recorded. A pi extension record always has one.
+git_source_offer() {  # <file> <what> <old-ok: 0|1> <command...>
+  local f="$1" what="$2" old_ok="$3" url commit latest link=""
+  shift 3
   url="$(source_value "$f" URL)"
   commit="$(source_value "$f" COMMIT)"
-  [[ -z "$url" && "$what" == "skills from "* ]] && return 0
+  [[ -z "$url" && "$old_ok" == 1 ]] && return 0
   [[ -n "$(source_value "$f" REF)" ]] && return 0
   # A plain ssh URL works for the install, but the check needs https.
   if [[ "$url" =~ ^(ssh://|[A-Za-z0-9._-]+@)[A-Za-z0-9./:_~-]+$ && "$commit" =~ ^[0-9a-f]{40}$ ]]; then
@@ -268,7 +268,7 @@ SKILLS_DIR="${AB_SKILLS_DIR:-$USER_SKILLS_DIR}"
 shopt -s nullglob
 for f in "$SKILLS_DIR"/.sources/*; do
   slug="$(basename "$f")"
-  git_source_offer "$f" "skills from $slug" \
+  git_source_offer "$f" "skills from $slug" 1 \
     env SKILLS_ONLY="$(source_value "$f" SKILLS_ONLY)" SKILLS_PREFIX="$(source_value "$f" SKILLS_PREFIX)" \
         SKILLS_SUBDIR="$(source_value "$f" SKILLS_SUBDIR)" \
         AB_SKILLS_DIR="$SKILLS_DIR" SKILLS_SOURCE="$(source_value "$f" SOURCE)" SKILLS_PIN="" \
@@ -292,7 +292,7 @@ for f in ${pi_records[@]+"${pi_records[@]}"}; do
     list="${AB_PI_EXTENSIONS_ENABLED//,/ }"
     [[ "$list" == *" $name "* ]] || continue
   fi
-  git_source_offer "$f" "pi extension $name" \
+  git_source_offer "$f" "pi extension $name" 0 \
     env AB_PI_EXTENSIONS_PIN="" AB_PI_EXTENSIONS_SOURCE="$(source_value "$f" SOURCE)" \
         "$SCRIPT_DIR/sync-pi-extension.sh" "$name"
 done
