@@ -4,6 +4,22 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.12
+
+- pi extensions from git. The sources are in `pi-extensions.d/` (shared:
+  `pi-subagents`, `pi-prompt-history`) or in `pi-extensions.local.d/`
+  (yours). Enable them with `AB_PI_EXTENSIONS` or in `agentbox setup`.
+- The next start of pi installs them on the host with
+  `sync-pi-extension.sh`. It makes a new clone and checks that it is an
+  extension. For dependencies, it runs `npm ci` without scripts, and it
+  accepts only packages from the npm registry. This needs npm on the host.
+- The update check offers new commits of an extension. It installs them
+  only when you answer yes. An extension that you put into
+  `pi-extensions/` yourself stays as it is.
+- A skill source or a pi extension source with a `REF` that names a branch
+  works now. Before, the sync failed for a branch; a tag or a commit
+  worked.
+
 ## v0.1.11
 
 - bb4: the server for the pages of the browser is now `bb4-devtools`, not
@@ -52,16 +68,6 @@ the steps a release needs from you, such as a rebuild.
   in with ChatGPT" ("operation not permitted"); the legacy provider is the
   way for it, and the README now says so. A group of yours with the same
   name (`egress.local.d/chatgpt.conf`) replaces this one.
-- pi extensions from git. The sources are in `pi-extensions.d/` (shared:
-  `pi-subagents`, `pi-prompt-history`) or in `pi-extensions.local.d/`
-  (yours). Enable them with `AB_PI_EXTENSIONS` or in `agentbox setup`.
-- The next start of pi installs them on the host with
-  `sync-pi-extension.sh`. It makes a new clone and checks that it is an
-  extension. For dependencies, it runs `npm ci` without scripts, and it
-  accepts only packages from the npm registry. This needs npm on the host.
-- The update check offers new commits of an extension. It installs them
-  only when you answer yes. An extension that you put into
-  `pi-extensions/` yourself stays as it is.
 - README: rewritten by the ASD-STE100 rules (Simplified Technical
   English). The facts, commands and links are the same.
 
