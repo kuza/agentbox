@@ -4,6 +4,13 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.1.14
+
+- The settings of a module that is not enabled (for example, bb4 was
+  configured and then removed from `AB_MCP`) no longer give "unknown key"
+  warnings in `config.env`. agentbox ignores them. A key that no module
+  has still gives the warning.
+
 ## v0.1.13
 
 - New shared sources for ponytail (DietrichGebert/ponytail), a "lazy

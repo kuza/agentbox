@@ -42,7 +42,8 @@
 #                        problem leaves the module out of the start, and
 #                        what it runs goes (as for an emptied setting).
 #                        Keep MCP_CONFIG=(...) on one line: for a module
-#                        that does not parse, mcp_init reads it as text.
+#                        that is not enabled or does not parse, mcp_init
+#                        reads it as text.
 #                        Code outside the functions runs without set -e.
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
@@ -162,10 +163,16 @@ mcp_token_var() {  # <name>: environment variable of the caller token
   echo "AB_MCP_TOKEN_${v//-/_}"
 }
 
+# The keys of the MCP_CONFIG=(...) line of <mcp.sh>, read as text: for a
+# module that is not loaded (disabled, or one that does not parse).
+mcp_config_keys_text() {  # <mcp.sh>
+  sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$1" | tr '\n' ' '
+}
+
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.env), before the second.
 mcp_init() {
-  local name dir keys seen=" " list="${AB_MCP:-}"
+  local name dir keys d f seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -187,16 +194,29 @@ mcp_init() {
     fi
     if ! mcp_parses "$name" "$dir"; then
       ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $dir/mcp.sh)"
+      # Its settings are not read; they get no warning (MCP_QUIET_KEYS).
       MCP_SKIPPED+=("$name")
-      # Its settings in config.env are known keys still: read as text, the
-      # MCP_CONFIG=(...) line, not "unknown key" warnings pointing elsewhere.
-      read -ra keys <<<"$(sed -n 's/^MCP_CONFIG=(\([A-Za-z0-9_ ]*\))[[:space:]]*$/\1/p' "$dir/mcp.sh" | tr '\n' ' ')"
-      MCP_CONFIG_KEYS+=(${keys[@]+"${keys[@]}"})
       continue
     fi
     mcp_load "$name"
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
+  done
+  # The settings of each module that this version has (bb4 configured,
+  # then removed from AB_MCP): config.env may keep them, and the second
+  # pass ignores them without a warning. Each name once, as mcp_find finds
+  # it: a module of yours replaces the shared one of that name. A key that
+  # no module has still warns.
+  MCP_QUIET_KEYS=()
+  seen=" "
+  for d in "${MCP_DIRS[@]}"; do
+    for f in "$d"/*/mcp.sh; do
+      name="${f%/mcp.sh}"; name="${name##*/}"
+      [[ -f "$f" && "$name" =~ $AB_NAME_RE && "$seen" != *" $name "* ]] || continue
+      seen+="$name "
+      read -ra keys <<<"$(mcp_config_keys_text "$f")"
+      MCP_QUIET_KEYS+=(${keys[@]+"${keys[@]}"})
+    done
   done
 }
 

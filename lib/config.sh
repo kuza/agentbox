@@ -69,6 +69,11 @@ CONFIG_KEYS=(AB_MCP AB_EGRESS AB_FORWARD AB_SKILLS AB_SKILLS_DIR AB_PI_EXTENSION
   AB_PYTHON_VERSIONS AB_GO_VERSION AB_GOLANGCI_LINT_VERSION AB_WARNINGS_ASK)
 CONFIG_FILE="${AB_CONFIG:-$USER_CONFIG}"
 
+# Keys that are not read and get no warning either, for one call of
+# load_config: config_second_pass sets them (the settings of the modules
+# that are not enabled, lib/mcp.sh); other files (a repo's .conf) warn.
+CONFIG_QUIET_KEYS=()
+
 load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
   local file="$1" warn="$2" line key val n=0
   shift 2
@@ -79,11 +84,13 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
     line="${line%"${line##*[![:space:]]}"}"            # trim trailing space
     [[ -z "$line" || "$line" == \#* ]] && continue
     line="${line#export }"
-    if [[ "$line" != *=* ]]; then
+    key="${line%%=*}"; val="${line#*=}"
+    # A key must be a name: "A B=x" would match two allowed keys in a row,
+    # and ${!key} then stops the start.
+    if [[ "$line" != *=* || ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
       [[ "$warn" == 1 ]] && ab_warn "$file:$n: not KEY=VALUE, ignored"
       continue
     fi
-    key="${line%%=*}"; val="${line#*=}"
     if [[ "$val" =~ ^\"([^\"]*)\"([[:space:]]+#.*)?$ || "$val" =~ ^\'([^\']*)\'([[:space:]]+#.*)?$ ]]; then
       val="${BASH_REMATCH[1]}"
     else
@@ -91,7 +98,9 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
       val="${val%"${val##*[![:space:]]}"}"
     fi
     if [[ "$allowed" != *" $key "* ]]; then
-      [[ "$warn" == 1 ]] && ab_warn "$file:$n: unknown key '$key', ignored"
+      # A setting of a module that is not enabled: ignored, no warning.
+      [[ "$warn" == 1 && " ${CONFIG_QUIET_KEYS[*]-} " != *" $key "* ]] \
+        && ab_warn "$file:$n: unknown key '$key', ignored"
       continue
     fi
     if [[ -z "${!key+x}" ]]; then
@@ -111,6 +120,7 @@ config_first_pass() {
 
 config_second_pass() {  # <module keys...>
   if [[ -f "$CONFIG_FILE" ]]; then
+    local CONFIG_QUIET_KEYS=(${MCP_QUIET_KEYS[@]+"${MCP_QUIET_KEYS[@]}"})
     load_config "$CONFIG_FILE" 1 "${CONFIG_KEYS[@]}" "$@"
   fi
 }

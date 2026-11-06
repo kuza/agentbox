@@ -544,11 +544,38 @@ test_mcp_local_module_and_override() {
   assert_file_has "$(cache mcp-claude.json)" 'https://docs.internal.example/mcp'
 }
 
-test_mcp_config_keys_of_disabled_module_warn() {
+test_mcp_config_keys_of_disabled_module_quiet() {
   setup "${FUNCNAME[0]}"
-  config "GRAFANA_URL=https://grafana.example" "NO_SUCH_KEY=1"
+  # Settings of a module that is there but not enabled: kept, no warning.
+  # A key that no module has: a warning (a typo).
+  mkdir -p "$CFG/mcp.local/tracker"
+  printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(TRACKER_SITE)' > "$CFG/mcp.local/tracker/mcp.sh"
+  config "GRAFANA_URL=https://grafana.example" "BB4_URL=http://b.example:5101" "TRACKER_SITE=x" "NO_SUCH_KEY=1"
   ab_run --
   assert_rc 0
+  assert_no_out "unknown key 'GRAFANA_URL'"
+  assert_no_out "unknown key 'BB4_URL'"
+  assert_no_out "unknown key 'TRACKER_SITE'"
+  assert_out "unknown key 'NO_SUCH_KEY'"
+  # A key with a space: not KEY=VALUE, and the start goes on.
+  config "AB_MCP AB_EGRESS=x"
+  ab_run --
+  assert_rc 0
+  assert_out "not KEY=VALUE, ignored"
+  sed -i '/^AB_MCP AB_EGRESS=x$/d' "$CFG/config.env"
+  # Only in config.env: in a repo's .conf, a module key still warns.
+  mkdir -p "$CFG/env"
+  echo "GRAFANA_URL=https://grafana.example" > "$CFG/env/repo.conf"
+  ab_run --
+  assert_out "repo.conf:1: unknown key 'GRAFANA_URL'"
+  rm "$CFG/env/repo.conf"
+  # A module of yours replaces the shared one of its name: its keys count,
+  # not those of the shared one. A copy with a name that is not one adds
+  # nothing.
+  mkdir -p "$CFG/mcp.local/grafana" "$CFG/mcp.local/tracker.bak"
+  printf '%s\n' 'MCP_URL="https://g.example/mcp"' 'MCP_CONFIG=(MY_G)' > "$CFG/mcp.local/grafana/mcp.sh"
+  printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(NO_SUCH_KEY)' > "$CFG/mcp.local/tracker.bak/mcp.sh"
+  ab_run --
   assert_out "unknown key 'GRAFANA_URL'"
   assert_out "unknown key 'NO_SUCH_KEY'"
 }
