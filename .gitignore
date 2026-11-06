@@ -1,5 +1,6 @@
-# Local review notes.
+# Local review notes, specs, designs and tickets.
 cr/
+.scratch/
 
 # Release archives built by release.sh.
 dist/
