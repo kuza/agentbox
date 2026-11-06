@@ -1,0 +1,19 @@
+# A kind for the tests only: one key of each type. tests/run.sh copies it
+# to lib/toml-schema/flat.toml in its copy of agentbox.
+[name]
+type = "string"
+
+[prefix]
+type = "string"
+
+[count]
+type = "int"
+
+[on]
+type = "bool"
+
+[off]
+type = "bool"
+
+[items]
+type = "list"

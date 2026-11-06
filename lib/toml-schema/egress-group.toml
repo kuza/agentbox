@@ -1,0 +1,6 @@
+# The schema of an egress group (egress.d/<name>.toml): for each key, its
+# type (string, int, bool or list) and whether it is required. lib/toml.sh
+# reads the files of this kind with it.
+[hosts]
+type = "list"
+required = true

@@ -1,0 +1,6 @@
+# A group with hosts on more lines.
+hosts = [
+  "a.example",  # a comment
+  "b.example:9000",
+]
+# A comment after the value.

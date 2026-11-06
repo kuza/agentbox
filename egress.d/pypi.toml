@@ -1,5 +1,7 @@
 # Python packages (pip / uv). Leave this group out of AB_EGRESS to stop the
 # agent from installing packages; dependencies then have to be added from the
 # host (README, Python).
-pypi.org
-files.pythonhosted.org
+hosts = [
+  "pypi.org",
+  "files.pythonhosted.org",
+]

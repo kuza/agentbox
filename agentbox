@@ -45,7 +45,7 @@ case "${1:-}" in
     source "$SCRIPT_DIR/lib/paths.sh"
     # shellcheck source=lib/config.sh
     source "$SCRIPT_DIR/lib/config.sh"
-    for lib in sidecars mcp egress skills pi-extensions setup; do
+    for lib in toml sidecars mcp egress skills pi-extensions setup; do
       # shellcheck source=/dev/null
       source "$SCRIPT_DIR/lib/$lib.sh"
     done

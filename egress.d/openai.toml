@@ -4,5 +4,7 @@
 # Squid is shared, so Claude Code sessions reach these hosts too.
 # pi's legacy "OpenAI Codex (legacy)" provider also needs chatgpt.com: the
 # chatgpt group.
-auth.openai.com
-api.openai.com
+hosts = [
+  "auth.openai.com",
+  "api.openai.com",
+]

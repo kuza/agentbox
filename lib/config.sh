@@ -57,11 +57,12 @@ warnings_review() {  # <the session's arguments...>
   rm -f -- "$AB_WARNINGS_FILE"
 }
 
-# The first <dir>/<name>.conf over <dirs>: yours before the shared ones.
-conf_find() {  # <name> <dirs...>
-  local name="$1" d
-  shift
-  for d in "$@"; do [[ -f "$d/$name.conf" ]] && { printf '%s\n' "$d/$name.conf"; return 0; }; done
+# The first <dir>/<name>.<extension> over <dirs>: yours before the shared
+# ones.
+conf_find() {  # <name> <extension> <dirs...>
+  local name="$1" ext="$2" d
+  shift 2
+  for d in "$@"; do [[ -f "$d/$name.$ext" ]] && { printf '%s\n' "$d/$name.$ext"; return 0; }; done
   return 1
 }
 

@@ -1,0 +1,2 @@
+hosts = ["a.example"]
+"a.b" = 1

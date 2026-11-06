@@ -88,7 +88,7 @@ source_conf() {  # <setting> <what> <name> <dirs: yours, then shared>
     echo "error: $setting: invalid source name '$name'" >&2
     return 2
   fi
-  if ! conf="$(conf_find "$name" "$@")"; then
+  if ! conf="$(conf_find "$name" conf "$@")"; then
     echo "error: $setting: no $what '$name' (looked for $1/$name.conf and $(basename "$2")/$name.conf)" >&2
     return 2
   fi

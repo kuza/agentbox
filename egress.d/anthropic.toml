@@ -1,0 +1,7 @@
+# Claude Code (see https://code.claude.com/docs/en/network-config). run.sh
+# refuses to start Claude Code without this group.
+hosts = [
+  "api.anthropic.com",     # model API, feature flags
+  "platform.claude.com",   # OAuth token exchange/refresh/revocation (all account types)
+  "claude.ai",             # claude.ai account authentication
+]

@@ -1,3 +1,5 @@
 # Google Cloud Storage (all buckets). Also accepts uploads with any token the
 # agent has or is given: a possible exfiltration path (README, Security model).
-storage.googleapis.com
+hosts = [
+  "storage.googleapis.com",
+]

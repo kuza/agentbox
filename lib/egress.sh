@@ -1,8 +1,8 @@
 # Egress: what the agent reaches through squid, its only way out.
 #
 #   squid.conf                   squid settings and access rules, no hosts
-#   egress.d/<name>.conf         host groups, shared (in git)
-#   <AB_HOME>/egress.local.d/<name>.conf
+#   egress.d/<name>.toml         host groups, shared (in git)
+#   <AB_HOME>/egress.local.d/<name>.toml
 #                                yours; wins over egress.d/
 #
 # AB_EGRESS in config.env lists the enabled groups; unset means
@@ -11,10 +11,13 @@
 # remote hosts (MCP_EGRESS) go into a file generated on every start and
 # included by squid.conf.
 #
-# A group file is data, never run: one host per line, # starts a comment.
-#   example.com          HTTPS to example.com (port 443), plain HTTP (port 80)
-#   .example.com         the same for example.com and all its subdomains
-#   minio.example:9000   that host on that port only, HTTPS or plain HTTP
+# A group file is data, never run: a TOML file with a list of hosts, read
+# by toml_load (lib/toml.sh). # starts a comment.
+#   hosts = [
+#     "example.com",         # HTTPS to example.com (port 443), plain HTTP (port 80)
+#     ".example.com",        # the same for example.com and all its subdomains
+#     "minio.example:9000",  # that host on that port only, HTTPS or plain HTTP
+#   ]
 #
 # Sourced by run.sh. Provides egress_init, egress_write_conf, egress_start
 # and EGRESS_SQUID_CONF.
@@ -28,7 +31,8 @@ EGRESS_DEFAULT="anthropic openai pypi go"
 # (MCP_EGRESS_ALL).
 # Result: EGRESS_HOSTS, one "host[:port]" each.
 egress_init() {
-  local name file line host seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" n entry
+  local name file host hosts seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" entry
+  local -A group=() lines=()
   EGRESS_HOSTS=()
   for name in ${list//,/ }; do
     if [[ ! "$name" =~ $AB_NAME_RE ]]; then
@@ -37,22 +41,16 @@ egress_init() {
     fi
     [[ "$seen" == *" $name "* ]] && continue
     seen+="$name "
-    if ! file="$(conf_find "$name" "${EGRESS_DIRS[@]}")"; then
-      echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.conf and egress.d/$name.conf)" >&2
+    if ! file="$(conf_find "$name" toml "${EGRESS_DIRS[@]}")"; then
+      echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.toml and egress.d/$name.toml)" >&2
       exit 2
     fi
-    n=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      n=$((n + 1))
-      read -r host line <<<"${line%%#*}"
-      [[ -z "$host" ]] && continue
-      if [[ -n "$line" ]]; then
-        echo "error: $file:$n: one host per line" >&2
-        exit 2
-      fi
-      egress_check_host "$host" "$file:$n"
+    toml_load egress-group "$file" group lines || exit 2
+    read -ra hosts <<<"${group[hosts]}"
+    for host in ${hosts[@]+"${hosts[@]}"}; do
+      egress_check_host "$host" "$file:${lines[hosts]%% *}"
       EGRESS_HOSTS+=("${host,,}")
-    done < "$file"
+    done
   done
   for name in ${AGENT_EGRESS[@]+"${AGENT_EGRESS[@]}"}; do
     if [[ "$seen" != *" $name "* ]]; then

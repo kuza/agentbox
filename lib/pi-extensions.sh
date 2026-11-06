@@ -28,10 +28,10 @@ pi_extension_skills_enabled() {  # <skill source name>
   local want="" n c list="${AB_SKILLS:-}"
   # The repository as skills_sources sees it (repo_slug: no ".git", no
   # trailing "/").
-  c="$(conf_find "$1" "${SKILLS_SOURCE_DIRS[@]}")" && want="$(repo_slug "$(source_value "$c" URL)")"
+  c="$(conf_find "$1" conf "${SKILLS_SOURCE_DIRS[@]}")" && want="$(repo_slug "$(source_value "$c" URL)")"
   for n in ${list//,/ }; do
     [[ "$n" == "$1" ]] && return 0
-    [[ -n "$want" ]] && c="$(conf_find "$n" "${SKILLS_SOURCE_DIRS[@]}")" \
+    [[ -n "$want" ]] && c="$(conf_find "$n" conf "${SKILLS_SOURCE_DIRS[@]}")" \
       && [[ "$(repo_slug "$(source_value "$c" URL)")" == "$want" ]] && return 0
   done
   return 1

@@ -7,9 +7,8 @@
 #   tests/run.sh mcp_       tests whose name starts with "mcp_"
 #
 # Each test runs in its own scratch directory with a copy of agentbox's code,
-# never the real config.env or skills/. Needs bash 4+, git, and
-# python3 for the JSON checks (skipped without it); Python 3.11+ for the
-# dbhub tests (tomllib; skipped without it).
+# never the real config.env or skills/. Needs bash 4+, git, and Python
+# 3.11+ (tomllib) for the TOML reader (lib/toml.sh).
 set -uo pipefail
 
 # Nothing from the caller's environment may point the scripts at real files:
@@ -640,9 +639,9 @@ test_egress_default_groups() {
 test_egress_listed_groups_local_override_and_ports() {
   setup "${FUNCNAME[0]}"
   mkdir -p "$CFG/egress.local.d"
-  printf '%s\n' '# test servers' 'Data.S3.eu-central-1.amazonaws.com' 'minio.test:9000  # MinIO' \
-    '.internal.example' > "$CFG/egress.local.d/test.conf"
-  printf '%s\n' 'mirror.example' > "$CFG/egress.local.d/pypi.conf"
+  printf '%s\n' '# test servers' 'hosts = [' '  "Data.S3.eu-central-1.amazonaws.com",' '  "minio.test:9000",  # MinIO' \
+    '  ".internal.example",' ']' > "$CFG/egress.local.d/test.toml"
+  printf '%s\n' 'hosts = ["mirror.example"]' > "$CFG/egress.local.d/pypi.toml"
   config "AB_EGRESS=anthropic pypi, gcs test gcs"
   ab_run --
   assert_rc 0
@@ -696,21 +695,70 @@ test_egress_errors() {
   assert_rc 2
   assert_out "invalid group name"
   mkdir -p "$CFG/egress.local.d"
-  printf '%s\n' 'ok.example' 'bad host; http_access allow all' > "$CFG/egress.local.d/bad.conf"
+  printf '%s\n' '# a group' 'hosts = [' '  "ok.example",' '  "bad host; http_access allow all",' ']' > "$CFG/egress.local.d/bad.toml"
   : > "$CFG/config.env"; config "AB_EGRESS=bad"
   ab_run --
   assert_rc 2
-  assert_out "bad.conf:2: one host per line"
+  assert_out "bad.toml:2: 'hosts': an item of the list cannot hold a space"
   grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
   : > "$CFG/config.env"
   local h
   for h in 'x.example:99999' 'x.example:0' 'x_y.example' '*.example' 'x.example:443/path'; do
-    printf '%s\n' "$h" > "$CFG/egress.local.d/bad.conf"
+    printf 'hosts = ["%s"]\n' "$h" > "$CFG/egress.local.d/bad.toml"
     config "AB_EGRESS=bad"
     ab_run --
     assert_rc 2
     assert_out "is not a host name"
   done
+}
+
+# A python3 in front of the interpreter that the reader uses (lib/toml.sh,
+# toml_python) that writes each call to $T/python.log.
+python_log_stub() {
+  local p real=""
+  for p in python3 python3.13 python3.12 python3.11; do
+    if command -v "$p" >/dev/null && "$p" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+      real="$(command -v "$p")"
+      break
+    fi
+  done
+  [[ -n "$real" ]] || fail "no Python 3.11 or newer on the test host"
+  printf '#!/bin/sh\necho "$*" >> "%s"\nexec "%s" "$@"\n' "$T/python.log" "$real" > "$T/bin/python3"
+  chmod +x "$T/bin/python3"
+}
+
+test_egress_unchanged_start_runs_no_python() {
+  setup "${FUNCNAME[0]}"
+  python_log_stub
+  ab_run --
+  assert_rc 0
+  [[ -s "$T/python.log" ]] || fail "the first start did not read the groups"
+  : > "$T/python.log"
+  ab_run --
+  assert_rc 0
+  [[ -s "$T/python.log" ]] && fail "a start with no changed file ran Python: $(cat "$T/python.log")"
+  # A changed schema is a new reader version: the files are read again.
+  echo '# changed' >> "$AB/lib/toml-schema/egress-group.toml"
+  ab_run --
+  assert_rc 0
+  [[ -s "$T/python.log" ]] || fail "a changed schema did not run the reader again"
+}
+
+test_egress_start_without_python_311() {
+  setup "${FUNCNAME[0]}"
+  # Each Python that the reader looks for is too old: a stub in front of
+  # the real one that exits 1.
+  local p
+  mkdir -p "$T/nopy"
+  for p in python3 python3.13 python3.12 python3.11; do
+    printf '#!/bin/sh\nexit 1\n' > "$T/nopy/$p"
+    chmod +x "$T/nopy/$p"
+  done
+  ab_run "PATH=$T/bin:$T/nopy:$PATH" --
+  assert_rc 2
+  assert_out "agentbox needs Python 3.11 or newer"
+  assert_out "apt install python3.11"
+  grep -q '^podman run' "$STUB_DIR/calls" && fail "containers started without Python"
 }
 
 test_egress_recreated_when_groups_change() {
@@ -2354,7 +2402,14 @@ test_setup_edits_config() {
   cp "$ROOT/config.env.example" "$AB/"
   printf '%s\n' '# mine' 'AB_MCP=graylog # my note' 'GRAYLOG_URL=https://g.example' '#AB_TRIVY=1' > "$CFG/config.env"
   # Under a module: its settings and secrets, and how to change them.
+  mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]  # mine' > "$CFG/egress.local.d/corp.toml"
+  echo 'hostz = ["x.example"]' > "$CFG/egress.local.d/typo.toml"
   setup_run "q\n"
+  # An egress group by its hosts, from the shared .toml files and yours; a
+  # bad group by its first error.
+  assert_out '\[x\] pypi +pypi.org files.pythonhosted.org$'
+  assert_out '\[ \] corp +\(yours\) corp.example$'
+  assert_out "\\[ \\] typo +\\(yours\\) \\(typo.toml:1: unknown key 'hostz'"
   assert_out "GRAYLOG_URL=https://g.example · secret graylog_basic: MISSING · e [0-9]"
   assert_out "GRAFANA_URL NEEDED · secret grafana_sa: MISSING · e [0-9]"
   assert_out "TABULARIS_CMD \\(default\\) · TABULARIS_PORT \\(default\\) · e [0-9]"
@@ -2479,7 +2534,7 @@ test_setup_values_names_input() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
   echo "AB_MCP=" > "$CFG/config.env"
-  mkdir -p "$CFG/egress.local.d"; echo corp.example > "$CFG/egress.local.d/corp.net.conf"
+  mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]' > "$CFG/egress.local.d/corp.net.toml"
   local services forward corp graylog
   services="$(setup_entry AB_SERVICES)"; forward="$(setup_entry AB_FORWARD)"
   corp="$(setup_entry corp.net)"; graylog="$(setup_entry graylog)"
@@ -2501,7 +2556,7 @@ test_setup_values_names_input() {
   grep -q '^AB_EGRESS' "$CFG/config.env" && fail "AB_EGRESS pinned"
   # A file name with a space is one name, and cannot be used; a module that
   # cannot be read cannot be turned on.
-  echo x > "$CFG/egress.local.d/my group.conf"
+  echo 'hosts = ["x"]' > "$CFG/egress.local.d/my group.toml"
   mkdir -p "$CFG/mcp.local/broken"; echo 'MCP_DESCRIPTION=x; if' > "$CFG/mcp.local/broken/mcp.sh"
   local broken; broken="$(setup_entry broken)"
   setup_run "$broken\ns\n"
@@ -3472,6 +3527,43 @@ test_updates_skips_pinned_source() {
   cu_run
   assert_no_out "update available: skills"
   assert_eq "$(grep -c git "$T/net")" 0 "git calls for a pinned source"
+}
+
+# --- the TOML reader ---
+
+# toml_case <kind> <case file>: what toml_load gives, as the conformance set
+# writes it: "key line endline value" for each record, sorted, then
+# "file:line: code" for each error or warning.
+toml_case() {
+  (
+    cd "$(dirname "$2")" || exit 1
+    SCRIPT_DIR="$AB" XDG_CACHE_HOME="$T/home/.cache"
+    ab_warn() { echo "agentbox: warning: $*" >&2; }
+    # shellcheck source=/dev/null
+    source "$AB/lib/toml.sh"
+    declare -A values=() lines=()
+    rc=0
+    toml_load "$1" "$(basename "$2")" values lines 2> "$T/err" || rc=$?
+    for k in "${!values[@]}"; do echo "$k ${lines[$k]} ${values[$k]}"; done | sort
+    sed -E 's/^(agentbox: warning: )?([^:]+:[0-9]+): .*\(([a-z-]+)\)$/\2: \3/' "$T/err"
+    exit "$rc"
+  )
+}
+
+# The conformance set of the reader: each tests/toml/<kind>/<case>.toml has the expected
+# records (<case>.out) or errors (<case>.err: file, line, code). A later Go
+# reader must give the same results. A kind for the tests only has its
+# schema in tests/toml/<kind>.schema.toml.
+test_toml_conformance() {
+  setup "${FUNCNAME[0]}"
+  local f want got rc
+  for f in "$ROOT"/tests/toml/*.schema.toml; do cp "$f" "$AB/lib/toml-schema/$(basename "$f" .schema.toml).toml"; done
+  for f in "$ROOT"/tests/toml/*/*.toml; do
+    want="$(cat "${f%.toml}.out" "${f%.toml}.err" 2>/dev/null)"
+    rc=0; got="$(toml_case "$(basename "$(dirname "$f")")" "$f")" || rc=$?
+    [[ "$got" == "$want" ]] || fail "${f#"$ROOT/"}: got"$'\n'"$got"$'\n'"expected"$'\n'"$want"
+    if [[ -f "${f%.toml}.out" ]]; then assert_eq "$rc" 0 "${f#"$ROOT/"}"; else assert_eq "$rc" 2 "${f#"$ROOT/"}"; fi
+  done
 }
 
 # --- main -------------------------------------------------------------------

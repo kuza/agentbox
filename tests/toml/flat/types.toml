@@ -1,0 +1,6 @@
+name = "a b"  # a string can hold a space
+prefix = ""
+count = 21600
+on = true
+off = false
+items = ["x", 3]

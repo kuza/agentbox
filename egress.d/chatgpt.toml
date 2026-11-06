@@ -4,4 +4,6 @@
 # (chatgpt.com/backend-api), not to the public API. Not enabled by default;
 # enable it together with openai, which the sign-in uses. Squid is shared,
 # so Claude Code sessions reach this host too.
-chatgpt.com
+hosts = [
+  "chatgpt.com",
+]
