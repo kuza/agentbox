@@ -771,6 +771,180 @@ test_egress_recreated_when_groups_change() {
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "not recreated after AB_EGRESS changed"
 }
 
+# --- run.sh: the conversion of your files from v0.1.x ---
+
+# A local group in the old form (one host per line) that replaces the
+# shared pypi group.
+old_pypi_group() {
+  mkdir -p "$CFG/egress.local.d"
+  printf '%s\n' '# my mirror' '' 'Mirror.example  # the index' '# files' 'files.mirror.example:8443' \
+    > "$CFG/egress.local.d/pypi.conf"
+}
+
+test_convert_egress_group() {
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  local before; before="$(stat -c '%Y %s' "$CFG/egress.local.d/pypi.conf"; sha256sum < "$CFG/egress.local.d/pypi.conf")"
+  ab_run --
+  assert_rc 0
+  assert_out "egress.local.d/pypi.conf -> pypi.toml"
+  assert_out "converted.list"
+  assert_out "remove its line"
+  # Yours wins over the shared pypi.toml.
+  local f; f="$(cache squid-allow.conf)"
+  assert_file_has "$f" '^acl allowed dstdomain mirror.example$'
+  assert_file_has "$f" '^acl ab_host_1 dstdomain files.mirror.example$'
+  assert_file_lacks "$f" 'pypi.org'
+  # The comments stay; the old file stays unchanged, for a rollback.
+  assert_eq "$(cat "$CFG/egress.local.d/pypi.toml")" '# my mirror
+
+hosts = [
+  "Mirror.example",  # the index
+  # files
+  "files.mirror.example:8443",
+]'
+  assert_eq "$(stat -c '%Y %s' "$CFG/egress.local.d/pypi.conf"; sha256sum < "$CFG/egress.local.d/pypi.conf")" "$before" "old file"
+  assert_eq "$(cat "$CFG/converted.list")" "$CFG/egress.local.d/pypi.conf"
+  # The next start converts nothing.
+  ab_run --
+  assert_rc 0
+  assert_no_out "converted"
+}
+
+test_convert_once_new_file_and_newer_old_file() {
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  ab_run --
+  assert_rc 0
+  # You remove the converted file: it is not converted again.
+  rm "$CFG/egress.local.d/pypi.toml"
+  printf '%s\n' 'corp.example' > "$CFG/egress.local.d/corp.conf"
+  config "AB_EGRESS=anthropic pypi corp"
+  ab_run --
+  assert_rc 0
+  [[ -e "$CFG/egress.local.d/pypi.toml" ]] && fail "pypi.conf converted a second time"
+  # A new .conf is converted.
+  assert_out "egress.local.d/corp.conf -> corp.toml"
+  assert_no_out "pypi.conf ->"
+  assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain corp.example$'
+  assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain pypi.org$'
+  # An old file changed after its conversion (after a rollback): a warning.
+  touch -d '+1 minute' "$CFG/egress.local.d/corp.conf"
+  ab_run --
+  assert_rc 0
+  assert_out "warning: .*egress.local.d/corp.conf is newer than .*egress.local.d/corp.toml"
+  assert_no_out "converted"
+  # A TOML file of yours was there first: the old file is kept, not
+  # converted, and a newer old file gets no warning.
+  printf '%s\n' 'hosts = ["mine.example"]' > "$CFG/egress.local.d/mine.toml"
+  printf '%s\n' 'old.example' > "$CFG/egress.local.d/mine.conf"
+  touch -d '+1 minute' "$CFG/egress.local.d/mine.conf"
+  ab_run --
+  assert_out "mine.conf: not converted, .*mine.toml is there"
+  ab_run --
+  assert_no_out "mine.conf is newer"
+  # A converted group whose TOML file you removed: the start names the list.
+  rm "$CFG/egress.local.d/corp.toml"
+  ab_run --
+  assert_rc 2
+  assert_out "corp.conf was converted before. To convert it again, remove its line from .*converted.list"
+}
+
+test_convert_broken_old_file_warns() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/egress.local.d"
+  # Broken: two hosts on one line. A group that no setting uses does not
+  # stop the start.
+  printf '%s\n' '# a group' 'ok.example' 'one.example two.example' > "$CFG/egress.local.d/bad.conf"
+  # Not UTF-8 and a control character, both in comments only: converted.
+  printf '# Z\xfcrich mirror\nz.example  # note\x1b[0m\n' > "$CFG/egress.local.d/latin.conf"
+  ab_run --
+  assert_rc 0
+  assert_out "warning: .*bad.conf:3: one host per line"
+  assert_out "did not convert .*bad.conf"
+  assert_out "egress.local.d/latin.conf -> latin.toml"
+  [[ -e "$CFG/egress.local.d/bad.toml" ]] && fail "a broken file converted"
+  grep -q 'bad.conf' "$CFG/converted.list" && fail "a broken file listed"
+  # Enabled, the group is not there: the start stops and names the old file.
+  config "AB_EGRESS=bad latin"
+  ab_run --
+  assert_rc 2
+  assert_out "no group 'bad'"
+  assert_out "bad.conf was not converted to TOML: see the warning above"
+  grep -q '^podman run' "$STUB_DIR/calls" && fail "containers started without the group"
+  # agentbox setup converts too, and shows the corrected file.
+  cp "$ROOT/agentbox" "$AB/"
+  printf '%s\n' '# a group' 'ok.example' > "$CFG/egress.local.d/bad.conf"
+  setup_run "q\n"
+  assert_out "egress.local.d/bad.conf -> bad.toml"
+  assert_out '\[x\] bad +\(yours\) ok.example$'
+}
+
+# Two starts at the same time. The writer of the first start is slow (a
+# python3 that waits), so the first start holds the lock for a while. The
+# second start waits for the lock, then finds the file in the list.
+test_convert_two_starts_one_converts() {
+  setup "${FUNCNAME[0]}"
+  python_log_stub
+  # The writer marks that it runs (the first start holds the lock), then waits.
+  sed -i "2i case \"\$*\" in *toml-writer.py*) touch '$T/writing'; sleep 1 ;; esac" "$T/bin/python3"
+  old_pypi_group
+  ab_run -- &
+  local first=$!
+  local i
+  for i in $(seq 50); do [[ -e "$T/writing" ]] && break; sleep 0.1; done
+  [[ -e "$T/writing" ]] || fail "the first start did not reach the writer"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_UPDATES=0 \
+    bash "$AB/run.sh" "$REPO" > "$T/out.second" 2>&1 < /dev/null
+  wait "$first"
+  assert_eq "$(cat "$T/out" "$T/out.second" | grep -c 'pypi.conf -> pypi.toml')" 1 "conversions"
+  assert_eq "$(grep -c 'toml-writer.py' "$T/python.log")" 1 "writer runs"
+  assert_eq "$(grep -c . "$CFG/converted.list")" 1 "lines in the list"
+}
+
+# The writer for KEY=VALUE files, the form of the settings and the old
+# sources. The test uses the kind of the tests (tests/toml/flat.schema.toml).
+# Each value gets the type of its key in the schema. A key that the schema
+# does not know becomes a comment. The written file reads back the same.
+test_convert_keys_by_type_and_unknown_key() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/tests/toml/flat.schema.toml" "$AB/lib/toml-schema/flat.toml"
+  printf '%s\n' '# my source' 'NAME=a"b\c # note' 'PREFIX=' "COUNT='007'" 'export ON=1' 'OFF=0' 'ITEMS=x, y z' \
+    'TYPO=1' 'NAME=second' 'nAME=third' 'not a setting' > "$T/old.conf"
+  (
+    HOME="$T/home" SCRIPT_DIR="$AB" XDG_CACHE_HOME="$T/home/.cache"
+    for lib in paths config toml convert; do
+      # shellcheck source=/dev/null
+      source "$AB/lib/$lib.sh"
+    done
+    CONVERT_TODO=("flat keys $T/old.conf")
+    convert_run
+  ) > "$T/out" 2>&1
+  assert_out "warning: .*old.conf:8: unknown key 'TYPO', kept as a comment"
+  assert_out "warning: .*old.conf:9: second time 'NAME', kept as a comment"
+  # load_config knows a key only in its own case, and warns on other lines.
+  assert_out "warning: .*old.conf:10: unknown key 'nAME', kept as a comment"
+  assert_out "warning: .*old.conf:11: not KEY=VALUE, kept as a comment"
+  assert_out "old.conf -> old.toml"
+  assert_eq "$(cat "$T/old.toml")" '# my source
+name = "a\"b\\c"  # note
+prefix = ""
+count = 7
+on = true
+off = false
+items = ["x", "y", "z"]
+# TYPO=1
+# NAME=second
+# nAME=third
+# not a setting'
+  assert_eq "$(toml_case flat "$T/old.toml")" 'count 4 4 7
+items 7 7 x y z
+name 2 2 a"b\c
+off 6 6 0
+on 5 5 1
+prefix 3 3 '
+}
+
 # --- run.sh: forwards ---
 
 # The hash in tabularis_bridge_dir (mcp/tabularis/mcp.sh), for the tests.

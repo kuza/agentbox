@@ -40,6 +40,11 @@ toml_python() {
   [[ "$TOML_PYTHON" != - ]]
 }
 
+toml_no_python() {  # <what agentbox needs it for>
+  echo "error: agentbox needs Python 3.11 or newer (python3, python3.13, python3.12 or python3.11) to $1." >&2
+  echo "  Fedora: dnf install python3. RHEL 9: dnf install python3.11. Ubuntu 22.04: apt install python3.11." >&2
+}
+
 # The reader version into TOML_VERSION: sha256sum of the reader code and
 # the schemas, once for each process.
 toml_version() {
@@ -68,8 +73,7 @@ toml_load() {  # <kind> <file> <values> [<lines>]
   _tl_out="$_tl_cache"
   if [[ ! -f "$_tl_cache" ]]; then
     if ! toml_python; then
-      echo "error: agentbox needs Python 3.11 or newer (python3, python3.13, python3.12 or python3.11) to read $_tl_file." >&2
-      echo "  Fedora: dnf install python3. RHEL 9: dnf install python3.11. Ubuntu 22.04: apt install python3.11." >&2
+      toml_no_python "read $_tl_file"
       return 3
     fi
     # shortcut: the directories of old reader versions stay; remove them if the cache grows.

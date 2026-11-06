@@ -43,6 +43,12 @@ egress_init() {
     seen+="$name "
     if ! file="$(conf_find "$name" toml "${EGRESS_DIRS[@]}")"; then
       echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.toml and egress.d/$name.toml)" >&2
+      file="$USER_EGRESS_DIR/$name.conf"
+      if [[ -f "$file" ]] && convert_listed "$file"; then
+        echo "  $file was converted before. To convert it again, remove its line from $CONVERT_LIST." >&2
+      elif [[ -f "$file" ]]; then
+        echo "  $file was not converted to TOML: see the warning above" >&2
+      fi
       exit 2
     fi
     toml_load egress-group "$file" group lines || exit 2

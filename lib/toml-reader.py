@@ -35,7 +35,8 @@ def error(code, line, message):
 
 def finish():
     # A bad file gives its errors only, no values.
-    sys.stdout.write("".join(r for r in records if not bad or r.startswith("error\0")))
+    # UTF-8 out, whatever the locale is.
+    sys.stdout.buffer.write("".join(r for r in records if not bad or r.startswith("error\0")).encode())
     sys.exit(4 if bad else 0)
 
 
