@@ -1,6 +1,10 @@
-# Local review notes, specs, designs and tickets.
-cr/
+# Local notes: specs, designs, tickets and reviews.
 .scratch/
+
+# Instructions for coding agents, kept local.
+AGENTS.md
+CLAUDE.md
+docs/agents/
 
 # Release archives built by release.sh.
 dist/
