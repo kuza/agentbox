@@ -36,6 +36,15 @@ done
 [[ -e "$WORK/realgit/git" ]] || { echo "tests need git (besides git-guard) in PATH" >&2; exit 1; }
 PATH="$WORK/realgit:$PATH"
 FILTER="${1:-}"
+# The Python of the tests themselves: the first that agentbox would use
+# (lib/toml.sh, toml_python). Ubuntu 22.04 can have python3.11 and no
+# python3. Empty when there is none.
+TEST_PYTHON=""
+for p in python3 python3.13 python3.12 python3.11; do
+  if command -v "$p" >/dev/null && "$p" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+    TEST_PYTHON="$p"; break
+  fi
+done
 PASSED=0; FAILED=0; FAILURES=()
 
 # --- harness ----------------------------------------------------------------
@@ -146,11 +155,11 @@ assert_skipped() {
 assert_file_lacks() { ! grep -qE -- "$2" "$1" 2>/dev/null || fail "$(basename "$1") has /$2/"; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "got '$1', expected '$2'${3:+ ($3)}"; }
 assert_json() {
-  command -v python3 >/dev/null || return 0
-  python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null || fail "$(basename "$1") is not valid JSON"
+  [[ -n "$TEST_PYTHON" ]] || return 0
+  "$TEST_PYTHON" -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null || fail "$(basename "$1") is not valid JSON"
 }
 json_keys() {  # <file>: mcpServers keys, space-separated
-  python3 -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["mcpServers"]))' "$1"
+  "$TEST_PYTHON" -I -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["mcpServers"]))' "$1"
 }
 
 run_test() {
@@ -193,7 +202,7 @@ test_mcp_default_set() {
   assert_file_has "$(cache mcp-claude.json)" '"Bearer \$\{AB_MCP_TOKEN_GRAFANA\}"'
   assert_file_has "$(cache mcp-claude.json)" '"type": "http"'
   assert_file_has "$(cache squid-allow.conf)" '^acl allowed dstdomain mcp.context7.com$'
-  if command -v python3 >/dev/null; then
+  if [[ -n "$TEST_PYTHON" ]]; then
     assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7 grafana graylog github" "claude servers"
   fi
 }
@@ -209,7 +218,7 @@ test_mcp_pi_gets_same_servers() {
   session_args | grep -qx -- "$CFG/pi-extensions:/home/node/.pi/agent/extensions:ro,z" || fail "pi extensions not mounted from your files"
   [[ -d "$CFG/pi-extensions" ]] || fail "pi-extensions not created"
   assert_file_has "$(cache mcp-pi.json)" '"description": "Grafana'
-  if command -v python3 >/dev/null; then
+  if [[ -n "$TEST_PYTHON" ]]; then
     assert_eq "$(json_keys "$(cache mcp-pi.json)")" "context7 grafana" "pi servers"
   fi
 }
@@ -222,7 +231,7 @@ test_mcp_empty_list_context7_only() {
   session_args | grep -q '^--secret$' && session_args | grep -q 'AB_MCP_TOKEN' && fail "no caller tokens expected"
   session_args | grep -qx 'NO_PROXY=ab-llm-openai' || fail "NO_PROXY: $(session_args | grep NO_PROXY)"
   assert_json "$(cache mcp-claude.json)"
-  if command -v python3 >/dev/null; then
+  if [[ -n "$TEST_PYTHON" ]]; then
     assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7"
   fi
 }
@@ -735,14 +744,9 @@ test_egress_errors() {
 # A python3 in front of the interpreter that the reader uses (lib/toml.sh,
 # toml_python) that writes each call to $T/python.log.
 python_log_stub() {
-  local p real=""
-  for p in python3 python3.13 python3.12 python3.11; do
-    if command -v "$p" >/dev/null && "$p" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
-      real="$(command -v "$p")"
-      break
-    fi
-  done
-  [[ -n "$real" ]] || fail "no Python 3.11 or newer on the test host"
+  local real
+  [[ -n "$TEST_PYTHON" ]] || fail "no Python 3.11 or newer on the test host"
+  real="$(command -v "$TEST_PYTHON")"
   printf '#!/bin/sh\necho "$*" >> "%s"\nexec "%s" "$@"\n' "$T/python.log" "$real" > "$T/bin/python3"
   chmod +x "$T/bin/python3"
 }
@@ -1630,9 +1634,9 @@ test_tabularis_key_file_mode() {
 
 # Another program on the port: no bridge, no sidecars, an error.
 test_tabularis_port_taken() {
-  command -v python3 >/dev/null || return 0
+  [[ -n "$TEST_PYTHON" ]] || return 0
   tab_setup "${FUNCNAME[0]}"
-  python3 -I -c '
+  "$TEST_PYTHON" -I -c '
 import socket, sys, time
 s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen()
 print(s.getsockname()[1], flush=True); time.sleep(30)' > "$T/port" &
@@ -3190,7 +3194,7 @@ test_user_files_in_old_place_stop_the_start() {
   mkdir -p "$AB/env" "$AB/agents" "$AB/pi/extensions" "$CFG/skills" "$AB/skills/mine"
   echo "DB=x" > "$AB/env/repo.env"
   echo "# rules" > "$AB/agents/AGENTS.md"
-  rm "$CFG/config.env"
+  rm "$CFG/config.toml"
   echo "AB_SERVICES=" > "$AB/config.env"
   ab_run --
   assert_rc 2
@@ -4131,7 +4135,7 @@ test_toml_conformance() {
   got="$(source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"
     printf '%s\n' "${CONFIG_KEYS[@]}" | LC_ALL=C sort | paste -sd' ' -
     printf '%s\n' "${CONFIG_LIST_KEYS[@]}" | LC_ALL=C sort | paste -sd' ' -)"
-  want="$(python3 -I -c 'import sys, tomllib
+  want="$("$TEST_PYTHON" -I -c 'import sys, tomllib
 s = tomllib.load(open(sys.argv[1], "rb"))
 print(" ".join(sorted(s)))
 print(" ".join(sorted(k for k in s if s[k]["type"] == "list")))' "$ROOT/lib/toml-schema/config.toml")"
