@@ -3426,7 +3426,7 @@ test_pi_extension_sync_refusals() {
 test_pi_extension_sources_at_start() {
   px_setup "${FUNCNAME[0]}"
   mkdir -p "$CFG/pi-extensions.local.d"
-  printf '%s\n' "URL=$SRC" > "$CFG/pi-extensions.local.d/myext.conf"
+  printf '%s\n' "url = '$SRC'" > "$CFG/pi-extensions.local.d/myext.toml"
   mkdir -p "$(px_dir handmade)"; echo x > "$(px_dir handmade)/index.ts"
   config "AB_PI_EXTENSIONS=myext"
   # A start of Claude Code does not install them: only pi mounts them.
@@ -3441,7 +3441,7 @@ test_pi_extension_sources_at_start() {
   assert_no_out "installing pi extension"
   # A pin installs it again at that ref, recorded as the pin.
   local first; first="$(git -C "$SRC" rev-parse HEAD)"
-  printf '%s\n' "URL=$SRC" "REF=$first" > "$CFG/pi-extensions.local.d/myext.conf"
+  printf '%s\n' "url = '$SRC'" "ref = '$first'" > "$CFG/pi-extensions.local.d/myext.toml"
   ab_run AB_AGENT=pi --
   assert_out "installing pi extension 'myext'"
   assert_file_has "$(px_rec myext)" "^REF=$first\$"
@@ -3467,8 +3467,8 @@ test_pi_extension_sources_at_start() {
   ab_run AB_AGENT=pi --
   [[ -e "$(px_dir myext)" ]] && fail "a disabled extension without its record left"
   [[ -f "$(px_dir byhand)/src/index.ts" ]] || fail "an extension installed by hand removed"
-  # NEEDS_SKILLS: a warning while that skill source is not enabled.
-  printf '%s\n' "URL=$SRC" "NEEDS_SKILLS=acme" > "$CFG/pi-extensions.local.d/myext.conf"
+  # needs_skills: a warning while that skill source is not enabled.
+  printf '%s\n' "url = '$SRC'" "needs_skills = ['acme']" > "$CFG/pi-extensions.local.d/myext.toml"
   config "AB_PI_EXTENSIONS=myext"
   ab_run AB_AGENT=pi --
   assert_rc 0
@@ -3498,6 +3498,56 @@ test_pi_extension_sources_at_start() {
   config "AB_PI_EXTENSIONS=nope"
   ab_run AB_AGENT=pi --
   assert_out "no pi extension source 'nope'"
+  # An unknown key and a missing url stop the start. The error names the line.
+  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  config "AB_PI_EXTENSIONS=myext"
+  printf '%s\n' "url = '$SRC'" "reff = 'v1'" > "$CFG/pi-extensions.local.d/myext.toml"
+  ab_run AB_AGENT=pi --
+  assert_rc 2
+  assert_out "pi-extensions.local.d/myext.toml:2: unknown key 'reff' \\(unknown-key\\)"
+  printf '%s\n' "# no url" "ref = 'v1'" > "$CFG/pi-extensions.local.d/myext.toml"
+  ab_run AB_AGENT=pi --
+  assert_rc 2
+  assert_out "pi-extensions.local.d/myext.toml:1: the key 'url' is missing \\(missing-key\\)"
+  return 0
+}
+
+# A pi extension source of yours from v0.1.x that a start of v0.1.x
+# installed. The start converts it, and installs nothing again: the values
+# that it compares with the record stay the same.
+test_convert_pi_extension_source() {
+  px_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/pi-extensions.local.d"
+  local first; first="$(git -C "$SRC" rev-parse HEAD)"
+  printf '%s\n' '# my extension' "URL=$SRC" "REF=$first" 'NEEDS_SKILLS=acme,other' > "$CFG/pi-extensions.local.d/myext.conf"
+  # The install of v0.1.x, with the values that its run.sh gave.
+  env HOME="$T/home" PATH="$T/bin:$PATH" AB_PI_EXTENSIONS_PIN="$first" AB_PI_EXTENSIONS_SOURCE=1 \
+    bash "$AB/sync-pi-extension.sh" myext "$SRC" "$first" > /dev/null 2>&1
+  config "AB_PI_EXTENSIONS=myext"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_out "pi-extensions.local.d/myext.conf -> myext.toml"
+  assert_out "pi extension 'myext' uses the skill source 'acme'"
+  assert_out "pi extension 'myext' uses the skill source 'other'"
+  assert_no_out "installing pi extension"
+  assert_eq "$(cat "$CFG/pi-extensions.local.d/myext.toml")" "# my extension
+url = \"$SRC\"
+ref = \"$first\"
+needs_skills = [\"acme\", \"other\"]"
+  ab_run AB_AGENT=pi --
+  assert_rc 0
+  assert_no_out "installing pi extension|converted"
+  [[ -f "$(px_dir myext)/src/index.ts" ]] || fail "the extension is gone"
+  # An old file of yours that cannot be converted (no URL) stops the start.
+  # The start does not use the shared source of the same name in its place.
+  printf '%s\n' 'REF=v1' > "$CFG/pi-extensions.local.d/ponytail.conf"
+  # A local shared source: no network if the start uses it by mistake.
+  printf '%s\n' "url = '$SRC'" > "$AB/pi-extensions.d/ponytail.toml"
+  printf '%s\n' "AB_PI_EXTENSIONS=ponytail" > "$CFG/config.env"
+  ab_run AB_AGENT=pi --
+  assert_rc 2
+  assert_out "ponytail.conf was not converted to TOML .*does not use the shared pi extension source"
+  [[ -e "$(px_dir ponytail)" ]] && fail "the shared source was installed in place of yours"
   return 0
 }
 
@@ -3506,9 +3556,19 @@ test_pi_extension_shared_sources_and_setup() {
   cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
   local n
   for n in pi-subagents pi-prompt-history; do
-    assert_file_has "$AB/pi-extensions.d/$n.conf" '^URL=https://github.com/'
+    assert_file_has "$AB/pi-extensions.d/$n.toml" '^url = "https://github.com/'
   done
   echo "AB_MCP=" > "$CFG/config.env"
+  # Setup shows the URL of each pi extension source. An old file of yours
+  # that is not converted shows a note.
+  mkdir -p "$CFG/pi-extensions.local.d"
+  echo "url = 'https://example.com/me/ext'" > "$CFG/pi-extensions.local.d/mine.toml"
+  echo "REF=v1" > "$CFG/pi-extensions.local.d/broken.conf"
+  setup_run "q\n"
+  assert_out '\[ \] pi-prompt-history +https://github.com/Integralist/pi-prompt-history$'
+  assert_out '\[ \] mine +\(yours\) https://example.com/me/ext$'
+  assert_out '\[ \] broken +\(yours\) \(not converted, see the warning above\)$'
+  rm "$CFG/pi-extensions.local.d/broken.conf"
   local sub; sub="$(setup_entry pi-subagents)"
   [[ -n "$sub" ]] || fail "pi-subagents not in the setup menu"
   setup_run "$sub\ns\n"
@@ -3594,8 +3654,8 @@ test_skills_source_subdir() {
   # The shared source: skills/ only, no prefix.
   assert_file_has "$AB/skills.d/ponytail.toml" '^subdir = "skills"$'
   assert_file_has "$AB/skills.d/ponytail.toml" '^prefix = ""$'
-  assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^URL=https://github.com/DietrichGebert/ponytail$'
-  assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^NEEDS_SKILLS=ponytail$'
+  assert_file_has "$AB/pi-extensions.d/ponytail.toml" '^url = "https://github.com/DietrichGebert/ponytail"$'
+  assert_file_has "$AB/pi-extensions.d/ponytail.toml" '^needs_skills = \["ponytail"\]$'
 }
 
 test_skills_source_installed_once() {

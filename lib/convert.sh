@@ -44,6 +44,7 @@ convert_old_files() {
   convert_read_list
   convert_find egress-group hosts "$USER_EGRESS_DIR"/*.conf
   convert_find skill-source source "$USER_SKILLS_SOURCES_DIR"/*.conf
+  convert_find pi-extension-source source "$USER_PI_EXTENSIONS_CONF_DIR"/*.conf
   convert_run
 }
 

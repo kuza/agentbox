@@ -1,0 +1,12 @@
+# The schema of a pi extension source (pi-extensions.d/<name>.toml): for
+# each key, its type (string, int, bool or list) and whether it is
+# required. lib/toml.sh reads the files of this kind with it.
+[url]
+type = "string"
+required = true
+
+[ref]
+type = "string"
+
+[needs_skills]
+type = "list"

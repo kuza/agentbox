@@ -1,0 +1,4 @@
+# A ref and two skill sources.
+url = "https://example.com/acme/ext"
+ref = "v1"
+needs_skills = ["acme", "other"]

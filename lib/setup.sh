@@ -118,14 +118,17 @@ setup_record_list() {  # <key> <list> [default when unset]
 # What an egress group opens: its hosts. What a skill source or a pi
 # extension source is: its URL. "(yours)" for a file in your directory.
 setup_describe() {  # <egress|skill|piext> <file>
-  local text rc=0 err kind=egress-group key=hosts
+  local text rc=0 err kind key
   local -A desc=()
-  if [[ "$1" == piext ]]; then
-    text="$(source_value "$2" URL)"
-  elif [[ "$2" == *.conf ]]; then
+  case "$1" in
+    egress) kind=egress-group key=hosts ;;
+    skill) kind=skill-source key=url ;;
+    piext) kind=pi-extension-source key=url ;;
+    *) echo "error: setup_describe: no kind '$1'" >&2; return 2 ;;
+  esac
+  if [[ "$2" == *.conf ]]; then
     text="(not converted, see the warning above)"
   else
-    [[ "$1" == skill ]] && kind=skill-source key=url
     # In a subshell already ($(...)): the temp file goes with it.
     err="$(mktemp)"
     toml_load "$kind" "$2" desc 2>"$err" || rc=$?
@@ -142,17 +145,17 @@ setup_describe() {  # <egress|skill|piext> <file>
 }
 
 # Names of <dir>/*.<extension> or <dir>/*/mcp.sh over all <dirs>, sorted,
-# once each.
-setup_names() {  # <conf|toml|mcp> <dirs...>
-  local ext="$1" d f
+# once each. For toml, also each old file of yours (the first dir) that is
+# not converted (lib/convert.sh).
+setup_names() {  # <toml|mcp> <dirs: yours, then shared>
+  local ext="$1" d f yours="$2"
   shift
   for d in "$@"; do
     if [[ "$ext" == mcp ]]; then
       for f in "$d"/*/mcp.sh; do [[ -f "$f" ]] && basename "$(dirname "$f")"; done
     else
       for f in "$d"/*."$ext"; do [[ -f "$f" ]] && basename "$f" ".$ext"; done
-      # An old file of yours that is not converted (lib/convert.sh).
-      if [[ "$ext" == toml ]]; then
+      if [[ "$ext" == toml && "$d" == "$yours" ]]; then
         for f in "$d"/*.conf; do convert_pending "$f" && basename "$f" .conf; done
       fi
     fi
@@ -382,7 +385,7 @@ setup_entries() {
   # Line by line: a file name with a space or * stays one name.
   while IFS= read -r n; do [[ "$n" == context7 ]] || echo "mcp $n"; done < <(setup_names mcp "${MCP_DIRS[@]}")
   while IFS= read -r n; do echo "skill $n"; done < <(setup_names toml "${SKILLS_SOURCE_DIRS[@]}")
-  while IFS= read -r n; do echo "piext $n"; done < <(setup_names conf "${PI_EXTENSION_SOURCE_DIRS[@]}")
+  while IFS= read -r n; do echo "piext $n"; done < <(setup_names toml "${PI_EXTENSION_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "egress $n"; done < <(setup_names toml "${EGRESS_DIRS[@]}")
   for n in "${SETUP_OTHER[@]}"; do echo "other ${n%% *}"; done
 }
@@ -424,7 +427,7 @@ setup_show() {
       skill) in_list "$name" "$skills" && mark="[x]" || mark="[ ]"
              text="$(setup_describe skill "$(convert_toml_find "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
       piext) in_list "$name" "$piexts" && mark="[x]" || mark="[ ]"
-             text="$(setup_describe piext "$(conf_find "$name" conf "${PI_EXTENSION_SOURCE_DIRS[@]}")")" ;;
+             text="$(setup_describe piext "$(convert_toml_find "$name" "${PI_EXTENSION_SOURCE_DIRS[@]}")")" ;;
       egress) in_list "$name" "$egress" && mark="[x]" || mark="[ ]"
               text="$(setup_describe egress "$(convert_toml_find "$name" "${EGRESS_DIRS[@]}")")" ;;
       other)

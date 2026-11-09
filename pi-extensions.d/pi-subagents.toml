@@ -8,4 +8,4 @@
 # prevent this in a repo, put { "worktreeIsolation": false } in its
 # .pi/subagents.json.
 # Enable with AB_PI_EXTENSIONS=pi-subagents (README, pi extensions).
-URL=https://github.com/tintinweb/pi-subagents
+url = "https://github.com/tintinweb/pi-subagents"

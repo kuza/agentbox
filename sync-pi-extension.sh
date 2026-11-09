@@ -8,7 +8,7 @@
 #   ./sync-pi-extension.sh --remove <name>
 #
 # Usually run by run.sh for the sources in AB_PI_EXTENSIONS
-# (pi-extensions.d/<name>.conf), and by check-updates.sh for an update you
+# (pi-extensions.d/<name>.toml), and by check-updates.sh for an update you
 # accept.
 #
 # What it does:

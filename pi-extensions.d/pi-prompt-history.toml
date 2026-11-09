@@ -2,4 +2,4 @@
 # pi sessions (~/.pi/agent/sessions). No npm dependencies. Needs pi 1.2.0 or
 # newer. Enable with AB_PI_EXTENSIONS=pi-prompt-history (README, pi
 # extensions).
-URL=https://github.com/Integralist/pi-prompt-history
+url = "https://github.com/Integralist/pi-prompt-history"

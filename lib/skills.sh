@@ -80,32 +80,11 @@ source_value() {  # <file> <key>: value of KEY=VALUE, empty if missing
   sed -n "s/^$2=//p" "$1" | tail -n1
 }
 
-# The .conf of source <name> for <setting> (AB_PI_EXTENSIONS):
-# a valid name, the first <dir>/<name>.conf, with a URL. Prints its path;
-# otherwise says why and returns 2, and the caller stops the start.
-source_conf() {  # <setting> <what> <name> <dirs: yours, then shared>
-  local setting="$1" what="$2" name="$3" conf
-  shift 3
-  if [[ ! "$name" =~ $AB_NAME_RE ]]; then
-    echo "error: $setting: invalid source name '$name'" >&2
-    return 2
-  fi
-  if ! conf="$(conf_find "$name" conf "$@")"; then
-    echo "error: $setting: no $what '$name' (looked for $1/$name.conf and $(basename "$2")/$name.conf)" >&2
-    return 2
-  fi
-  if [[ -z "$(source_value "$conf" URL)" ]]; then
-    echo "error: $conf does not set URL" >&2
-    return 2
-  fi
-  printf '%s\n' "$conf"
-}
-
-# Reads the source <name> for <setting> (AB_SKILLS). The name must be
-# valid. toml_load reads the first <dir>/<name>.toml into the arrays named
-# <values> and <lines>, and the url must not be empty. SOURCE_FILE gets the
-# path of the file. Otherwise it says why and returns 2, and the caller
-# stops the start.
+# Reads the source <name> for <setting> (AB_SKILLS, AB_PI_EXTENSIONS).
+# The name must be valid. toml_load reads the first <dir>/<name>.toml into
+# the arrays named <values> and <lines>, and the url must not be empty.
+# SOURCE_FILE gets the path of the file. Otherwise it says why and returns
+# 2, and the caller stops the start.
 source_load() {  # <setting> <what> <kind> <name> <values> <lines> <dirs: yours, then shared>
   local _sl_setting="$1" _sl_what="$2" _sl_kind="$3" _sl_name="$4" rc=0
   local -n _sl_values="$5" _sl_lines="$6"
