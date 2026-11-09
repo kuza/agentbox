@@ -11,7 +11,7 @@
 #   ./sync-skills.sh https://github.com/mattpocock/skills 3f2c1ab      # pin a commit
 #   SKILLS_ONLY=tdd,grill-me,code-review ./sync-skills.sh https://github.com/mattpocock/skills
 #
-# Usually run by run.sh for the sources in AB_SKILLS (skills.d/<name>.conf);
+# Usually run by run.sh for the sources in AB_SKILLS (skills.d/<name>.toml);
 # by hand for a one-off repository.
 #
 # What it does:

@@ -224,7 +224,7 @@ fi
 # The record <file> of a git source (URL, COMMIT, REF) against the default
 # branch of its remote. On a newer commit, it says so with a link to the
 # changes, and on a yes it runs <command...> with the URL as the last
-# argument. A pinned record (REF in its .conf: updated by changing it) is
+# argument. A pinned record (a ref in its source file: updated by changing it) is
 # skipped. So is a record without a URL when <old-ok> is 1: a skill record
 # from before URLs were recorded. A pi extension record always has one.
 git_source_offer() {  # <file> <what> <old-ok: 0|1> <command...>

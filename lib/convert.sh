@@ -43,10 +43,38 @@ convert_read_list() {
 convert_old_files() {
   convert_read_list
   convert_find egress-group hosts "$USER_EGRESS_DIR"/*.conf
+  convert_find skill-source source "$USER_SKILLS_SOURCES_DIR"/*.conf
   convert_run
 }
 
 convert_listed() { [[ -n "${CONVERT_LISTED[$1]+x}" ]]; }  # <old file>
+
+# 0 when <old file> of yours is there and is not converted (the conversion
+# warned). Then a start must not use the shared file of the same name in
+# its place.
+convert_pending() { [[ -f "$1" ]] && ! convert_listed "$1"; }  # <old file>
+
+# The TOML file of <name>: the first <dir>/<name>.toml. Each caller looks it
+# up here, so that the rule of convert_pending is in one place. Returns 3
+# and prints your old file when it is not converted: then the shared file
+# of that name does not count. Returns 1 when there is no file.
+convert_toml_find() {  # <name> <dirs: yours, then shared>
+  if convert_pending "$2/$1.conf"; then
+    printf '%s\n' "$2/$1.conf"
+    return 3
+  fi
+  conf_find "$1" toml "${@:2}"
+}
+
+# Says why a TOML file is not there when its old file was converted (you
+# removed the TOML file). A start calls it before it stops on the missing
+# TOML file. An old file that is not converted stops the start earlier
+# (convert_pending).
+convert_why_missing() {  # <old file>
+  if [[ -f "$1" ]] && convert_listed "$1"; then
+    echo "  $1 was converted before. To convert it again, remove its line from $CONVERT_LIST." >&2
+  fi
+}
 
 convert_add() {  # <old file> <converted|kept>
   if [[ "$2" == kept ]]; then printf 'kept %s\n' "$1"; else printf '%s\n' "$1"; fi >> "$CONVERT_LIST"

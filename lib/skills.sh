@@ -4,28 +4,30 @@
 # across sessions and repos). Project skills in <repo>/.claude/skills need
 # nothing: the repo is mounted.
 #
-# Skill sources: skills.d/<name>.conf (shared, in git) or
-# <AB_HOME>/skills.local.d/<name>.conf (yours; wins over skills.d/).
+# Skill sources: skills.d/<name>.toml (shared, in git) or
+# <AB_HOME>/skills.local.d/<name>.toml (yours; wins over skills.d/).
 # AB_SKILLS in config.env lists the enabled ones. A source is a git
 # repository of skills, installed into the skills directory by
-# sync-skills.sh. Its .conf is KEY=VALUE data, never run:
-#   URL      git URL of the repository (required)
-#   ONLY     comma-separated skills to install, as named there (default: all)
-#   SUBDIR   directory in the repository to look for skills in (default:
+# sync-skills.sh. Its file is TOML data, never run, read by toml_load
+# (lib/toml.sh, kind skill-source):
+#   url      git URL of the repository (required)
+#   only     the skills to install, as named there, a list (default: all)
+#   subdir   directory in the repository to look for skills in (default:
 #            all of it)
-#   PREFIX   prefix for the installed names (default: the repository owner;
-#            empty: none)
-#   REF      branch, tag or commit to pin to (default: the default branch,
+#   prefix   prefix for the installed names (default: the repository owner;
+#            "": none)
+#   ref      branch, tag or commit to pin to (default: the default branch,
 #            with updates offered by check-updates.sh)
 #
 # skills_sources installs an enabled source that is missing, re-syncs one
-# whose .conf changed (at the installed commit, so a changed ONLY does not
+# whose file changed (at the installed commit, so a changed "only" does not
 # also upgrade it), and removes the skills of a source that was disabled.
 # It compares with <skills>/.sources/<owner>__<repo>, the record
 # sync-skills.sh keeps; skills synced by hand, without a source, are left
 # alone.
 #
-# Needs lib/paths.sh, lib/config.sh (conf_find, ab_warn) and, for
+# Needs lib/paths.sh, lib/config.sh (conf_find, ab_warn), lib/toml.sh,
+# lib/convert.sh (convert_toml_find, convert_why_missing) and, for
 # skills_sources, lib/git-source.sh (git_source_subdir).
 
 SKILLS_SOURCE_DIRS=("$USER_SKILLS_SOURCES_DIR" "$SCRIPT_DIR/skills.d")
@@ -78,7 +80,7 @@ source_value() {  # <file> <key>: value of KEY=VALUE, empty if missing
   sed -n "s/^$2=//p" "$1" | tail -n1
 }
 
-# The .conf of source <name> for <setting> (AB_SKILLS, AB_PI_EXTENSIONS):
+# The .conf of source <name> for <setting> (AB_PI_EXTENSIONS):
 # a valid name, the first <dir>/<name>.conf, with a URL. Prints its path;
 # otherwise says why and returns 2, and the caller stops the start.
 source_conf() {  # <setting> <what> <name> <dirs: yours, then shared>
@@ -99,41 +101,79 @@ source_conf() {  # <setting> <what> <name> <dirs: yours, then shared>
   printf '%s\n' "$conf"
 }
 
-source_has() {  # <file> <key>: whether KEY= is present
-  grep -q "^$2=" "$1"
+# Reads the source <name> for <setting> (AB_SKILLS). The name must be
+# valid. toml_load reads the first <dir>/<name>.toml into the arrays named
+# <values> and <lines>, and the url must not be empty. SOURCE_FILE gets the
+# path of the file. Otherwise it says why and returns 2, and the caller
+# stops the start.
+source_load() {  # <setting> <what> <kind> <name> <values> <lines> <dirs: yours, then shared>
+  local _sl_setting="$1" _sl_what="$2" _sl_kind="$3" _sl_name="$4" rc=0
+  local -n _sl_values="$5" _sl_lines="$6"
+  shift 6
+  if [[ ! "$_sl_name" =~ $AB_NAME_RE ]]; then
+    echo "error: $_sl_setting: invalid source name '$_sl_name'" >&2
+    return 2
+  fi
+  SOURCE_FILE="$(convert_toml_find "$_sl_name" "$@")" || rc=$?
+  if (( rc == 3 )); then
+    echo "error: $_sl_setting: $SOURCE_FILE was not converted to TOML (see the warning above). agentbox does not use the shared $_sl_what of that name in its place." >&2
+    return 2
+  fi
+  if (( rc )); then
+    echo "error: $_sl_setting: no $_sl_what '$_sl_name' (looked for $1/$_sl_name.toml and $(basename "$2")/$_sl_name.toml)" >&2
+    convert_why_missing "$1/$_sl_name.conf"
+    return 2
+  fi
+  toml_load "$_sl_kind" "$SOURCE_FILE" "${!_sl_values}" "${!_sl_lines}" || return 2
+  if [[ -z "${_sl_values[url]}" ]]; then
+    echo "$SOURCE_FILE:${_sl_lines[url]%% *}: 'url' is empty" >&2
+    return 2
+  fi
+}
+
+# The repository of skill source <name> as skills_sources sees it
+# (repo_slug: no ".git", no trailing "/"). Empty when there is no such
+# source or its file is bad.
+skill_source_slug() {  # <name>
+  local file
+  local -A desc=()
+  if file="$(convert_toml_find "$1" "${SKILLS_SOURCE_DIRS[@]}")" && toml_load skill-source "$file" desc 2>/dev/null; then
+    repo_slug "${desc[url]}"
+  fi
 }
 
 repo_slug() {  # <url>: owner__repo, as sync-skills.sh computes it
   printf '%s' "$1" | sed -E 's#(\.git)?/*$##; s#^.*[:/]([^/:]+)/([^/]+)$#\1__\2#'
 }
 
-sorted_list() {  # <comma-separated list>: sorted, no spaces
-  printf '%s' "${1// /}" | tr ',' '\n' | sed '/^$/d' | sort | paste -sd, -
+sorted_list() {  # <list, separated by commas or spaces>: sorted, comma-separated
+  printf '%s' "$1" | tr ', ' '\n\n' | sed '/^$/d' | sort | paste -sd, -
 }
 
 skills_sources() {
-  local list="${AB_SKILLS:-}" name conf url only subdir prefix ref slug sync want have at f src
-  local -A enabled_url=() source_of_slug=()
+  local list="${AB_SKILLS:-}" name url only subdir prefix ref slug sync want have at f src
+  local -A enabled_url=() source_of_slug=() desc=() desc_lines=()
   for name in ${list//,/ }; do
-    conf="$(source_conf AB_SKILLS "skill source" "$name" "${SKILLS_SOURCE_DIRS[@]}")" || exit 2
-    url="$(source_value "$conf" URL)"
-    only="$(sorted_list "$(source_value "$conf" ONLY)")"
-    subdir="$(git_source_subdir "$(source_value "$conf" SUBDIR)" "$conf: SUBDIR")" || exit 2
+    source_load AB_SKILLS "skill source" skill-source "$name" desc desc_lines "${SKILLS_SOURCE_DIRS[@]}" || exit 2
+    url="${desc[url]}"
+    # The same form as the record (SKILLS_ONLY) and as v0.1.x.
+    only="$(sorted_list "${desc[only]:-}")"
+    subdir="$(git_source_subdir "${desc[subdir]:-}" "$SOURCE_FILE: subdir")" || exit 2
     slug="$(repo_slug "$url")"
     # The sync record is per repository: two sources of one repository
     # would overwrite each other's skills on every start.
     if [[ -n "${source_of_slug[$slug]:-}" ]]; then
       echo "error: AB_SKILLS: sources '${source_of_slug[$slug]}' and '$name' both use $url;" \
-           "make them one source (ONLY lists the skills of both)" >&2
+           "make them one source (its \"only\" lists the skills of both)" >&2
       exit 2
     fi
     source_of_slug[$slug]="$name"
-    if source_has "$conf" PREFIX; then
-      prefix="$(source_value "$conf" PREFIX)"
+    if [[ -n "${desc[prefix]+x}" ]]; then
+      prefix="${desc[prefix]}"
     else
       prefix="$(printf '%s' "${slug%%__*}" | tr '[:upper:]' '[:lower:]')"
     fi
-    ref="$(source_value "$conf" REF)"
+    ref="${desc[ref]:-}"
     enabled_url[$name]="$url"
 
     sync="$SKILLS_DIR/.sources/$slug"

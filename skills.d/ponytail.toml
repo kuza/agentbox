@@ -8,6 +8,6 @@
 # agents. Installed without a prefix: the names already start with
 # "ponytail-", and the pi extension ponytail calls them by these names.
 # Enable with AB_SKILLS=ponytail (README, Skills).
-URL=https://github.com/DietrichGebert/ponytail
-SUBDIR=skills
-PREFIX=
+url = "https://github.com/DietrichGebert/ponytail"
+subdir = "skills"
+prefix = ""

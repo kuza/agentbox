@@ -1,0 +1,7 @@
+# An empty prefix is present: no prefix.
+url = "https://example.com/acme/skills"
+only = [
+  "tdd",
+  "review",
+]
+prefix = ""

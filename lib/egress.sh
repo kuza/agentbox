@@ -31,7 +31,7 @@ EGRESS_DEFAULT="anthropic openai pypi go"
 # (MCP_EGRESS_ALL).
 # Result: EGRESS_HOSTS, one "host[:port]" each.
 egress_init() {
-  local name file host hosts seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" entry
+  local name file host hosts seen=" " list="${AB_EGRESS-$EGRESS_DEFAULT}" entry rc
   local -A group=() lines=()
   EGRESS_HOSTS=()
   for name in ${list//,/ }; do
@@ -41,14 +41,15 @@ egress_init() {
     fi
     [[ "$seen" == *" $name "* ]] && continue
     seen+="$name "
-    if ! file="$(conf_find "$name" toml "${EGRESS_DIRS[@]}")"; then
+    rc=0
+    file="$(convert_toml_find "$name" "${EGRESS_DIRS[@]}")" || rc=$?
+    if (( rc == 3 )); then
+      echo "error: AB_EGRESS: $file was not converted to TOML (see the warning above). agentbox does not use the shared group of that name in its place." >&2
+      exit 2
+    fi
+    if (( rc )); then
       echo "error: AB_EGRESS: no group '$name' (looked for $USER_EGRESS_DIR/$name.toml and egress.d/$name.toml)" >&2
-      file="$USER_EGRESS_DIR/$name.conf"
-      if [[ -f "$file" ]] && convert_listed "$file"; then
-        echo "  $file was converted before. To convert it again, remove its line from $CONVERT_LIST." >&2
-      elif [[ -f "$file" ]]; then
-        echo "  $file was not converted to TOML: see the warning above" >&2
-      fi
+      convert_why_missing "$USER_EGRESS_DIR/$name.conf"
       exit 2
     fi
     toml_load egress-group "$file" group lines || exit 2

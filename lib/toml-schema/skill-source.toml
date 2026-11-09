@@ -1,0 +1,18 @@
+# The schema of a skill source (skills.d/<name>.toml): for each key, its
+# type (string, int, bool or list) and whether it is required. lib/toml.sh
+# reads the files of this kind with it.
+[url]
+type = "string"
+required = true
+
+[only]
+type = "list"
+
+[prefix]
+type = "string"
+
+[ref]
+type = "string"
+
+[subdir]
+type = "string"

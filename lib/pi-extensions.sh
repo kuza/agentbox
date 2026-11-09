@@ -16,8 +16,8 @@
 # sync-pi-extension.sh yourself stays.
 #
 # Sourced by run.sh and agentbox setup. Needs lib/paths.sh, lib/config.sh
-# (conf_find, ab_warn) and lib/skills.sh (source_conf, source_value,
-# SKILLS_SOURCE_DIRS).
+# (conf_find, ab_warn), lib/toml.sh, lib/convert.sh and lib/skills.sh
+# (source_conf, source_value, skill_source_slug).
 
 PI_EXTENSION_SOURCE_DIRS=("$USER_PI_EXTENSIONS_CONF_DIR" "$SCRIPT_DIR/pi-extensions.d")
 
@@ -25,14 +25,11 @@ PI_EXTENSION_SOURCE_DIRS=("$USER_PI_EXTENSIONS_CONF_DIR" "$SCRIPT_DIR/pi-extensi
 # AB_SKILLS: under that name, or a source of yours with another name for the
 # same repository.
 pi_extension_skills_enabled() {  # <skill source name>
-  local want="" n c list="${AB_SKILLS:-}"
-  # The repository as skills_sources sees it (repo_slug: no ".git", no
-  # trailing "/").
-  c="$(conf_find "$1" conf "${SKILLS_SOURCE_DIRS[@]}")" && want="$(repo_slug "$(source_value "$c" URL)")"
+  local want n list="${AB_SKILLS:-}"
+  want="$(skill_source_slug "$1")"
   for n in ${list//,/ }; do
     [[ "$n" == "$1" ]] && return 0
-    [[ -n "$want" ]] && c="$(conf_find "$n" conf "${SKILLS_SOURCE_DIRS[@]}")" \
-      && [[ "$(repo_slug "$(source_value "$c" URL)")" == "$want" ]] && return 0
+    [[ -n "$want" && "$(skill_source_slug "$n")" == "$want" ]] && return 0
   done
   return 1
 }

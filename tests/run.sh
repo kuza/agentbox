@@ -869,8 +869,7 @@ test_convert_broken_old_file_warns() {
   config "AB_EGRESS=bad latin"
   ab_run --
   assert_rc 2
-  assert_out "no group 'bad'"
-  assert_out "bad.conf was not converted to TOML: see the warning above"
+  assert_out "bad.conf was not converted to TOML \\(see the warning above\\)"
   grep -q '^podman run' "$STUB_DIR/calls" && fail "containers started without the group"
   # agentbox setup converts too, and shows the corrected file.
   cp "$ROOT/agentbox" "$AB/"
@@ -1608,8 +1607,8 @@ test_tabularis_errors() {
 
 test_skill_sources_same_repository() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d a "URL=$SRC" "ONLY=tdd"
-  src_conf skills.d b "URL=$SRC" "ONLY=review"
+  src_conf skills.d a "url = '$SRC'" "only = ['tdd']"
+  src_conf skills.d b "url = '$SRC'" "only = ['review']"
   config "AB_SKILLS=a b"
   ab_run --
   assert_rc 2
@@ -2578,7 +2577,11 @@ test_setup_edits_config() {
   # Under a module: its settings and secrets, and how to change them.
   mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]  # mine' > "$CFG/egress.local.d/corp.toml"
   echo 'hostz = ["x.example"]' > "$CFG/egress.local.d/typo.toml"
+  mkdir -p "$CFG/skills.local.d"; echo "url = 'https://example.com/me/skills'" > "$CFG/skills.local.d/mine.toml"
   setup_run "q\n"
+  # A skill source by its URL, from the shared .toml files and yours.
+  assert_out '\[ \] mattpocock +https://github.com/mattpocock/skills$'
+  assert_out '\[ \] mine +\(yours\) https://example.com/me/skills$'
   # An egress group by its hosts, from the shared .toml files and yours; a
   # bad group by its first error.
   assert_out '\[x\] pypi +pypi.org files.pythonhosted.org$'
@@ -3472,13 +3475,13 @@ test_pi_extension_sources_at_start() {
   assert_out "pi extension 'myext' uses the skill source 'acme'"
   # A source of yours with another name for the same repository counts.
   mkdir -p "$CFG/skills.local.d"
-  printf '%s\n' "URL=$T/nowhere/acme/skills" > "$CFG/skills.local.d/acme.conf"
-  printf '%s\n' "URL=$T/nowhere/acme/skills" > "$CFG/skills.local.d/mine.conf"
+  printf '%s\n' "url = '$T/nowhere/acme/skills'" > "$CFG/skills.local.d/acme.toml"
+  printf '%s\n' "url = '$T/nowhere/acme/skills'" > "$CFG/skills.local.d/mine.toml"
   ab_run AB_AGENT=pi AB_SKILLS=mine AB_CHECK_UPDATES=0 --
   assert_no_out "uses the skill source 'acme'"
   # A comma list, and ".git" on one URL: the same repository.
-  printf '%s\n' "URL=$T/nowhere/acme/skills.git" > "$CFG/skills.local.d/mine.conf"
-  printf '%s\n' "URL=$T/nowhere/other/skills" > "$CFG/skills.local.d/other.conf"
+  printf '%s\n' "url = '$T/nowhere/acme/skills.git'" > "$CFG/skills.local.d/mine.toml"
+  printf '%s\n' "url = '$T/nowhere/other/skills'" > "$CFG/skills.local.d/other.toml"
   ab_run AB_AGENT=pi AB_SKILLS=other,mine AB_CHECK_UPDATES=0 --
   assert_rc 0
   assert_no_out "uses the skill source 'acme'"
@@ -3488,8 +3491,8 @@ test_pi_extension_sources_at_start() {
   # Neither under its name nor by its repository: the message.
   ab_run AB_AGENT=pi AB_SKILLS=other AB_CHECK_UPDATES=0 --
   assert_out "uses the skill source 'acme'"
-  rm "$CFG/skills.local.d/other.conf"
-  rm "$CFG/skills.local.d/acme.conf" "$CFG/skills.local.d/mine.conf"
+  rm "$CFG/skills.local.d/other.toml"
+  rm "$CFG/skills.local.d/acme.toml" "$CFG/skills.local.d/mine.toml"
   sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
   # An unknown source stops the start, like AB_SKILLS.
   config "AB_PI_EXTENSIONS=nope"
@@ -3564,40 +3567,40 @@ test_updates_pi_extension_behind() {
 
 # --- run.sh: skill sources (AB_SKILLS) --------------------------------------
 
-src_conf() {  # <dir: skills.d|skills.local.d> <name> <lines...>
+src_conf() {  # <dir: skills.d|skills.local.d> <name> <TOML lines...>
   local dir name="$2"
   if [[ "$1" == skills.d ]]; then dir="$AB/$1"; else dir="$CFG/$1"; fi
   shift 2
   mkdir -p "$dir"
-  printf '%s\n' "$@" > "$dir/$name.conf"
+  printf '%s\n' "$@" > "$dir/$name.toml"
 }
 installed() { ls "$CFG/skills" 2>/dev/null | grep -v '^graphify$' | paste -sd' ' -; }
 
 test_skills_source_subdir() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d acme "URL=$SRC" "SUBDIR=misc" "PREFIX="
+  src_conf skills.d acme "url = '$SRC'" "subdir = 'misc'" "prefix = ''"
   config "AB_SKILLS=acme"
   ab_run --
   assert_rc 0
   assert_eq "$(installed)" "notes"
-  # A changed SUBDIR syncs again.
-  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng" "PREFIX="
+  # A changed subdir syncs again.
+  src_conf skills.d acme "url = '$SRC'" "subdir = 'eng'" "prefix = ''"
   ab_run --
   assert_eq "$(installed)" "review tdd"
-  # Trailing slashes are the same SUBDIR: no new sync.
-  src_conf skills.d acme "URL=$SRC" "SUBDIR=eng//" "PREFIX="
+  # Trailing slashes are the same subdir: no new sync.
+  src_conf skills.d acme "url = '$SRC'" "subdir = 'eng//'" "prefix = ''"
   ab_run --
   assert_no_out "syncing skills from 'acme'"
   # The shared source: skills/ only, no prefix.
-  assert_file_has "$AB/skills.d/ponytail.conf" '^SUBDIR=skills$'
-  assert_file_has "$AB/skills.d/ponytail.conf" '^PREFIX=$'
+  assert_file_has "$AB/skills.d/ponytail.toml" '^subdir = "skills"$'
+  assert_file_has "$AB/skills.d/ponytail.toml" '^prefix = ""$'
   assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^URL=https://github.com/DietrichGebert/ponytail$'
   assert_file_has "$AB/pi-extensions.d/ponytail.conf" '^NEEDS_SKILLS=ponytail$'
 }
 
 test_skills_source_installed_once() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd,review"
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd', 'review']"
   config "AB_SKILLS=acme"
   ab_run --
   assert_rc 0
@@ -3610,13 +3613,13 @@ test_skills_source_installed_once() {
 
 test_skills_source_selection_change_keeps_version() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd']"
   config "AB_SKILLS=acme"
   ab_run --
   local before; before="$(source_value "$CFG/skills/.sources/acme__skills" COMMIT)"
   printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
   git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd,notes"
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd', 'notes']"
   ab_run --
   assert_rc 0
   assert_eq "$(installed)" "acme-notes acme-tdd"
@@ -3627,7 +3630,7 @@ test_skills_source_selection_change_keeps_version() {
 
 test_skills_source_disabled_removed_manual_kept() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd']"
   config "AB_SKILLS=acme"
   ab_run --
   # A repository synced by hand, without a source, stays.
@@ -3651,7 +3654,7 @@ test_skills_source_pinned() {
   local first; first="$(git -C "$SRC" rev-parse HEAD)"
   printf -- '---\nname: tdd\n---\nNewer.\n' > "$SRC/eng/tdd/SKILL.md"
   git -C "$SRC" -c user.name=t -c user.email=t@t commit -qam newer
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd" "REF=$first"
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd']" "ref = '$first'"
   config "AB_SKILLS=acme"
   ab_run --
   assert_rc 0
@@ -3663,8 +3666,8 @@ test_skills_source_pinned() {
 
 test_skills_source_local_overrides_and_prefix() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d acme "URL=$SRC" "ONLY=tdd"
-  src_conf skills.local.d acme "URL=$SRC" "ONLY=review" "PREFIX="
+  src_conf skills.d acme "url = '$SRC'" "only = ['tdd']"
+  src_conf skills.local.d acme "url = '$SRC'" "only = ['review']" "prefix = ''"
   config "AB_SKILLS=acme"
   ab_run --
   assert_rc 0
@@ -3681,11 +3684,97 @@ test_skills_source_errors() {
   ab_run --
   assert_rc 2
   assert_out "invalid source name"
+  # An unknown key and a missing or empty url: errors with the line.
+  : > "$CFG/config.env"; config "AB_SKILLS=acme"
+  src_conf skills.local.d acme "url = '$SRC'" "subdirr = 'eng'"
+  ab_run --
+  assert_rc 2
+  assert_out "skills.local.d/acme.toml:2: unknown key 'subdirr' \(unknown-key\)"
+  src_conf skills.local.d acme "# no url" "only = ['tdd']"
+  ab_run --
+  assert_rc 2
+  assert_out "skills.local.d/acme.toml:1: the key 'url' is missing \(missing-key\)"
+  src_conf skills.local.d acme "# empty" "url = ''"
+  ab_run --
+  assert_rc 2
+  assert_out "skills.local.d/acme.toml:2: 'url' is empty"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" && fail "session started despite the errors"
+  return 0
+}
+
+# A skill source of yours from v0.1.x that a start of v0.1.x installed. The
+# start converts it, and syncs nothing again: the values that it compares
+# with the record stay the same.
+test_convert_skill_source() {
+  ss_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/skills.local.d"
+  # Of two equal keys, v0.1.x took the last.
+  printf '%s\n' '# my skills' "URL=$SRC" 'ONLY=notes' 'ONLY=tdd, review' 'PREFIX=' 'SUBDIR=eng/' > "$CFG/skills.local.d/acme.conf"
+  # The sync of v0.1.x, with the values that its run.sh computed.
+  env HOME="$T/home" SKILLS_ONLY=review,tdd SKILLS_PREFIX= SKILLS_SUBDIR=eng AB_SKILLS_DIR="$CFG/skills" \
+    SKILLS_SOURCE=acme SKILLS_PIN= bash "$AB/sync-skills.sh" "$SRC" > /dev/null 2>&1
+  assert_eq "$(installed)" "review tdd"
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_out "skills.local.d/acme.conf -> acme.toml"
+  assert_out "warning: .*acme.conf:3: 'ONLY' again on line 4, kept as a comment"
+  assert_no_out "syncing skills"
+  assert_eq "$(cat "$CFG/skills.local.d/acme.toml")" "# my skills
+url = \"$SRC\"
+# ONLY=notes
+only = [\"tdd\", \"review\"]
+prefix = \"\"
+subdir = \"eng/\""
+  ab_run --
+  assert_rc 0
+  assert_no_out "syncing skills|converted"
+  assert_eq "$(installed)" "review tdd"
+}
+
+# Old files of yours that cannot be converted. The start does not use the
+# shared source or group of the same name in their place.
+test_convert_failed_file_hides_no_shared_file() {
+  ss_setup "${FUNCNAME[0]}"
+  src_conf skills.d acme "url = '$SRC'"
+  mkdir -p "$CFG/skills.local.d" "$CFG/egress.local.d"
+  # No URL: v0.1.x refused it too. Not a fault of agentbox.
+  printf '%s\n' 'ONLY=tdd' > "$CFG/skills.local.d/acme.conf"
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 2
+  assert_out "acme.conf:1: the key 'URL' is missing"
+  assert_no_out "fault of agentbox"
+  assert_out "acme.conf was not converted to TOML .*does not use the shared skill source"
+  assert_eq "$(installed)" ""
+  # The same for an egress group: two hosts on one line.
+  printf '%s\n' 'a.example b.example' > "$CFG/egress.local.d/pypi.conf"
+  printf '%s\n' "AB_EGRESS=anthropic pypi" > "$CFG/config.env"
+  ab_run --
+  assert_rc 2
+  assert_out "pypi.conf was not converted to TOML .*does not use the shared group"
+  # The setup menu shows both as not converted, not the shared files.
+  cp "$ROOT/agentbox" "$AB/"
+  setup_run "q\n"
+  assert_out '\[ \] acme +\(yours\) \(not converted, see the warning above\)$'
+  assert_out '\[x\] pypi +\(yours\) \(not converted, see the warning above\)$'
+}
+
+# Of two equal keys, v0.1.x used the last: an error in the first does not
+# stop the conversion.
+test_convert_source_bad_first_key() {
+  ss_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/skills.local.d"
+  printf 'URL=%s/x\x01\nURL=%s\n' "$SRC" "$SRC" > "$CFG/skills.local.d/acme.conf"
+  config "AB_SKILLS=acme"
+  ab_run --
+  assert_rc 0
+  assert_out "skills.local.d/acme.conf -> acme.toml"
 }
 
 test_skills_source_sync_failure_continues() {
   ss_setup "${FUNCNAME[0]}"
-  src_conf skills.d broken "URL=$T/src/no/such-repo"
+  src_conf skills.d broken "url = '$T/src/no/such-repo'"
   config "AB_SKILLS=broken"
   ab_run --
   assert_rc 0

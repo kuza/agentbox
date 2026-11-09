@@ -7,6 +7,10 @@ The forms of the old file:
 
     hosts  one host per line, # starts a comment (an egress group)
     keys   KEY=VALUE lines, as load_config in lib/config.sh reads them
+    source the same parser, but the last of two equal keys wins, as in
+           source_value (lib/skills.sh). The parser of load_config also
+           removes quotes, "export " and a " # note", which source_value
+           did not: such a source gets the value that you meant.
 
 Writes the TOML file to stdout. Each value gets the type of its key in the
 schema, not the type that its look suggests. A key that the schema does
@@ -102,7 +106,7 @@ def hosts():
 
 
 def keys():
-    seen = set()
+    seen = {}  # name -> (index in out, line, text, its errors)
     for n, line in enumerate(old, 1):
         s = line.strip()
         if not s or s.startswith("#"):
@@ -126,17 +130,29 @@ def keys():
         # The key of a setting in the same case; an old key of a
         # description in uppercase becomes lowercase.
         name = key if key in schema else key.lower() if key.isupper() and key.lower() in schema else None
-        if name is None or name in seen:
+        if name in seen and form == "source":
+            # source_value takes the last of two equal keys.
+            i, first, text, errs = seen[name]
+            message(first, f"'{key}' again on line {n}, kept as a comment")
+            out[i] = "# " + comment(text)
+            # The value that v0.1.x did not use cannot stop the conversion.
+            for e in errs:
+                errors.remove(e)
+        elif name is None or name in seen:
             # load_config takes the first of two equal keys.
             why = "unknown key" if name is None else "second time"
             message(n, f"{why} '{key}', kept as a comment")
             out.append("# " + comment(s))
             continue
-        seen.add(name)
+        before = len(errors)
         out.append(f"{name} = {typed(n, name, value)}" + ("  " + comment(note.strip()) if note else ""))
+        seen[name] = (len(out) - 1, n, s, errors[before:])
+    for name, rules in schema.items():
+        if rules.get("required") and name not in seen:
+            errors.append((1, f"the key '{name.upper() if form == 'source' else name}' is missing"))
 
 
-{"hosts": hosts, "keys": keys}[form]()
+{"hosts": hosts, "keys": keys, "source": keys}[form]()
 for n, text in errors:
     message(n, text)
 if errors:

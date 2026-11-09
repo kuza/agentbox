@@ -115,23 +115,26 @@ setup_record_list() {  # <key> <list> [default when unset]
   else SETUP_NEW[$1]="set $2"; fi
 }
 
-# What an egress group opens: its hosts. What a skill source is: its URL.
-# "(yours)" for a file in your directory.
-setup_describe() {  # <egress|skill> <file>
-  local text rc=0 err
-  local -A group=()
-  if [[ "$1" == egress ]]; then
+# What an egress group opens: its hosts. What a skill source or a pi
+# extension source is: its URL. "(yours)" for a file in your directory.
+setup_describe() {  # <egress|skill|piext> <file>
+  local text rc=0 err kind=egress-group key=hosts
+  local -A desc=()
+  if [[ "$1" == piext ]]; then
+    text="$(source_value "$2" URL)"
+  elif [[ "$2" == *.conf ]]; then
+    text="(not converted, see the warning above)"
+  else
+    [[ "$1" == skill ]] && kind=skill-source key=url
     # In a subshell already ($(...)): the temp file goes with it.
     err="$(mktemp)"
-    toml_load egress-group "$2" group 2>"$err" || rc=$?
+    toml_load "$kind" "$2" desc 2>"$err" || rc=$?
     case "$rc" in
-      0) text="${group[hosts]}" ;;
+      0) text="${desc[$key]}" ;;
       3) text="(needs Python 3.11 or newer)" ;;
       *) text="$(head -n 1 "$err")"; text="(${text#"${2%/*}/"})" ;;
     esac
     rm -f -- "$err"
-  else
-    text="$(source_value "$2" URL)"
   fi
   (( ${#text} > 60 )) && text="${text:0:60}" && text="${text% *} ..."
   [[ "$2" == "$AB_HOME_DIR"/* ]] && text="(yours) $text"
@@ -148,6 +151,10 @@ setup_names() {  # <conf|toml|mcp> <dirs...>
       for f in "$d"/*/mcp.sh; do [[ -f "$f" ]] && basename "$(dirname "$f")"; done
     else
       for f in "$d"/*."$ext"; do [[ -f "$f" ]] && basename "$f" ".$ext"; done
+      # An old file of yours that is not converted (lib/convert.sh).
+      if [[ "$ext" == toml ]]; then
+        for f in "$d"/*.conf; do convert_pending "$f" && basename "$f" .conf; done
+      fi
     fi
   done | sort -u
 }
@@ -374,7 +381,7 @@ setup_entries() {
   local n
   # Line by line: a file name with a space or * stays one name.
   while IFS= read -r n; do [[ "$n" == context7 ]] || echo "mcp $n"; done < <(setup_names mcp "${MCP_DIRS[@]}")
-  while IFS= read -r n; do echo "skill $n"; done < <(setup_names conf "${SKILLS_SOURCE_DIRS[@]}")
+  while IFS= read -r n; do echo "skill $n"; done < <(setup_names toml "${SKILLS_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "piext $n"; done < <(setup_names conf "${PI_EXTENSION_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "egress $n"; done < <(setup_names toml "${EGRESS_DIRS[@]}")
   for n in "${SETUP_OTHER[@]}"; do echo "other ${n%% *}"; done
@@ -415,11 +422,11 @@ setup_show() {
              text="(cannot be read)"
            fi ;;
       skill) in_list "$name" "$skills" && mark="[x]" || mark="[ ]"
-             text="$(setup_describe skill "$(conf_find "$name" conf "${SKILLS_SOURCE_DIRS[@]}")")" ;;
+             text="$(setup_describe skill "$(convert_toml_find "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
       piext) in_list "$name" "$piexts" && mark="[x]" || mark="[ ]"
-             text="$(setup_describe skill "$(conf_find "$name" conf "${PI_EXTENSION_SOURCE_DIRS[@]}")")" ;;
+             text="$(setup_describe piext "$(conf_find "$name" conf "${PI_EXTENSION_SOURCE_DIRS[@]}")")" ;;
       egress) in_list "$name" "$egress" && mark="[x]" || mark="[ ]"
-              text="$(setup_describe egress "$(conf_find "$name" toml "${EGRESS_DIRS[@]}")")" ;;
+              text="$(setup_describe egress "$(convert_toml_find "$name" "${EGRESS_DIRS[@]}")")" ;;
       other)
         for entry in "${SETUP_OTHER[@]}"; do [[ "${entry%% *}" == "$name" ]] && break; done
         entry="${entry#* }"
