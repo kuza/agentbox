@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/release.sh"
 # shellcheck source=lib/paths.sh
 source "$SCRIPT_DIR/lib/paths.sh"
+# shellcheck source=lib/toml.sh
+source "$SCRIPT_DIR/lib/toml.sh"
 
 guard=""
 [[ "${1:-}" == --git-guard ]] && guard=1
@@ -72,4 +74,6 @@ case ":$PATH:" in
   *) [[ -e "$ENVIRONMENT_FILE" ]] \
        || echo "agentbox: add ~/.local/bin to PATH, ahead of /usr/bin (README, Git on the host)" ;;
 esac
+# Only a warning: update, rollback and uninstall work without Python.
+toml_python || toml_no_python "start a session or run agentbox setup" warning
 echo "agentbox: $version installed. Next: README, Quick start, step 2."

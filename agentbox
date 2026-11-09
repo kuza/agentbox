@@ -49,6 +49,7 @@ case "${1:-}" in
       # shellcheck source=/dev/null
       source "$SCRIPT_DIR/lib/$lib.sh"
     done
+    toml_python || { toml_no_python "run agentbox setup"; exit 2; }
     convert_old_files
     agentbox_setup "$@" ;;
   uninstall)

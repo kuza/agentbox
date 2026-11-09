@@ -51,9 +51,9 @@ setup_file_value() {  # <key>
 # are. Run at the start and after a save.
 setup_prime() {
   local n info keys=("${CONFIG_KEYS[@]}") more=() k line err
-  # Once here, not in each setup_describe, which runs in a subshell.
+  # Once here, not in each setup_describe, which runs in a subshell. (Setup
+  # stops before this without Python: TOML_PYTHON is already set.)
   toml_version
-  toml_python || :
   while IFS= read -r n; do
     info="$(setup_module_info "$n")" || { SETUP_INFO[$n]="!"; continue; }
     SETUP_INFO[$n]="$info"
@@ -142,7 +142,6 @@ setup_describe() {  # <egress|skill|piext> <file>
     toml_load "$kind" "$2" desc 2>"$err" || rc=$?
     case "$rc" in
       0) text="${desc[$key]}" ;;
-      3) text="(needs Python 3.11 or newer)" ;;
       *) text="$(head -n 1 "$err")"; text="(${text#"${2%/*}/"})" ;;
     esac
     rm -f -- "$err"

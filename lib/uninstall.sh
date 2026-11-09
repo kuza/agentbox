@@ -42,18 +42,42 @@ uninstall_names() {  # <MCP_ variable>
 # MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For github,
 # ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner that
 # config.toml lists, in lowercase. Only those: a secret of the same prefix
-# that agentbox does not use stays.
+# that agentbox does not use stays. When it cannot read the file (no Python
+# 3.11, or an error), it keeps those secrets and says so on stderr.
 uninstall_secrets_by_setting() {
-  local f key prefix v list
+  local f key prefix v list file="$CONFIG_FILE" path="$CONFIG_FILE" tmp="" known=1 msgs
   local -A values=()
+  # Before the first start of v0.2.0, config.env is not converted: read a
+  # converted copy of it.
+  [[ ! -f "$file" && -f "$CONFIG_OLD_FILE" ]] && file="$CONFIG_OLD_FILE"
+  if [[ ! -f "$file" ]]; then
+    :
+  elif ! toml_python; then
+    toml_no_python "read $file" warning
+    known=""
+  elif [[ "$file" == "$CONFIG_OLD_FILE" ]]; then
+    # The messages of the writer name lines of config.env: shown only when
+    # it cannot convert the file.
+    if tmp="$(mktemp)" && msgs="$("$TOML_PYTHON" -I "$SCRIPT_DIR/lib/toml-writer.py" "$SCRIPT_DIR/lib/toml-schema/config.toml" keys "$file" 2>&1 > "$tmp")"; then
+      path="$tmp"
+    else
+      [[ -n "${msgs:-}" ]] && printf '%s\n' "$msgs" >&2
+      known=""
+    fi
+  fi
   # The values in the file only, not in the environment. A file that
   # cannot be read gives an error, and its secrets stay.
-  if [[ -f "$CONFIG_FILE" ]]; then toml_load config "$CONFIG_FILE" values || true; fi
+  if [[ -n "$known" && -f "$path" ]] && ! toml_load config "$path" values; then known=""; fi
+  rm -f -- "$tmp"
   for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
     [[ -f "$f" ]] || continue
     sed -n 's/^[[:space:]]*MCP_SECRETS_BY_SETTING=(\(.*\))[[:space:]]*$/\1/p' "$f" | tr -d "\"'"
   done | while read -r key prefix; do
     [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ ]] || continue
+    if [[ -z "$known" ]]; then
+      echo "agentbox: agentbox cannot read $key in $file, so it keeps any secrets $prefix<name>. If you have such secrets, remove them yourself (podman secret ls)." >&2
+      continue
+    fi
     IFS=', ' read -ra list <<<"${values[$key]:-}"
     for v in ${list[@]+"${list[@]}"}; do
       v="${v,,}"

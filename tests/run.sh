@@ -764,16 +764,20 @@ test_egress_unchanged_start_runs_no_python() {
   [[ -s "$T/python.log" ]] || fail "a changed schema did not run the reader again"
 }
 
+# no_python_stub <dir>: each Python that the reader looks for is too old.
+# A stub in <dir>, in front of the real one, exits 1.
+no_python_stub() {
+  local p
+  mkdir -p "$1"
+  for p in python3 python3.13 python3.12 python3.11; do
+    printf '#!/bin/sh\nexit 1\n' > "$1/$p"
+    chmod +x "$1/$p"
+  done
+}
+
 test_egress_start_without_python_311() {
   setup "${FUNCNAME[0]}"
-  # Each Python that the reader looks for is too old: a stub in front of
-  # the real one that exits 1.
-  local p
-  mkdir -p "$T/nopy"
-  for p in python3 python3.13 python3.12 python3.11; do
-    printf '#!/bin/sh\nexit 1\n' > "$T/nopy/$p"
-    chmod +x "$T/nopy/$p"
-  done
+  no_python_stub "$T/nopy"
   ab_run "PATH=$T/bin:$T/nopy:$PATH" --
   assert_rc 2
   assert_out "agentbox needs Python 3.11 or newer"
@@ -2425,6 +2429,72 @@ test_uninstall() {
   # agentbox does not use stays.
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci mine" "secrets after --all"
   [[ -e "$CFG" ]] && fail "your files left after --all"
+}
+
+# Without Python 3.11: install.sh warns, update and rollback work, setup
+# stops, and uninstall --all removes all but the secrets of GH_OWNERS.
+test_without_python_311() {
+  rel_setup "${FUNCNAME[0]}"
+  no_python_stub "$T/sysbin"
+  make_release v1.0.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  assert_rc 0
+  assert_out "warning: agentbox needs Python 3.11 or newer"
+  assert_out "dnf install python3.11"
+  assert_out "jammy-updates"
+  assert_out "deadsnakes"
+  make_release v1.1.0
+  pack v1.1.0
+  ab_cmd agentbox update --yes
+  assert_rc 0
+  assert_eq "$(current_version)" v1.1.0 "after update"
+  ab_cmd agentbox rollback
+  assert_rc 0
+  assert_eq "$(current_version)" v1.0.0 "after rollback"
+  ab_cmd agentbox setup
+  assert_rc 2
+  assert_out "error: agentbox needs Python 3.11 or newer"
+  assert_out "apt install python3.11"
+  echo 'GH_OWNERS = ["MyOrg"]' >> "$CFG/config.toml"
+  printf '%s\n' claude_oauth grafana_sa github_pat_myorg > "$STUB_DIR/secrets"
+  ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
+  assert_rc 0
+  assert_out "warning: agentbox needs Python 3.11 or newer"
+  assert_out "cannot read GH_OWNERS in .*keeps any secrets github_pat_<name>"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg" "secrets after --all"
+  [[ -e "$CFG" || -e "$T/home/.local/share/agentbox" ]] && fail "files left after --all"
+  return 0
+}
+
+# Before the first start of v0.2.0, config.env is not converted: uninstall
+# reads GH_OWNERS there.
+test_uninstall_reads_unconverted_config_env() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  rm -f "$CFG/config.toml"
+  echo 'GH_OWNERS="MyOrg, other"' > "$CFG/config.env"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  assert_rc 0
+  printf '%s\n' github_pat_myorg github_pat_other github_pat_ci > "$STUB_DIR/secrets"
+  ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci" "secrets after --all"
+}
+
+# A config.env that the writer cannot convert: the secrets stay, and the
+# line is named.
+test_uninstall_broken_unconverted_config_env() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  rm -f "$CFG/config.toml"
+  printf 'GH_OWNERS=myorg\nAB_GO_VERSION=1.2\xff\n' > "$CFG/config.env"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  printf '%s\n' github_pat_myorg > "$STUB_DIR/secrets"
+  ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
+  assert_rc 0
+  assert_out "config.env:2: not valid UTF-8"
+  assert_out "keeps any secrets github_pat_<name>"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg" "secrets after --all"
 }
 
 test_uninstall_asks() {

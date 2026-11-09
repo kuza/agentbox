@@ -42,9 +42,11 @@ toml_python() {
   [[ "$TOML_PYTHON" != - ]]
 }
 
-toml_no_python() {  # <what agentbox needs it for>
-  echo "error: agentbox needs Python 3.11 or newer (python3, python3.13, python3.12 or python3.11) to $1." >&2
-  echo "  Fedora: dnf install python3. RHEL 9: dnf install python3.11. Ubuntu 22.04: apt install python3.11." >&2
+# The one message about a missing Python, with the packages to install.
+toml_no_python() {  # <what agentbox needs it for> [error|warning]
+  echo "${2:-error}: agentbox needs Python 3.11 or newer (python3, python3.13, python3.12 or python3.11) to $1." >&2
+  echo "  Fedora: python3 is new enough (dnf install python3). RHEL 9: dnf install python3.11." >&2
+  echo "  Ubuntu 22.04: apt install python3.11 (a release candidate build from jammy-updates), or python3.11 from the deadsnakes PPA." >&2
 }
 
 # The reader version into TOML_VERSION: sha256sum of the reader code and
