@@ -51,7 +51,12 @@ except UnicodeDecodeError as e:
 except tomllib.TOMLDecodeError as e:
     message = str(e)
     m = SYNTAX_LINE.search(message)
-    line = getattr(e, "lineno", None) or (int(m.group(1)) if m and m.group(1) else max(len(text.splitlines()), 1))
+    last = max(len(text.splitlines()), 1)
+    line = getattr(e, "lineno", None) or (int(m.group(1)) if m and m.group(1) else last)
+    # Python 3.14 gives "lineno": at the end of the document, the line after
+    # the last newline. Earlier versions name no line there. Both give the
+    # last line of the file.
+    line = min(line, last)
     error("syntax", line, "not valid TOML: " + (message[: m.start()] if m else message))
     finish()
 
