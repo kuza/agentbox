@@ -7,8 +7,9 @@ status: accepted
 All files that describe something to agentbox use TOML: the module
 manifests (`module.toml`), the skill sources, the pi extension sources
 and the egress groups. Your settings move from `config.env` to a flat
-`config.toml`: top-level `KEY = value` lines only, with arrays for lists
-and no tables. `python3` 3.11 or newer on the host reads all of them with
+`config.toml`, and the settings of one repository from `env/<repo>.conf`
+to `env/<repo>.toml`: top-level `KEY = value` lines only, with arrays for
+lists and no tables. Python 3.11 or newer on the host reads all of them with
 `tomllib`. Bash only edits the lines of `config.toml` in `agentbox setup`.
 
 The goals:
@@ -38,14 +39,21 @@ The goals:
 ## Consequences
 
 - The host needs Python 3.11 or newer, for a start and for
-  `agentbox setup`, which reads and converts the files. Ubuntu 22.04 and
+  `agentbox setup`. Both read the files, and both convert your old files
+  one time. Ubuntu 22.04 and
   RHEL 9 need an extra package (`python3.11`). Without it, `update`,
   `rollback` and `uninstall` still work; a start or setup stops with the
   reason.
 - The flat file has limits: `agentbox setup` does not change a key whose
   value has more than one line; an item of an array cannot hold a space or
-  a comma; `false` is `0`; floats, dates and tables are refused. Bash gets
-  `true` as `1` and an array as its items joined with a space.
+  a comma; `false` is `0`. The files refuse floats, dates, tables, quoted
+  keys, keys with a dot, multi-line strings and control characters in
+  values.
+- Bash gets `true` as `1`. For a list setting of agentbox (such as
+  `AB_MCP`), bash gets the items joined with a space. For a module setting
+  (such as `GH_TOOLSETS`), bash gets the items joined with a comma. Later,
+  the module manifests (v0.2.x) will set the separator of each module
+  setting.
 - Keys of settings stay in uppercase, because environment variables of the
   same name override them. Keys of descriptions are in lowercase.
 - The old module format (only `mcp.sh`) goes in v0.3.0. A module of yours

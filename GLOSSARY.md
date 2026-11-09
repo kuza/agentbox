@@ -31,8 +31,8 @@ A container that a module starts next to the agent's container.
 _Avoid_: helper container, service container
 
 **Setting**:
-A key in your settings file (`config.env`, later `config.toml`, and
-`env/<repo>.toml` for one repository) that agentbox or a module reads.
+A key in your settings files (`config.toml`, and `env/<repo>.toml` for one
+repository) that agentbox or a module reads.
 _Avoid_: option, variable, config key (in prose)
 
 **Secret**:
