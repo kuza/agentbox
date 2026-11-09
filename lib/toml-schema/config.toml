@@ -1,0 +1,52 @@
+# The schema of the settings (config.toml, env/<repo>.toml): for each key
+# of agentbox, its type (string, int, bool or list) and whether it is
+# required. lib/toml.sh reads the files of this kind with it. A key outside
+# the schema is a setting of a module. CONFIG_KEYS and CONFIG_LIST_KEYS in
+# lib/config.sh name the same keys.
+[AB_MCP]
+type = "list"
+
+[AB_EGRESS]
+type = "list"
+
+[AB_FORWARD]
+type = "list"
+
+[AB_SKILLS]
+type = "list"
+
+[AB_SKILLS_DIR]
+type = "string"
+
+[AB_PI_EXTENSIONS]
+type = "list"
+
+[AB_UPDATE_EVERY]
+type = "int"
+
+[AB_SERVICES]
+type = "list"
+
+[AB_ENV_DIR]
+type = "string"
+
+[AB_CHECK_UPDATES]
+type = "bool"
+
+[AB_GRAPHIFY_EXTRAS]
+type = "string"
+
+[AB_TRIVY]
+type = "bool"
+
+[AB_PYTHON_VERSIONS]
+type = "list"
+
+[AB_GO_VERSION]
+type = "string"
+
+[AB_GOLANGCI_LINT_VERSION]
+type = "string"
+
+[AB_WARNINGS_ASK]
+type = "bool"

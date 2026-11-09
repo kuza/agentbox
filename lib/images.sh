@@ -19,7 +19,7 @@ agentbox_image_id() {  # 1 if there is no image
 }
 
 # The image is built from an empty context directory: the Containerfile
-# copies nothing in, and the agentbox directory holds config.env, env/
+# copies nothing in, and the agentbox directory holds config.toml, env/
 # (passwords) and skills/, which a build has no reason to receive. A COPY
 # added later fails instead of silently taking them along.
 # --layers=false: no intermediate image per build step, which would stay

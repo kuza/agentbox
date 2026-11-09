@@ -15,7 +15,7 @@ MCP_CONFIG=(GH_TOOLSETS GH_OWNERS)
 MCP_CALLER_SECRET=github_mcp_caller
 MCP_IMAGES=(ghcr.io/github/github-mcp-server:latest "$IMG_NGINX")
 # The owner secrets have names from GH_OWNERS: agentbox uninstall --all
-# removes github_pat_<owner> for the owners in config.env.
+# removes github_pat_<owner> for the owners in config.toml.
 MCP_SECRETS_BY_SETTING=("GH_OWNERS github_pat_")
 
 #   GH_TOOLSETS   toolsets nginx pins (default below)

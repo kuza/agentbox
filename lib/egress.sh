@@ -5,7 +5,7 @@
 #   <AB_HOME>/egress.local.d/<name>.toml
 #                                yours; wins over egress.d/
 #
-# AB_EGRESS in config.env lists the enabled groups; unset means
+# AB_EGRESS in config.toml lists the enabled groups; unset means
 # EGRESS_DEFAULT, empty means none. An agent's own group (AGENT_EGRESS, set
 # by agent_select) must be among them. The groups' hosts and the MCP modules'
 # remote hosts (MCP_EGRESS) go into a file generated on every start and

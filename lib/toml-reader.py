@@ -3,7 +3,7 @@
     python3 -I toml-reader.py <schema file> <kind> <file>
 
 Writes records to stdout, each as five fields that end with a NUL:
-the type (value, warning or error), the key or the error code, the line,
+the type (value or error), the key or the error code, the line,
 the end line, and the value for bash or the message. Exit 0: the file is
 good. Exit 4: the file is bad, and the records tell why. Any other exit
 status is a failure of the reader.
@@ -140,7 +140,7 @@ def form_error(key, value):
     return None
 
 
-def for_bash(key, value, want):
+def for_bash(key, value, want, join=" "):
     """The value as bash gets it, or an error message for a wrong type."""
     is_int = isinstance(value, int) and not isinstance(value, bool)
     if want == "string" and isinstance(value, str):
@@ -160,7 +160,7 @@ def for_bash(key, value, want):
             if " " in item or "," in item:
                 return None, f"'{key}': an item of the list cannot hold a space or a comma"
             items.append(item)
-        return " ".join(items), None
+        return join.join(items), None
     names = {"string": "a string", "int": "an integer", "bool": "true or false", "list": "a list"}
     return None, f"'{key}' must be {names[want]}"
 
@@ -186,13 +186,18 @@ for key, value in data.items():
     if found:
         error(found[0], line, found[1])
         continue
-    if key not in schema:
-        if kind == "config":
-            record("warning", "unknown-key", line, line, f"unknown key '{key}', ignored")
-        else:
-            error("unknown-key", line, f"unknown key '{key}'")
+    if key in schema:
+        converted, message = for_bash(key, value, schema[key]["type"])
+    elif kind == "config":
+        # A setting of a module: each type is good, and an array joins with
+        # a comma. settings_load (lib/config.sh) warns about a key that no
+        # module has. shortcut: no schema for a module setting in v0.2.0;
+        # use the schema of the module manifest in step 2.
+        want = {bool: "bool", int: "int", str: "string", list: "list"}[type(value)]
+        converted, message = for_bash(key, value, want, ",")
+    else:
+        error("unknown-key", line, f"unknown key '{key}'")
         continue
-    converted, message = for_bash(key, value, schema[key]["type"])
     if message:
         error("type", line, message)
         continue

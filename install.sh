@@ -6,7 +6,7 @@
 #
 # Puts this release into ~/.local/share/agentbox/versions/<version>/
 # (read-only; AB_INSTALL_DIR moves it), makes it the current version, links
-# ~/.local/bin/agentbox to it, and creates ~/.config/agentbox/config.env from
+# ~/.local/bin/agentbox to it, and creates ~/.config/agentbox/config.toml from
 # the example if you have none. --git-guard also installs git-guard as
 # ~/.local/bin/git and ~/.config/environment.d/agentbox.conf, which puts it
 # first in PATH (README, Git on the host); without it, you are asked.
@@ -43,8 +43,9 @@ ln -sfn "$INSTALL_DIR/current/agentbox" "$HOME/.local/bin/agentbox"
 echo "agentbox: command ~/.local/bin/agentbox"
 
 mkdir -p "$AB_HOME_DIR"
-if [[ ! -e "$USER_CONFIG" ]]; then
-  cp "$SCRIPT_DIR/config.env.example" "$USER_CONFIG"
+# Not over the config.env of v0.1.x: the first start converts it.
+if [[ ! -e "$USER_CONFIG" && ! -e "${USER_CONFIG%.toml}.env" ]]; then
+  cp "$SCRIPT_DIR/config.toml.example" "$USER_CONFIG"
   echo "agentbox: created $USER_CONFIG from the example; edit it (README, Quick start)"
 fi
 

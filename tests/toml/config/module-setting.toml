@@ -1,0 +1,3 @@
+GH_TOOLSETS = ["repos", "issues"]
+TABULARIS_PORT = 5101
+GH_OWNERS = "a, b"

@@ -1,13 +1,7 @@
-# Configuration file: KEY=VALUE lines, optional quotes. # starts a comment
-# at the start of a line or after a space (KEY=value # note); a # inside a
-# value (a URL fragment) stays.
-# Parsed, not sourced, so it cannot run code, and only known keys are
-# accepted: agentbox's own (CONFIG_KEYS) and those the enabled MCP modules
-# declare. A variable already set in the environment wins over the file.
-#
-# Two passes: the first reads agentbox's keys, including AB_MCP; the enabled
-# modules then add their keys (GRAFANA_URL, ...), and the second pass reads
-# those, warning about anything still unknown.
+# lib/toml.sh reads the settings in config.toml. It does not source the
+# file, so the file cannot run code. Only known keys are read: the keys of agentbox
+# (CONFIG_KEYS) and the keys that the enabled MCP modules declare. A
+# variable in the environment wins over the file (settings_load).
 
 # Warnings of a start: printed, and kept in AB_WARNINGS_FILE (made by
 # run.sh; a file, so that warnings from subshells count too) for
@@ -68,13 +62,50 @@ conf_find() {  # <name> <extension> <dirs...>
 
 CONFIG_KEYS=(AB_MCP AB_EGRESS AB_FORWARD AB_SKILLS AB_SKILLS_DIR AB_PI_EXTENSIONS AB_UPDATE_EVERY AB_SERVICES AB_ENV_DIR AB_CHECK_UPDATES AB_GRAPHIFY_EXTRAS AB_TRIVY
   AB_PYTHON_VERSIONS AB_GO_VERSION AB_GOLANGCI_LINT_VERSION AB_WARNINGS_ASK)
+# The keys of CONFIG_KEYS that are lists. lib/toml-schema/config.toml gives
+# them the type list.
+CONFIG_LIST_KEYS=(AB_MCP AB_EGRESS AB_SKILLS AB_PI_EXTENSIONS AB_SERVICES AB_FORWARD AB_PYTHON_VERSIONS)
+# The settings file: config.toml in AB_HOME, or the file of AB_CONFIG. When
+# AB_CONFIG names a .env file of v0.1.x, the TOML file next to it
+# (lib/convert.sh writes it).
 CONFIG_FILE="${AB_CONFIG:-$USER_CONFIG}"
+if [[ "$CONFIG_FILE" == *.env ]]; then CONFIG_FILE="${CONFIG_FILE%.env}.toml"; fi
+# The settings file of v0.1.x: the conversion reads it, and agentbox setup
+# still edits it.
+CONFIG_OLD_FILE="${CONFIG_FILE%.toml}.env"
 
-# Keys that are not read and get no warning either, for one call of
-# load_config: config_second_pass sets them (the settings of the modules
-# that are not enabled, lib/mcp.sh); other files (a repo's .conf) warn.
-CONFIG_QUIET_KEYS=()
+# Reads the settings in <file> (TOML, the kind config) into variables of
+# the same names, for <keys> only. A variable in the environment wins over
+# the file. For a key of CONFIG_LIST_KEYS, this function splits the value at
+# spaces and commas, and joins the items with a space. With <warn> 1, a key of the file that is not in <keys> or <quiet
+# keys> gets a warning. Returns the status of toml_load. This is the only
+# place that reads the settings from the environment.
+settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
+  local file="$1" warn="$2" key items keys=" "
+  local -A values=() lines=()
+  shift 2
+  while (( $# )) && [[ "$1" != -- ]]; do keys+="$1 "; shift; done
+  local quiet=" ${*:2} "
+  toml_load config "$file" values lines || return
+  for key in "${!values[@]}"; do
+    if [[ "$keys" != *" $key "* ]]; then
+      [[ "$warn" == 1 && "$quiet" != *" $key "* ]] && ab_warn "$file:${lines[$key]%% *}: unknown key '$key', ignored (unknown-key)"
+      continue
+    fi
+    [[ -n "${!key+x}" ]] || printf -v "$key" '%s' "${values[$key]}"
+  done
+  for key in "${CONFIG_LIST_KEYS[@]}"; do
+    if [[ "$keys" == *" $key "* && -n "${!key:-}" ]]; then
+      read -ra items <<< "${!key//,/ }"
+      printf -v "$key" '%s' "${items[*]}"
+    fi
+  done
+}
 
+# <file> of v0.1.x: KEY=VALUE lines, optional quotes. # starts a comment at
+# the start of a line or after a space (KEY=value # note); a # inside a
+# value (a URL fragment) stays. Only agentbox setup reads this form, until
+# it edits config.toml.
 load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
   local file="$1" warn="$2" line key val n=0
   shift 2
@@ -99,9 +130,7 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
       val="${val%"${val##*[![:space:]]}"}"
     fi
     if [[ "$allowed" != *" $key "* ]]; then
-      # A setting of a module that is not enabled: ignored, no warning.
-      [[ "$warn" == 1 && " ${CONFIG_QUIET_KEYS[*]-} " != *" $key "* ]] \
-        && ab_warn "$file:$n: unknown key '$key', ignored"
+      [[ "$warn" == 1 ]] && ab_warn "$file:$n: unknown key '$key', ignored"
       continue
     fi
     if [[ -z "${!key+x}" ]]; then
@@ -110,20 +139,29 @@ load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
   done < "$file"
 }
 
+# The first pass reads the keys of agentbox, AB_MCP too. The enabled modules
+# then add their keys (GRAFANA_URL, ...), and the second pass reads them.
+# It warns about a key that no module has. Needs lib/toml.sh and
+# lib/convert.sh.
 config_first_pass() {
-  if [[ -f "$CONFIG_FILE" ]]; then
-    load_config "$CONFIG_FILE" 0 "${CONFIG_KEYS[@]}"
-  elif [[ -n "${AB_CONFIG:-}" ]]; then
-    echo "error: AB_CONFIG=$AB_CONFIG does not exist" >&2
+  if convert_pending "$CONFIG_OLD_FILE"; then
+    echo "error: $CONFIG_OLD_FILE was not converted to TOML (see the warning above)" >&2
     exit 2
   fi
+  if [[ -f "$CONFIG_FILE" ]]; then
+    settings_load "$CONFIG_FILE" 0 "${CONFIG_KEYS[@]}" || exit 2
+  elif [[ -n "${AB_CONFIG:-}" ]]; then
+    echo "error: AB_CONFIG: $CONFIG_FILE does not exist" >&2
+    exit 2
+  fi
+  return 0
 }
 
-config_second_pass() {  # <module keys...>
+config_second_pass() {  # <module keys...> -- <quiet keys: the keys of the modules that are not enabled>
   if [[ -f "$CONFIG_FILE" ]]; then
-    local CONFIG_QUIET_KEYS=(${MCP_QUIET_KEYS[@]+"${MCP_QUIET_KEYS[@]}"})
-    load_config "$CONFIG_FILE" 1 "${CONFIG_KEYS[@]}" "$@"
+    settings_load "$CONFIG_FILE" 1 "${CONFIG_KEYS[@]}" "$@" || exit 2
   fi
+  return 0
 }
 
 # Constants and defaults.

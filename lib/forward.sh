@@ -4,9 +4,9 @@
 # ab-egress (the way out) and to an --internal network the session joins,
 # where it answers to the target's name: the agent connects to db:5432.
 #
-#   config.env                        AB_FORWARD for every session, network
+#   config.toml                       AB_FORWARD for every session, network
 #                                     ab-forward, sidecars ab-fwd-<name>
-#   <env dir>/<repo dir name>.conf    AB_FORWARD for that repo's sessions
+#   <env dir>/<repo dir name>.toml    AB_FORWARD for that repo's sessions
 #                                     only, network ab-fwd-<key>, sidecars
 #                                     ab-fwd-<key>-<name>; <key> comes from
 #                                     the repo's path
@@ -22,16 +22,25 @@
 # Reads both lists and checks them. Run after the config passes, before
 # anything starts.
 forward_init() {
-  local repo_conf entry name target seen=" " scope list entries services=" ${AB_SERVICES:-} "
+  local repo_conf entry name target seen=" " scope list entries services=" ${AB_SERVICES:-} " key
+  local -A repo=() lines=()
   FWD_NAMES=(); FWD_TARGETS=(); FWD_SCOPES=()
   FORWARD_NAMES=(); FORWARD_NET=()
   FWD_KEY="$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
-  repo_conf="${AB_ENV_DIR:-$USER_ENV_DIR}/$(basename "$REPO").conf"
+  repo_conf="${AB_ENV_DIR:-$USER_ENV_DIR}/$(basename "$REPO").toml"
   FWD_REPO_LIST=""
+  if convert_pending "${repo_conf%.toml}.conf"; then
+    echo "error: ${repo_conf%.toml}.conf was not converted to TOML (see the warning above)" >&2
+    exit 2
+  fi
   if [[ -f "$repo_conf" ]]; then
     echo "agentbox: repo config $repo_conf" >&2
-    # Its own AB_FORWARD, not the global one: read in a subshell.
-    FWD_REPO_LIST="$(unset AB_FORWARD; load_config "$repo_conf" 1 AB_FORWARD; printf '%s' "${AB_FORWARD:-}")"
+    # Its own AB_FORWARD, from the file only: not the global one.
+    toml_load config "$repo_conf" repo lines || exit 2
+    for key in "${!repo[@]}"; do
+      [[ "$key" == AB_FORWARD ]] || ab_warn "$repo_conf:${lines[$key]%% *}: unknown key '$key', ignored (unknown-key)"
+    done
+    FWD_REPO_LIST="${repo[AB_FORWARD]:-}"
   fi
   for scope in global repo; do
     if [[ "$scope" == global ]]; then list="${AB_FORWARD:-}"; else list="$FWD_REPO_LIST"; fi
@@ -48,7 +57,7 @@ forward_init() {
       fi
       egress_check_host "$target" "AB_FORWARD ($scope)"
       if [[ "$seen" == *" $name "* ]]; then
-        echo "error: AB_FORWARD: the name '$name' appears more than once (config.env and $repo_conf together)" >&2
+        echo "error: AB_FORWARD: the name '$name' appears more than once (config.toml and $repo_conf together)" >&2
         exit 2
       fi
       if [[ "${services//,/ }" == *" $name "* ]]; then

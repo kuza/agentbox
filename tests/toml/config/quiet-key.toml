@@ -1,0 +1,2 @@
+# a setting of a module that is not enabled
+GRAFANA_URL = "https://grafana.example"

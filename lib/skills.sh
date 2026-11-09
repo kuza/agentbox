@@ -6,7 +6,7 @@
 #
 # Skill sources: skills.d/<name>.toml (shared, in git) or
 # <AB_HOME>/skills.local.d/<name>.toml (yours; wins over skills.d/).
-# AB_SKILLS in config.env lists the enabled ones. A source is a git
+# AB_SKILLS in config.toml lists the enabled ones. A source is a git
 # repository of skills, installed into the skills directory by
 # sync-skills.sh. Its file is TOML data, never run, read by toml_load
 # (lib/toml.sh, kind skill-source):

@@ -1,8 +1,8 @@
 # Your files live apart from agentbox's code, in AB_HOME (default
 # ~/.config/agentbox):
 #
-#   config.env         settings
-#   env/               per-project environment and settings, <repo>.env/.conf
+#   config.toml        settings
+#   env/               per-project environment and settings, <repo>.env/.toml
 #   skills/            personal and vendored skills
 #   AGENTS.md          personal instructions for both agents
 #   mcp.local/         your MCP modules
@@ -22,7 +22,7 @@
 
 AB_HOME_DIR="${AB_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/agentbox}"
 
-USER_CONFIG="$AB_HOME_DIR/config.env"
+USER_CONFIG="$AB_HOME_DIR/config.toml"
 USER_ENV_DIR="$AB_HOME_DIR/env"
 USER_SKILLS_DIR="$AB_HOME_DIR/skills"
 USER_AGENTS_MD="$AB_HOME_DIR/AGENTS.md"

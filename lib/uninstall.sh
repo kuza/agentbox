@@ -12,7 +12,7 @@
 # ~/.config/environment.d/agentbox.conf, the agentbox command with its bash
 # completion, and the installed versions. Secrets: those
 # agentbox and its modules use.
-# Your files: <AB_HOME> (config.env, env/ with passwords, skills, ...).
+# Your files: <AB_HOME> (config.toml, env/ with passwords, skills, ...).
 # Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh, IMG_* from lib/config.sh and
 # lib/sidecars.sh.
 
@@ -41,17 +41,20 @@ uninstall_names() {  # <MCP_ variable>
 # The Podman secrets whose names come from a setting of a module:
 # MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For github,
 # ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner that
-# config.env lists, in lowercase. Only those: a secret of the same prefix
+# config.toml lists, in lowercase. Only those: a secret of the same prefix
 # that agentbox does not use stays.
 uninstall_secrets_by_setting() {
-  local f key prefix v vals list
+  local f key prefix v list
+  local -A values=()
+  # The values in the file only, not in the environment. A file that
+  # cannot be read gives an error, and its secrets stay.
+  if [[ -f "$CONFIG_FILE" ]]; then toml_load config "$CONFIG_FILE" values || true; fi
   for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
     [[ -f "$f" ]] || continue
     sed -n 's/^[[:space:]]*MCP_SECRETS_BY_SETTING=(\(.*\))[[:space:]]*$/\1/p' "$f" | tr -d "\"'"
   done | while read -r key prefix; do
-    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ && -f "$CONFIG_FILE" ]] || continue
-    vals="$(unset "$key"; load_config "$CONFIG_FILE" 0 "$key"; printf '%s' "${!key:-}")"
-    IFS=', ' read -ra list <<<"$vals"
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ ]] || continue
+    IFS=', ' read -ra list <<<"${values[$key]:-}"
     for v in ${list[@]+"${list[@]}"}; do
       v="${v,,}"
       [[ "$v" =~ ^[a-z0-9][a-z0-9-]*$ ]] && printf '%s%s\n' "$prefix" "$v"
@@ -85,11 +88,11 @@ agentbox_uninstall() {
   echo "  ~/.local/bin/agentbox, its bash completion and $INSTALL_DIR"
   if [[ -n "$all" ]]; then
     echo "  --all: the Podman secrets agentbox uses (tokens), and your files in $AB_HOME_DIR"
-    echo "    (config.env, env/ with passwords, skills)"
+    echo "    (config.toml, env/ with passwords, skills)"
   fi
   if ! ask "remove all this?"; then echo "agentbox: nothing removed"; return 0; fi
   if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also the Podman secrets (tokens) agentbox uses?"; }; then secrets_too=1; fi
-  if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.env, env/ with passwords, skills)?"; }; then files_too=1; fi
+  if [[ -n "$all" ]] || { [[ -z "$yes" ]] && ask "also your files in $AB_HOME_DIR (config.toml, env/ with passwords, skills)?"; }; then files_too=1; fi
 
   if command -v systemctl >/dev/null; then
     for c in $(host_units_list | awk '{ print $1 }'); do

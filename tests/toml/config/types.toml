@@ -1,0 +1,9 @@
+AB_TRIVY = true
+AB_CHECK_UPDATES = false
+AB_UPDATE_EVERY = 21600
+AB_MCP = [
+  "grafana",  # dashboards
+  "bb4",
+]
+
+# the end

@@ -5,7 +5,9 @@
 # Reads <file> of <kind> into the associative array named <values> (key ->
 # value for bash) and, when given, into the one named <lines> (key ->
 # "<line> <end line>"). Values for bash: an integer as its digits, true as
-# 1, false as 0, a list as its items joined with a space. Returns 0; 2 for a
+# 1, false as 0, a list as its items joined with a space. In the kind
+# config, a key outside the schema is a setting of a module: each type is
+# good, and an array joins with a comma. Returns 0; 2 for a
 # bad file, with "file:line: reason (code)" on stderr; 3 when there is no
 # Python 3.11 or newer. It never exits and never reads the settings from
 # the environment: each caller decides what to do.
@@ -19,7 +21,7 @@
 # Python, and a changed reader or schema takes effect at the next start.
 # The tests in tests/toml/<kind>/ give the expected result of each case.
 #
-# Needs SCRIPT_DIR and lib/config.sh (ab_warn).
+# Needs SCRIPT_DIR.
 
 TOML_PYTHON=""   # the interpreter, found at the first need; "-" for none
 TOML_VERSION=""  # the reader version
@@ -100,7 +102,6 @@ toml_load() {  # <kind> <file> <values> [<lines>]
     (( ${#_tl_rec[@]} == 5 )) || continue
     case "${_tl_rec[0]}" in
       value) _tl_values[${_tl_rec[1]}]="${_tl_rec[4]}"; _tl_lines[${_tl_rec[1]}]="${_tl_rec[2]} ${_tl_rec[3]}" ;;
-      warning) ab_warn "$_tl_file:${_tl_rec[2]}: ${_tl_rec[4]} (${_tl_rec[1]})" ;;
       error) echo "$_tl_file:${_tl_rec[2]}: ${_tl_rec[4]} (${_tl_rec[1]})" >&2 ;;
     esac
     _tl_rec=()

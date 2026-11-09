@@ -20,7 +20,7 @@ RUN apt-get update \
 # versions you need are baked in here.
 #   UV_VERSION        pinned uv release
 #   PYTHON_VERSIONS   space-separated, e.g. "3.11 3.12 3.13"; run.sh passes
-#                     AB_PYTHON_VERSIONS from config.env
+#                     AB_PYTHON_VERSIONS from config.toml
 # Interpreters land in /opt/uv-python (read-only for the agent) with
 # python3.X shims in /usr/local/bin. System python3 (Debian 13: 3.13) stays as is.
 # pip leaves the /opt/uv and /opt/graphify venvs once they are installed:
@@ -46,7 +46,7 @@ RUN python3 -m venv /opt/uv \
 #   GOLANGCI_LINT_VERSION  e.g. "2.14.0"; empty = latest release at build time
 # Empty (or a minor version) means AB_UPGRADE brings newer releases; pin to
 # control it. The resolved versions are printed in the build log. run.sh
-# passes AB_GO_VERSION and AB_GOLANGCI_LINT_VERSION from config.env.
+# passes AB_GO_VERSION and AB_GOLANGCI_LINT_VERSION from config.toml.
 # ---------------------------------------------------------------------------
 ARG GO_VERSION="1.26"
 ARG GOLANGCI_LINT_VERSION=""
@@ -79,7 +79,7 @@ RUN set -eu; \
 # The PyPI package is "graphifyy" (double y).
 #   GRAPHIFY_VERSION  pinned on purpose; bump deliberately and rebuild
 #   GRAPHIFY_EXTRAS   optional extras, e.g. "[sql,terraform]"; empty = code only.
-#                     run.sh passes AB_GRAPHIFY_EXTRAS from config.env
+#                     run.sh passes AB_GRAPHIFY_EXTRAS from config.toml
 # Exposed as /usr/local/bin/graphify: graphify writes the path it was invoked
 # with into Claude Code hooks, and this path can also exist on the host.
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ RUN python3 -m venv /opt/graphify \
 
 # ---------------------------------------------------------------------------
 # Trivy (https://trivy.dev), only with WITH_TRIVY=1 (run.sh passes it for
-# AB_TRIVY=1 in config.env). The release archive is verified against the
+# AB_TRIVY = true in config.toml). The release archive is verified against the
 # published checksums. Its vulnerability database is not baked in: run.sh
 # keeps it current in the ab-trivy volume (lib/trivy.sh).
 #   TRIVY_VERSION  pinned; bump deliberately and rebuild

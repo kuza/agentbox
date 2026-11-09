@@ -1,6 +1,6 @@
 # pi extensions from git repositories: pi-extensions.d/<name>.toml (shared,
 # in git) or <AB_HOME>/pi-extensions.local.d/<name>.toml (yours; wins over
-# pi-extensions.d/). AB_PI_EXTENSIONS in config.env lists the enabled ones.
+# pi-extensions.d/). AB_PI_EXTENSIONS in config.toml lists the enabled ones.
 # sync-pi-extension.sh installs a source into <AB_HOME>/pi-extensions/<name>,
 # which sessions of pi mount read-only as ~/.pi/agent/extensions. Its file
 # is TOML data, never run, read by toml_load (lib/toml.sh, kind

@@ -14,13 +14,13 @@
 #   run.sh ~/src/myrepo --dangerously-skip-permissions
 #   run.sh mcp list                              # current dir, any claude subcommand
 #
-# Settings come from config.env in AB_HOME (see config.env.example), or from
+# Settings come from config.toml in AB_HOME (see config.toml.example), or from
 # the file named by AB_CONFIG. Environment variables override the file. Your
 # files live in AB_HOME, apart from this code (lib/paths.sh).
 #
 # Settings / environment overrides:
 #   AB_HOME           directory with your files (default: ~/.config/agentbox)
-#   AB_CONFIG         path of the config file (default: <AB_HOME>/config.env)
+#   AB_CONFIG         path of the config file (default: <AB_HOME>/config.toml)
 #   AB_LOGIN=1        only sign in: a Claude Code token into the claude_oauth
 #                     secret (agentbox login), no session
 #   AB_AGENT          claude (default), pi, or shell: bash in the same box
@@ -43,7 +43,7 @@
 #                     e.g. "redis rabbitmq" (README, Local services)
 #   AB_FORWARD        services outside the box the session may reach by name,
 #                     e.g. "db=db.test.example:5432"; also per repo in
-#                     <env dir>/<repo dir name>.conf (README, Test servers)
+#                     <env dir>/<repo dir name>.toml (README, Test servers)
 #   AB_TRIVY=1        Trivy in the image, its database kept current outside
 #                     the session (README, Trivy)
 #   AB_GRAPHIFY_EXTRAS  graphify extras baked into the image, e.g. "[terraform]"
@@ -111,7 +111,7 @@ user_paths_check_old
 convert_old_files
 config_first_pass
 mcp_init
-config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"}
+config_second_pass ${MCP_CONFIG_KEYS[@]+"${MCP_CONFIG_KEYS[@]}"} -- ${MCP_QUIET_KEYS[@]+"${MCP_QUIET_KEYS[@]}"}
 UPDATE_EVERY="${AB_UPDATE_EVERY:-$((6 * 3600))}"
 # A number of seconds; anything else would be evaluated as an arithmetic
 # expression, which can run commands.
@@ -119,7 +119,7 @@ if [[ ! "$UPDATE_EVERY" =~ ^[0-9]+$ ]]; then
   echo "error: AB_UPDATE_EVERY must be a number of seconds, got '$UPDATE_EVERY'" >&2
   exit 2
 fi
-# Image build settings from config.env; unset ones keep the Containerfile's
+# Image build settings from config.toml; unset ones keep the Containerfile's
 # defaults (an empty AB_GO_VERSION or AB_GOLANGCI_LINT_VERSION means latest).
 BUILD_ARGS=(--build-arg "GRAPHIFY_EXTRAS=${AB_GRAPHIFY_EXTRAS:-}")
 [[ "${AB_TRIVY:-}" == 1 ]] && BUILD_ARGS+=(--build-arg WITH_TRIVY=1)

@@ -1,6 +1,6 @@
 # MCP servers as modules: mcp/<name>/mcp.sh (shared, in git) or
 # <AB_HOME>/mcp.local/<name>/mcp.sh (yours; wins over mcp/). AB_MCP in
-# config.env lists the enabled ones; context7 is always enabled.
+# config.toml lists the enabled ones; context7 is always enabled.
 #
 # A module is a bash file, sourced by run.sh on the host, so it is code with
 # the same trust as run.sh: read a module before you enable it. It sets:
@@ -12,7 +12,7 @@
 #                        place of the one server <module name>, MCP_URL. With
 #                        "caller" the agents send the module's caller token
 #                        to that one; with "-" nothing (a remote server).
-#   MCP_CONFIG=()        config.env keys the module reads
+#   MCP_CONFIG=()        config.toml keys the module reads
 #   MCP_REQUIRED_CONFIG=()  of those, the ones that must be set
 #   MCP_SECRETS=()       podman secrets that must exist (README, Setup in detail, step 5)
 #   MCP_SECRET_HELP=()   "<secret>: what to type for it", for agentbox setup
@@ -22,7 +22,7 @@
 #                        secrets named <prefix><value> for each value of
 #                        setting KEY (github: "GH_OWNERS github_pat_");
 #                        agentbox uninstall --all removes those, read from
-#                        config.env
+#                        config.toml
 #   MCP_OWN_SECRETS=()   podman secrets mcp_start creates itself; agentbox
 #                        uninstall --all removes them
 #   MCP_CALLER_SECRET    a caller token secret, generated on first use. The
@@ -170,7 +170,7 @@ mcp_config_keys_text() {  # <mcp.sh>
 }
 
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
-# first config pass (AB_MCP may come from config.env), before the second.
+# first config pass (AB_MCP may come from config.toml), before the second.
 mcp_init() {
   local name dir keys d f seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
@@ -203,7 +203,7 @@ mcp_init() {
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done
   # The settings of each module that this version has (bb4 configured,
-  # then removed from AB_MCP): config.env may keep them, and the second
+  # then removed from AB_MCP): config.toml may keep them, and the second
   # pass ignores them without a warning. Each name once, as mcp_find finds
   # it: a module of yours replaces the shared one of that name. A key that
   # no module has still warns.

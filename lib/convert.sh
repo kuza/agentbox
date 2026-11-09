@@ -3,7 +3,7 @@
 #   convert_old_files   the entry point: run.sh and agentbox setup call it
 #                       before they read the settings
 #
-# Each old file <name>.conf becomes <name>.toml next to it
+# Each old file <name>.conf or <name>.env becomes <name>.toml next to it
 # (lib/toml-writer.py), and toml_load reads it back before it is used. The
 # old file stays unchanged, for a rollback to v0.1.x. CONVERT_LIST has the
 # path of each converted old file, one on each line, or "kept <path>" when
@@ -23,7 +23,8 @@
 # shortcut: the list only grows; clean it in v0.3.0, which removes the old
 # files.
 #
-# Needs SCRIPT_DIR, lib/paths.sh, lib/config.sh (ab_warn) and lib/toml.sh.
+# Needs SCRIPT_DIR, lib/paths.sh, lib/config.sh (ab_warn, CONFIG_FILE,
+# CONFIG_OLD_FILE) and lib/toml.sh.
 
 CONVERT_LIST="$AB_HOME_DIR/converted.list"
 CONVERT_LOCK="$AB_HOME_DIR/convert.lock"
@@ -41,7 +42,21 @@ convert_read_list() {
 }
 
 convert_old_files() {
+  local env_dir="${AB_ENV_DIR:-}"
+  local -A settings=()
   convert_read_list
+  # Step 1: the settings file. Step 2 reads AB_ENV_DIR in it.
+  convert_find config keys "$CONFIG_OLD_FILE"
+  convert_run
+  if [[ -z "${AB_ENV_DIR+x}" ]] && convert_pending "$CONFIG_OLD_FILE"; then
+    # Step 1 failed: the AB_ENV_DIR of the old file is not known.
+    env_dir=-
+  elif [[ -z "${AB_ENV_DIR+x}" && -f "$CONFIG_FILE" ]]; then
+    # A file that cannot be read stops the start later, with its error. Its
+    # AB_ENV_DIR is not known, so no directory is converted now.
+    if toml_load config "$CONFIG_FILE" settings 2>/dev/null; then env_dir="${settings[AB_ENV_DIR]:-}"; else env_dir=-; fi
+  fi
+  [[ "$env_dir" == - ]] || convert_find config keys "${env_dir:-$USER_ENV_DIR}"/*.conf
   convert_find egress-group hosts "$USER_EGRESS_DIR"/*.conf
   convert_find skill-source source "$USER_SKILLS_SOURCES_DIR"/*.conf
   convert_find pi-extension-source source "$USER_PI_EXTENSIONS_CONF_DIR"/*.conf
@@ -125,6 +140,9 @@ convert_run() {
     elif convert_file "$kind" "$form" "$old" "$new"; then
       converted+=("$old -> $(basename -- "$new")")
       convert_add "$old" converted
+    fi
+    if [[ "$old" == "${AB_CONFIG:-}" ]] && convert_listed "$old"; then
+      converted+=("AB_CONFIG names $old: change it to $new.")
     fi
   done
   exec {lock}>&-

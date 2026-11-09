@@ -51,6 +51,8 @@ source "$SCRIPT_DIR/lib/skills.sh"   # source_value, as run.sh reads the records
 source "$SCRIPT_DIR/lib/release.sh"
 # shellcheck source=lib/config.sh
 source "$SCRIPT_DIR/lib/config.sh"   # IMAGE, IMG_SQUID, ab_warn
+# shellcheck source=lib/toml.sh
+source "$SCRIPT_DIR/lib/toml.sh"
 # Run by run.sh: the warnings go to its list too, for warnings_review.
 # Not "could not check": offline it would come, and ask, at every start.
 AB_WARNINGS_FILE="${AB_WARNINGS_TO:-}"
@@ -277,9 +279,13 @@ done
 
 # pi extensions: an extension is code that pi runs, so an update needs a
 # yes. Not at a start of another agent (run.sh passes it): only a start of
-# pi installs them. Run by hand, the enabled list comes from config.env.
+# pi installs them. Run by hand, the enabled list comes from config.toml.
 if [[ -z "${AB_PI_EXTENSIONS_ENABLED+x}" && -f "$CONFIG_FILE" ]]; then
-  AB_PI_EXTENSIONS_ENABLED=" $(unset AB_PI_EXTENSIONS; load_config "$CONFIG_FILE" 0 AB_PI_EXTENSIONS; echo "${AB_PI_EXTENSIONS:-}") "
+  declare -A settings=()
+  if ! toml_load config "$CONFIG_FILE" settings; then
+    echo "agentbox: cannot read $CONFIG_FILE: no check of pi extensions" >&2
+  fi
+  AB_PI_EXTENSIONS_ENABLED=" ${settings[AB_PI_EXTENSIONS]:-} "
 fi
 pi_records=("$USER_PI_EXTENSIONS_RECORDS"/*)
 [[ "${AB_CHECK_AGENT:-pi}" == pi ]] || pi_records=()

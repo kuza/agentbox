@@ -46,9 +46,9 @@ jobs:
         run: |
           set -eu
           mkdir -p ~/.config/agentbox/env
-          printf '%s\n' 'AB_PYTHON_VERSIONS=3.13' 'AB_TRIVY=1' > ~/.config/agentbox/config.env
-          echo 'AB_FORWARD=fa=example.com:80' > ~/.config/agentbox/env/repo-a.conf
-          echo 'AB_FORWARD=fb=example.com:80' > ~/.config/agentbox/env/repo-b.conf
+          printf '%s\n' 'AB_PYTHON_VERSIONS = ["3.13"]' 'AB_TRIVY = true' > ~/.config/agentbox/config.toml
+          echo 'AB_FORWARD = ["fa=example.com:80"]' > ~/.config/agentbox/env/repo-a.toml
+          echo 'AB_FORWARD = ["fb=example.com:80"]' > ~/.config/agentbox/env/repo-b.toml
           cp -R . "$RUNNER_TEMP/repo-a"
           cp -R . "$RUNNER_TEMP/repo-b"
 

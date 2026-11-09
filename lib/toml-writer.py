@@ -6,7 +6,10 @@ lib/convert.sh runs it; see there.
 The forms of the old file:
 
     hosts  one host per line, # starts a comment (an egress group)
-    keys   KEY=VALUE lines, as load_config in lib/config.sh reads them
+    keys   KEY=VALUE lines, as load_config in lib/config.sh reads them (the
+           settings). A key outside the schema is a setting of a module:
+           a string. An empty value of an int or bool, or a value with a
+           control character, becomes a comment, with a warning.
     source the same parser, but the last of two equal keys wins, as in
            source_value (lib/skills.sh). The parser of load_config also
            removes quotes, "export " and a " # note", which source_value
@@ -70,12 +73,14 @@ def item(n, value):
 
 def typed(n, key, value):
     """The value in TOML, by the type of the key in the schema."""
-    want = schema[key]["type"]
+    want = schema[key]["type"] if key in schema else "string"
     if want == "list":
         return "[" + ", ".join(item(n, v) for v in re.split(r"[\s,]+", value) if v) + "]"
     if want == "bool" and value in ("0", "1"):
         return "true" if value == "1" else "false"
     if want == "int" and re.fullmatch(r"[0-9]+", value):
+        # Bash arithmetic read "010" as octal 8; this writes 10. No setting
+        # of v0.1.x uses such a value.
         return str(int(value))
     if want == "string":
         return string(n, value)
@@ -127,9 +132,33 @@ def keys():
             m = re.search(r"\s#", value)
             note = value[m.start() :] if m else ""
             value = value[: m.start()].rstrip() if m else value.rstrip()
-        # The key of a setting in the same case; an old key of a
-        # description in uppercase becomes lowercase.
-        name = key if key in schema else key.lower() if key.isupper() and key.lower() in schema else None
+        # The key of a setting in the same case, also a key of a module; an
+        # old key of a description in uppercase becomes lowercase.
+        if form == "keys":
+            name = key
+        else:
+            name = key if key in schema else key.lower() if key.isupper() and key.lower() in schema else None
+        if form == "keys" and name not in seen:
+            # v0.1.x took an empty value as not set, and a value of the wrong
+            # type gave a warning at most. The reader refuses a control
+            # character, which v0.1.x kept (a tab). None of these stops the
+            # conversion.
+            want = schema.get(key, {}).get("type")
+            if value == "" and want in ("bool", "int"):
+                why = "empty value"
+            elif want == "bool" and value not in ("0", "1"):
+                why = "a value that is not 0 or 1"
+            elif want == "int" and not re.fullmatch(r"[0-9]+", value):
+                why = "a value that is not a number"
+            elif any(ord(c) < 32 or ord(c) == 127 for c in value):
+                why = "a control character in the value"
+            else:
+                why = None
+            if why:
+                message(n, f"{why} of '{key}', kept as a comment")
+                out.append("# " + comment(s))
+                seen[name] = (len(out) - 1, n, s, [])
+                continue
         if name in seen and form == "source":
             # source_value takes the last of two equal keys.
             i, first, text, errs = seen[name]

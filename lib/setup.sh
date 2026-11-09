@@ -555,12 +555,14 @@ setup_save() {
   fi
   if (( ${#SETUP_NEW[@]} )); then
     target="$(realpath -m -- "$CONFIG_FILE")"
-    # No config.env yet: made from the example, in place only once complete.
+    # No config.env yet: made new, in place only once complete.
+    # shortcut: no example file for config.env; use config.toml.example
+    # when setup edits config.toml.
     src="$target"
-    [[ -f "$target" ]] || src="$SCRIPT_DIR/config.env.example"
+    [[ -f "$target" ]] || src=/dev/null
     if mkdir -p "$(dirname "$target")" && tmp="$(mktemp "$target.XXXXXX")" && setup_apply "$src" "$tmp"; then
       if [[ "$src" != "$target" ]]; then
-        chmod 600 -- "$tmp" && mv -f -- "$tmp" "$target" && echo "agentbox: saved $CONFIG_FILE, made from the example" || failed=1
+        chmod 600 -- "$tmp" && mv -f -- "$tmp" "$target" && echo "agentbox: saved $CONFIG_FILE" || failed=1
       elif cmp -s "$target" "$tmp"; then
         rm -f -- "$tmp"
       elif cp -p -- "$target" "$target.bak" && chmod --reference="$target" -- "$tmp" && mv -f -- "$tmp" "$target"; then

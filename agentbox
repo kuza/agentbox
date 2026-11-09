@@ -50,6 +50,9 @@ case "${1:-}" in
       source "$SCRIPT_DIR/lib/$lib.sh"
     done
     convert_old_files
+    # shortcut: agentbox setup still edits the settings file of v0.1.x, and
+    # a start does not read it; remove this line when setup edits config.toml.
+    CONFIG_FILE="$CONFIG_OLD_FILE"
     agentbox_setup "$@" ;;
   uninstall)
     shift
@@ -57,6 +60,8 @@ case "${1:-}" in
     source "$SCRIPT_DIR/lib/paths.sh"
     # shellcheck source=lib/config.sh
     source "$SCRIPT_DIR/lib/config.sh"
+    # shellcheck source=lib/toml.sh
+    source "$SCRIPT_DIR/lib/toml.sh"
     # shellcheck source=lib/sidecars.sh
     source "$SCRIPT_DIR/lib/sidecars.sh"
     # shellcheck source=lib/uninstall.sh

@@ -7,7 +7,7 @@
 #   tests/run.sh mcp_       tests whose name starts with "mcp_"
 #
 # Each test runs in its own scratch directory with a copy of agentbox's code,
-# never the real config.env or skills/. Needs bash 4+, git, and Python
+# never the real config.toml or skills/. Needs bash 4+, git, and Python
 # 3.11+ (tomllib) for the TOML reader (lib/toml.sh).
 set -uo pipefail
 
@@ -41,7 +41,7 @@ PASSED=0; FAILED=0; FAILURES=()
 # --- harness ----------------------------------------------------------------
 
 # setup <test name>: T (scratch dir), AB (agentbox copy), STUB_DIR (podman
-# state), REPO (a repo to mount). Writes a minimal config.env.
+# state), REPO (a repo to mount). Writes an empty config.toml.
 setup() {
   T="$WORK/$1"
   AB="$T/ab"
@@ -73,11 +73,32 @@ setup() {
   ln -s ../sysbin/systemctl "$T/bin/systemctl"
   ln -s ../sysbin/systemctl "$T/bin/systemd-run"
   printf '%s\n' claude_oauth > "$STUB_DIR/secrets"
-  : > "$CFG/config.env"
+  : > "$CFG/config.toml"
   export STUB_DIR
 }
 
-config() { printf '%s\n' "$@" >> "$CFG/config.env"; }
+# config KEY=VALUE...: lines in config.toml. A list key of agentbox gets an
+# array of the words (split at spaces and commas); true, false and digits
+# stay bare; any other value is a string. A line with " = " is TOML as it is.
+config() {
+  local a k v w ws items
+  for a in "$@"; do
+    k="${a%%=*}"; v="${a#*=}"
+    if [[ "$a" =~ ^[A-Za-z0-9_]+\ = ]]; then
+      printf '%s\n' "$a"
+    elif [[ " AB_MCP AB_EGRESS AB_SKILLS AB_PI_EXTENSIONS AB_SERVICES AB_FORWARD AB_PYTHON_VERSIONS " == *" $k "* ]]; then
+      items=""
+      read -ra ws <<< "${v//,/ }"
+      for w in ${ws[@]+"${ws[@]}"}; do items+="${items:+, }\"$w\""; done
+      printf '%s = [%s]\n' "$k" "$items"
+    elif [[ "$v" =~ ^(true|false|0|[1-9][0-9]*)$ ]]; then
+      printf '%s = %s\n' "$k" "$v"
+    else
+      v="${v//\\/\\\\}"
+      printf '%s = "%s"\n' "$k" "${v//\"/\\\"}"
+    fi
+  done >> "$CFG/config.toml"
+}
 secrets() { printf '%s\n' "$@" >> "$STUB_DIR/secrets"; }
 
 # ab_run [env...] -- [run.sh args...]: run.sh with the stub; output in $T/out,
@@ -240,7 +261,7 @@ test_mcp_failed_start_skips_that_module_only() {
   session_args | grep -q 'AB_MCP_TOKEN_WOODPECKER' && fail "the session still gets woodpecker's caller token"
   # Once running, a module skipped by a later start keeps its sidecars for
   # the sessions using them...
-  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=https://ci.example#' "$CFG/config.env"
+  sed -i 's#^WOODPECKER_URL =.*#WOODPECKER_URL = "https://ci.example"#' "$CFG/config.toml"
   ab_run --
   assert_rc 0
   run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started once fixed"
@@ -249,15 +270,15 @@ test_mcp_failed_start_skips_that_module_only() {
   assert_skipped woodpecker
   grep -q '^podman rm -f.* ab-mcp-woodpecker' "$STUB_DIR/calls" && fail "open sessions lost woodpecker"
   [[ " $(started) " == *" ab-mcp-woodpecker-srv "* ]] || fail "woodpecker's server stopped"
-  sed -i '/^WOODPECKER_CA=/d' "$CFG/config.env"
+  sed -i '/^WOODPECKER_CA =/d' "$CFG/config.toml"
   # ...unless access must go: a setting that does not check out (mcp_check),
   # as for an emptied one...
-  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=ci.example#' "$CFG/config.env"
+  sed -i 's#^WOODPECKER_URL =.*#WOODPECKER_URL = "ci.example"#' "$CFG/config.toml"
   ab_run --
   assert_skipped woodpecker
   grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "kept for a setting that does not check out"
   # ...or the module says so: a network with a way out.
-  sed -i 's#^WOODPECKER_URL=.*#WOODPECKER_URL=https://ci.example#' "$CFG/config.env"
+  sed -i 's#^WOODPECKER_URL =.*#WOODPECKER_URL = "https://ci.example"#' "$CFG/config.toml"
   ab_run --
   run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started again"
   ab_run STUB_NET_INTERNAL=false --
@@ -402,9 +423,9 @@ test_mcp_bb4() {
   local bad
   for bad in "BB4_URL=http://browser.example.internal:5101/u/x" "BB4_URL=http://a..b:5101" "BB4_URL=http://browser.example.internal:05101" \
              "BB4_URL=http://browser.example.internal:99999" "BB4_USER=a/b" "BB4_DEVTOOLS_PORT=x"; do
-    : > "$CFG/config.env"
+    : > "$CFG/config.toml"
     config "AB_MCP=bb4" "BB4_URL=http://browser.example.internal:5101" "BB4_USER=octo-cat" "$bad"
-    [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] || sed -i "0,/^${bad%%=*}=/{/^${bad%%=*}=/d}" "$CFG/config.env"
+    [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] || sed -i "0,/^${bad%%=*} =/{/^${bad%%=*} =/d}" "$CFG/config.toml"
     printf 'ab-mcp-bb4-devtools x\n' >> "$STUB_DIR/running"
     ab_run --
     assert_skipped bb4
@@ -439,7 +460,7 @@ test_mcp_server_names_and_urls_checked() {
   session_args | grep -q 'NO_PROXY=.*ab-mcp-d' || fail "own sidecar without a caller token sent through squid"
   # A malformed module is left out, not the whole start.
   printf 'MCP_URL="https://c.example/x|y"\n' > "$CFG/mcp.local/c/mcp.sh"
-  : > "$CFG/config.env"; config "AB_MCP=c"
+  : > "$CFG/config.toml"; config "AB_MCP=c"
   ab_run --
   assert_skipped c
   assert_out "c' left out of this session: its MCP_URL has a |"
@@ -458,7 +479,7 @@ test_mcp_server_names_and_urls_checked() {
   assert_skipped c
   assert_out "c' left out of this session: its mcp.sh does not parse"
   assert_no_out "unknown key 'C_X'"
-  sed -i '/^C_X=/d' "$CFG/config.env"
+  sed -i '/^C_X =/d' "$CFG/config.toml"
   # A problem from mcp_check counts also when it returns non-zero.
   printf 'MCP_URL=https://c.example/mcp\nmcp_check() { echo "C is bad"; return 1; }\n' > "$CFG/mcp.local/c/mcp.sh"
   ab_run --
@@ -476,7 +497,7 @@ test_mcp_server_names_and_urls_checked() {
   ab_run --
   assert_rc 0
   grep -q 'c.example/mcp' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a URL from settings not taken"
-  sed -i '/^C_URL=/d' "$CFG/config.env"
+  sed -i '/^C_URL =/d' "$CFG/config.toml"
   printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
   ab_run --
   assert_skipped c
@@ -556,18 +577,19 @@ test_mcp_config_keys_of_disabled_module_quiet() {
   assert_no_out "unknown key 'BB4_URL'"
   assert_no_out "unknown key 'TRACKER_SITE'"
   assert_out "unknown key 'NO_SUCH_KEY'"
-  # A key with a space: not KEY=VALUE, and the start goes on.
-  config "AB_MCP AB_EGRESS=x"
+  # A file that is not valid TOML stops the start, with the line.
+  echo 'AB_MCP AB_EGRESS = "x"' >> "$CFG/config.toml"
   ab_run --
-  assert_rc 0
-  assert_out "not KEY=VALUE, ignored"
-  sed -i '/^AB_MCP AB_EGRESS=x$/d' "$CFG/config.env"
-  # Only in config.env: in a repo's .conf, a module key still warns.
+  assert_rc 2
+  assert_out "config.toml:5: not valid TOML"
+  grep -q '^podman' "$STUB_DIR/calls" && fail "podman called despite the error"
+  sed -i '/^AB_MCP AB_EGRESS/d' "$CFG/config.toml"
+  # Only in config.toml: in a repo's .toml, a module key still warns.
   mkdir -p "$CFG/env"
-  echo "GRAFANA_URL=https://grafana.example" > "$CFG/env/repo.conf"
+  echo 'GRAFANA_URL = "https://grafana.example"' > "$CFG/env/repo.toml"
   ab_run --
-  assert_out "repo.conf:1: unknown key 'GRAFANA_URL'"
-  rm "$CFG/env/repo.conf"
+  assert_out "repo.toml:1: unknown key 'GRAFANA_URL'"
+  rm "$CFG/env/repo.toml"
   # A module of yours replaces the shared one of its name: its keys count,
   # not those of the shared one. A copy with a name that is not one adds
   # nothing.
@@ -690,22 +712,20 @@ test_egress_errors() {
   ab_run --
   assert_rc 2
   assert_out "no group 'nope'"
-  : > "$CFG/config.env"; config "AB_EGRESS=../x"
+  : > "$CFG/config.toml"; config "AB_EGRESS=../x"
   ab_run --
   assert_rc 2
   assert_out "invalid group name"
   mkdir -p "$CFG/egress.local.d"
   printf '%s\n' '# a group' 'hosts = [' '  "ok.example",' '  "bad host; http_access allow all",' ']' > "$CFG/egress.local.d/bad.toml"
-  : > "$CFG/config.env"; config "AB_EGRESS=bad"
+  : > "$CFG/config.toml"; config "AB_EGRESS=bad"
   ab_run --
   assert_rc 2
   assert_out "bad.toml:2: 'hosts': an item of the list cannot hold a space"
   grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
-  : > "$CFG/config.env"
   local h
   for h in 'x.example:99999' 'x.example:0' 'x_y.example' '*.example' 'x.example:443/path'; do
     printf 'hosts = ["%s"]\n' "$h" > "$CFG/egress.local.d/bad.toml"
-    config "AB_EGRESS=bad"
     ab_run --
     assert_rc 2
     assert_out "is not a host name"
@@ -874,6 +894,8 @@ test_convert_broken_old_file_warns() {
   # agentbox setup converts too, and shows the corrected file.
   cp "$ROOT/agentbox" "$AB/"
   printf '%s\n' '# a group' 'ok.example' > "$CFG/egress.local.d/bad.conf"
+  # agentbox setup reads config.env until it edits config.toml.
+  echo "AB_EGRESS=bad latin" > "$CFG/config.env"
   setup_run "q\n"
   assert_out "egress.local.d/bad.conf -> bad.toml"
   assert_out '\[x\] bad +\(yours\) ok.example$'
@@ -901,47 +923,95 @@ test_convert_two_starts_one_converts() {
   assert_eq "$(grep -c . "$CFG/converted.list")" 1 "lines in the list"
 }
 
-# The writer for KEY=VALUE files, the form of the settings and the old
-# sources. The test uses the kind of the tests (tests/toml/flat.schema.toml).
-# Each value gets the type of its key in the schema. A key that the schema
-# does not know becomes a comment. The written file reads back the same.
-test_convert_keys_by_type_and_unknown_key() {
+# The settings of v0.1.x, converted at the first start: each value by the
+# type of its key in the schema, a setting of a module as a string. A value
+# that the reader would refuse becomes a comment, with a warning.
+test_convert_settings() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/tests/toml/flat.schema.toml" "$AB/lib/toml-schema/flat.toml"
-  printf '%s\n' '# my source' 'NAME=a"b\c # note' 'PREFIX=' "COUNT='007'" 'export ON=1' 'OFF=0' 'ITEMS=x, y z' \
-    'TYPO=1' 'NAME=second' 'nAME=third' 'not a setting' > "$T/old.conf"
-  (
-    HOME="$T/home" SCRIPT_DIR="$AB" XDG_CACHE_HOME="$T/home/.cache"
-    for lib in paths config toml convert; do
-      # shellcheck source=/dev/null
-      source "$AB/lib/$lib.sh"
-    done
-    CONVERT_TODO=("flat keys $T/old.conf")
-    convert_run
-  ) > "$T/out" 2>&1
-  assert_out "warning: .*old.conf:8: unknown key 'TYPO', kept as a comment"
-  assert_out "warning: .*old.conf:9: second time 'NAME', kept as a comment"
-  # load_config knows a key only in its own case, and warns on other lines.
-  assert_out "warning: .*old.conf:10: unknown key 'nAME', kept as a comment"
-  assert_out "warning: .*old.conf:11: not KEY=VALUE, kept as a comment"
-  assert_out "old.conf -> old.toml"
-  assert_eq "$(cat "$T/old.toml")" '# my source
-name = "a\"b\\c"  # note
-prefix = ""
-count = 7
-on = true
-off = false
-items = ["x", "y", "z"]
-# TYPO=1
-# NAME=second
-# nAME=third
-# not a setting'
-  assert_eq "$(toml_case flat "$T/old.toml")" 'count 4 4 7
-items 7 7 x y z
-name 2 2 a"b\c
-off 6 6 0
-on 5 5 1
-prefix 3 3 '
+  rm "$CFG/config.toml"
+  mkdir -p "$CFG/myenv"
+  printf '%s\n' '# my settings' 'AB_MCP=github, grafana # mine' 'AB_GO_VERSION=1.22' 'AB_CHECK_UPDATES=0' \
+    'AB_UPDATE_EVERY=010' 'AB_TRIVY=' "AB_GRAPHIFY_EXTRAS=a	b" 'GH_TOOLSETS=repos,issues' 'GRAFANA_URL="https://g.example"' \
+    'TYPO=1' 'AB_MCP=second' 'not a setting' "AB_ENV_DIR=$CFG/myenv" \
+    "export WOODPECKER_CA='/ca dir/ca.pem'" 'TABULARIS_CMD=my\tab"x" # note' \
+    "BB4_URL=https://b.example/x	# tab before the note" 'GRAYLOG_URL="https://l.example/#frag"' > "$CFG/config.env"
+  # A wrong type in a repo file warned in v0.1.x: a comment, not a stop.
+  printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' 'AB_UPDATE_EVERY=6h' > "$CFG/myenv/repo.conf"
+  secrets github_pat grafana_sa
+  # No AB_CHECK_UPDATES in the environment: the converted file turns the
+  # update check off.
+  printf '%s\n' '#!/usr/bin/env bash' "touch '$T/checked'" > "$AB/check-updates.sh"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+    bash "$AB/run.sh" "$REPO" > "$T/out" 2>&1 < /dev/null
+  RC=$?
+  assert_rc 0
+  assert_out "config.env -> config.toml"
+  assert_out "myenv/repo.conf -> repo.toml"
+  assert_out "warning: .*config.env:6: empty value of 'AB_TRIVY', kept as a comment"
+  assert_out "warning: .*config.env:7: a control character in the value of 'AB_GRAPHIFY_EXTRAS', kept as a comment"
+  assert_out "warning: .*config.env:11: second time 'AB_MCP', kept as a comment"
+  assert_out "warning: .*config.env:12: not KEY=VALUE, kept as a comment"
+  assert_eq "$(cat "$CFG/config.toml")" "# my settings
+AB_MCP = [\"github\", \"grafana\"]  # mine
+AB_GO_VERSION = \"1.22\"
+AB_CHECK_UPDATES = false
+AB_UPDATE_EVERY = 10
+# AB_TRIVY=
+# AB_GRAPHIFY_EXTRAS=a	b
+GH_TOOLSETS = \"repos,issues\"
+GRAFANA_URL = \"https://g.example\"
+TYPO = \"1\"
+# AB_MCP=second
+# not a setting
+AB_ENV_DIR = \"$CFG/myenv\"
+WOODPECKER_CA = \"/ca dir/ca.pem\"
+TABULARIS_CMD = \"my\\\\tab\\\"x\\\"\"  # note
+BB4_URL = \"https://b.example/x\"  # tab before the note
+GRAYLOG_URL = \"https://l.example/#frag\""
+  assert_out "warning: .*repo.conf:2: a value that is not a number of 'AB_UPDATE_EVERY', kept as a comment"
+  assert_eq "$(cat "$CFG/myenv/repo.toml")" 'AB_FORWARD = ["db=db.test.example:5432"]
+# AB_UPDATE_EVERY=6h'
+  # The start reads the converted files: a typo warns, as in v0.1.x.
+  assert_out "config.toml:10: unknown key 'TYPO', ignored"
+  [[ -e "$T/checked" ]] && fail "AB_CHECK_UPDATES=0 did not stay off"
+  run_line "ab-fwd-$(fwd_key)-db" >/dev/null || fail "the forward of the repo not started"
+}
+
+# Step 1 fails: the AB_ENV_DIR of config.env is not known, so step 2
+# converts no directory, also not the default one.
+test_convert_settings_step_two_waits() {
+  setup "${FUNCNAME[0]}"
+  rm "$CFG/config.toml"
+  mkdir -p "$CFG/env" "$CFG/myenv"
+  printf 'AB_ENV_DIR=%s\nAB_GO_VERSION=1.2\xff\n' "$CFG/myenv" > "$CFG/config.env"
+  printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' > "$CFG/env/repo.conf"
+  printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' > "$CFG/myenv/repo.conf"
+  ab_run --
+  assert_rc 2
+  assert_out "config.env:2: not valid UTF-8"
+  [[ -e "$CFG/env/repo.toml" || -e "$CFG/myenv/repo.toml" ]] && fail "step 2 ran after step 1 failed"
+  return 0
+}
+
+# AB_CONFIG that names a .env file: the TOML file next to it, and a message
+# to change AB_CONFIG.
+test_convert_settings_of_ab_config() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$T/dotfiles"
+  printf '%s\n' 'AB_EGRESS=anthropic pypi' > "$T/dotfiles/agentbox.env"
+  ab_run "AB_CONFIG=$T/dotfiles/agentbox.env" --
+  assert_rc 0
+  assert_out "agentbox.env -> agentbox.toml"
+  assert_out "AB_CONFIG names $T/dotfiles/agentbox.env: change it to $T/dotfiles/agentbox.toml"
+  assert_eq "$(cat "$T/dotfiles/agentbox.toml")" 'AB_EGRESS = ["anthropic", "pypi"]'
+  assert_file_lacks "$(cache squid-allow.conf)" 'golang'
+  # A file that cannot be converted stops the start: no settings is not the
+  # same as your settings.
+  printf 'AB_GO_VERSION=1.2\xff\n' > "$T/dotfiles/other.env"
+  ab_run "AB_CONFIG=$T/dotfiles/other.env" --
+  assert_rc 2
+  assert_out "other.env:1: not valid UTF-8"
+  assert_out "other.env was not converted to TOML"
 }
 
 # --- run.sh: forwards ---
@@ -957,11 +1027,11 @@ test_forward_global_and_repo() {
   setup "${FUNCNAME[0]}"
   config "AB_FORWARD=db=DB.test.example:5432"
   mkdir -p "$CFG/env"
-  printf '%s\n' '# test servers of this repo' 'AB_FORWARD=mq=mq.test.example:5672, web=web.test.example:80' > "$CFG/env/repo.conf"
+  printf '%s\n' '# test servers of this repo' 'AB_FORWARD = ["mq=mq.test.example:5672", "web=web.test.example:80"]' > "$CFG/env/repo.toml"
   ab_run --
   assert_rc 0
   local k; k="$(fwd_key)"
-  assert_out "repo config $CFG/env/repo.conf"
+  assert_out "repo config $CFG/env/repo.toml"
   assert_eq "$(started | tr ' ' '\n' | grep '^ab-fwd' | paste -sd' ' -)" \
     "$(printf '%s\n' "ab-fwd-$k-mq" "ab-fwd-$k-web" ab-fwd-db | sort | paste -sd' ' -)" "forward sidecars"
   local l; l="$(run_line ab-fwd-db)"
@@ -983,19 +1053,19 @@ test_forward_recreated_and_removed() {
   setup "${FUNCNAME[0]}"
   config "AB_FORWARD=db=db.test.example:5432"
   mkdir -p "$CFG/env"
-  echo "AB_FORWARD=mq=mq.test.example:5672" > "$CFG/env/repo.conf"
+  echo 'AB_FORWARD = ["mq=mq.test.example:5672"]' > "$CFG/env/repo.toml"
   ab_run --
   ab_run --
   run_line ab-fwd-db && fail "recreated without a change"
   # Another repo's sidecar: not this start's business.
   echo "ab-fwd-ffffffff-x localhost/agentbox" >> "$STUB_DIR/running"
   echo "ab-fwd-ffffffff-x agentbox.forward=repo-ffffffff" >> "$STUB_DIR/labels"
-  : > "$CFG/config.env"; config "AB_FORWARD=db=db2.test.example:5432"
+  : > "$CFG/config.toml"; config "AB_FORWARD=db=db2.test.example:5432"
   ab_run --
   run_line ab-fwd-db | grep -q 'TCP:db2.test.example:5432' || fail "not recreated after the target changed"
   ab_run STUB_IMAGE_ID=img-2 --
   run_line ab-fwd-db >/dev/null || fail "not recreated on a new agentbox image"
-  rm "$CFG/env/repo.conf"; : > "$CFG/config.env"
+  rm "$CFG/env/repo.toml"; : > "$CFG/config.toml"
   ab_run --
   assert_rc 0
   assert_out "removed ab-fwd-db, no longer in AB_FORWARD"
@@ -1009,22 +1079,22 @@ test_forward_errors() {
   setup "${FUNCNAME[0]}"
   local e
   for e in 'db' 'Db=x.example:5432' 'ab-x=x.example:5432' 'db=x.example' 'db=.example:5432' 'db=x.example:70000' 'db=x;y:1' 'db=*:5432'; do
-    : > "$CFG/config.env"; config "AB_FORWARD=$e"
+    : > "$CFG/config.toml"; config "AB_FORWARD=$e"
     ab_run --
     assert_rc 2
   done
-  : > "$CFG/config.env"; config "AB_FORWARD=db=x.example:5432"
-  mkdir -p "$CFG/env"; echo "AB_FORWARD=db=y.example:5432" > "$CFG/env/repo.conf"
+  : > "$CFG/config.toml"; config "AB_FORWARD=db=x.example:5432"
+  mkdir -p "$CFG/env"; echo 'AB_FORWARD = ["db=y.example:5432"]' > "$CFG/env/repo.toml"
   ab_run --
   assert_rc 2
   assert_out "the name 'db' appears more than once"
-  rm "$CFG/env/repo.conf"
-  : > "$CFG/config.env"; config "AB_FORWARD=redis=x.example:6379" "AB_SERVICES=redis"
+  rm "$CFG/env/repo.toml"
+  : > "$CFG/config.toml"; config "AB_FORWARD=redis=x.example:6379" "AB_SERVICES=redis"
   ab_run --
   assert_rc 2
   assert_out "'redis' is also in AB_SERVICES"
   grep -q '^podman run -d' "$STUB_DIR/calls" && fail "sidecars started despite the error"
-  : > "$CFG/config.env"; config "AB_FORWARD=db=x.example:5432"
+  : > "$CFG/config.toml"; config "AB_FORWARD=db=x.example:5432"
   ab_run STUB_NO_SOCAT=1 --
   assert_rc 1
   assert_out "rebuild the image: AB_UPGRADE=1"
@@ -1109,27 +1179,27 @@ test_mcp_woodpecker() {
   assert_file_has "$t" 'proxy_ssl_verify on;'
   # A CA of your own is mounted; a missing one or a bad URL stops the start.
   echo "-----BEGIN CERTIFICATE-----" > "$T/ca.pem"
-  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/ca.pem"
+  : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/ca.pem"
   ab_run --
   assert_rc 0
   run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_CA_FILE=/etc/nginx/woodpecker-ca.pem .*:/etc/nginx/woodpecker-ca.pem:ro,Z" \
     || fail "own CA not mounted: $(run_line ab-mcp-woodpecker)"
-  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
+  : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
   ab_run --
   assert_skipped woodpecker
   assert_out "missing.pem is missing"
   local bad
   for bad in ci.example 'https://ci.example/;}server{' 'https://ci.example/$host' 'https://ci.example/#x' 'https://u:p@ci.example'; do
-    : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=$bad"
+    : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=$bad"
     ab_run --
     assert_skipped woodpecker
     assert_out "WOODPECKER_URL must be an http:// or https:// URL"
   done
-  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=http://ci.example"
+  : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=http://ci.example"
   ab_run --
   assert_rc 0
   assert_out "WOODPECKER_URL is http://: the Woodpecker token"
-  : > "$CFG/config.env"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example//api//"
+  : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example//api//"
   ab_run --
   run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_URL=https://ci.example " || fail "slashes kept: $(run_line ab-mcp-woodpecker)"
   # A network of that name without --internal is not used.
@@ -1268,7 +1338,7 @@ TOML
   assert_rc 0
   [[ -f "$f" ]] || fail "no copy to remove"
   printf 'ab-mcp-dbhub x\n' >> "$STUB_DIR/running"
-  : > "$CFG/config.env"
+  : > "$CFG/config.toml"
   ab_run --
   assert_rc 0
   [[ -e "$(dirname "$f")" ]] && fail "the copy with the passwords stayed"
@@ -1317,7 +1387,8 @@ test_github_nginx_follows_its_server() {
 
 test_github_more_owners() {
   setup "${FUNCNAME[0]}"
-  config "AB_MCP=github" "GH_OWNERS=MyOrg, other-org myorg"
+  # A setting of a module as an array: joined with a comma.
+  config "AB_MCP=github" 'GH_OWNERS = ["MyOrg", "other-org", "myorg"]' 'GH_TOOLSETS = ["repos", "issues"]'
   secrets github_pat github_pat_myorg
   # A token for each owner: without one, the module is left out.
   ab_run --
@@ -1326,6 +1397,7 @@ test_github_more_owners() {
   secrets github_pat github_pat_myorg github_pat_other-org
   ab_run --
   assert_rc 0
+  run_line ab-mcp-github | grep -q 'GH_TOOLSETS=repos,issues ' || fail "GH_TOOLSETS: $(run_line ab-mcp-github)"
   # A server for each owner (lowercase, once), at its own path of nginx.
   local j; j="$(cache mcp-claude.json)"
   grep -q '"github": { "type": "http", "url": "http://ab-mcp-github:8080/mcp"' "$j" || fail "main server missing"
@@ -1343,7 +1415,7 @@ test_github_more_owners() {
   assert_eq "$(grep -c 'Bearer \${GH_PAT}"' "$t")" 1 "GH_PAT uses"
   assert_eq "$(grep -c 'location / { return 404; }' "$t")" 1 "catch-all"
   # A name that is not a GitHub name: left out, with the reason.
-  sed -i 's/^GH_OWNERS=.*/GH_OWNERS=bad_name/' "$CFG/config.env"
+  sed -i 's/^GH_OWNERS =.*/GH_OWNERS = "bad_name"/' "$CFG/config.toml"
   ab_run --
   assert_skipped github
   assert_out "GH_OWNERS must hold GitHub user or organization names, got: bad_name"
@@ -1374,8 +1446,8 @@ NPM
   chmod +x "$T/bin/node" "$T/bin/npm" "$T/bin/tabularis" "$T/bin/ss"
 }
 bridge_line() { grep '^systemd-run ' "$STUB_DIR/calls"; }
-tab_port() {  # <port>: TABULARIS_PORT in config.env, replacing the one there
-  sed -i '/^TABULARIS_PORT=/d' "$CFG/config.env"
+tab_port() {  # <port>: TABULARIS_PORT in config.toml, replacing the one there
+  sed -i '/^TABULARIS_PORT =/d' "$CFG/config.toml"
   config "TABULARIS_PORT=$1"
 }
 free_port() {  # <first>: the first port from <first> on that nobody listens on
@@ -1496,7 +1568,7 @@ test_tabularis_disabled_stops_bridge() {
   tab_setup "${FUNCNAME[0]}"
   ab_run AB_TABULARIS_WAIT=0 --
   echo "agentbox-mine.service my own service" >> "$STUB_DIR/units"
-  : > "$CFG/config.env"
+  : > "$CFG/config.toml"
   ab_run --
   assert_rc 0
   assert_out "stopped agentbox-mcp-tabularis.service, no longer enabled"
@@ -1515,7 +1587,7 @@ test_tabularis_host_unit_failures() {
   assert_skipped tabularis
   assert_out "could not start the host service agentbox-mcp-tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
-  : > "$CFG/config.env"
+  : > "$CFG/config.toml"
   ab_run STUB_STOP_FAIL=1 --
   assert_rc 0
   grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "session did not start"
@@ -1584,20 +1656,20 @@ test_tabularis_errors() {
   assert_out "TABULARIS_CMD may hold only"
   local p
   for p in 80 08080 70000; do
-    : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_PORT=$p"
+    : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_PORT=$p"
     ab_run AB_TABULARIS_WAIT=0 --
     assert_skipped tabularis
     assert_out "TABULARIS_PORT must be a port from 1024 to 65535, got '$p'"
   done
-  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=./bin/tabularis"
+  : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_CMD=./bin/tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
   assert_skipped tabularis
   assert_out "give the command by name or as an absolute path, got './bin/tabularis'"
-  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD= tabularis"
+  : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_CMD= tabularis"
   ab_run AB_TABULARIS_WAIT=0 TABULARIS_CMD=" tabularis" --
   assert_skipped tabularis
   assert_out "starts with the command"
-  : > "$CFG/config.env"; config "AB_MCP=tabularis" "TABULARIS_CMD=no-such-tabularis"
+  : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_CMD=no-such-tabularis"
   ab_run AB_TABULARIS_WAIT=0 --
   assert_skipped tabularis
   assert_out "'no-such-tabularis' not found"
@@ -1845,8 +1917,8 @@ test_session_protects_git_dir() {
 
 test_config_trailing_comments() {
   setup "${FUNCNAME[0]}"
-  config "AB_MCP=grafana # dashboards" "GRAFANA_URL=\"https://g.example/#frag\"  # quoted, then a comment" \
-         "AB_EGRESS=anthropic pypi	# tab before the comment"
+  config 'AB_MCP = ["grafana"] # dashboards' 'GRAFANA_URL = "https://g.example/#frag"  # quoted, then a comment' \
+         'AB_EGRESS = ["anthropic", "pypi"]	# tab before the comment'
   secrets grafana_sa
   ab_run --
   assert_rc 0
@@ -1855,12 +1927,32 @@ test_config_trailing_comments() {
   assert_file_lacks "$(cache squid-allow.conf)" 'golang'
 }
 
+# A list from the environment is a string with spaces or commas, and wins
+# over the file. Floats in a list are refused, with a hint.
+test_config_lists() {
+  setup "${FUNCNAME[0]}"
+  config "AB_EGRESS=anthropic"
+  ab_run AB_EGRESS="anthropic,pypi go" --
+  assert_rc 0
+  assert_file_has "$(cache squid-allow.conf)" 'dstdomain pypi.org$'
+  assert_file_has "$(cache squid-allow.conf)" 'golang'
+  config 'AB_PYTHON_VERSIONS = [3.12, 3.13]'
+  ab_run --
+  assert_rc 2
+  assert_out "config.toml:2: 'AB_PYTHON_VERSIONS': a float is not allowed; use quotes"
+}
+
 test_update_every_must_be_a_number() {
   setup "${FUNCNAME[0]}"
   local v
+  # In config.toml, the reader refuses a value that is not an integer.
+  config "AB_UPDATE_EVERY=6h"
+  ab_run --
+  assert_rc 2
+  assert_out "config.toml:1: 'AB_UPDATE_EVERY' must be an integer"
+  : > "$CFG/config.toml"
   for v in "x[\$(touch $T/pwned)]" 6h; do
-    : > "$CFG/config.env"; config "AB_UPDATE_EVERY=$v"
-    ab_run --
+    ab_run "AB_UPDATE_EVERY=$v" --
     assert_rc 2
     assert_out "AB_UPDATE_EVERY must be a number of seconds"
   done
@@ -1950,7 +2042,7 @@ test_release_install() {
   grep -qx 'PATH=$HOME/.local/bin:$PATH' "$envf" || fail "environment.d file not written"
   grep -qx 'GIT_CONFIG_KEY_0=core.fsmonitor' "$envf" || fail "fsmonitor not switched off"
   assert_out "log out and back in"
-  [[ -f "$CFG/config.env" ]] || fail "config.env not created"
+  [[ -f "$CFG/config.toml" ]] || fail "config.toml not created"
   local comp="$T/home/.local/share/bash-completion/completions/agentbox"
   [[ "$(readlink "$comp")" == "$T/home/.local/share/agentbox/current/completions/agentbox.bash" ]] || fail "completion not linked"
   [[ -f "$comp" ]] || fail "completion link broken"
@@ -2291,8 +2383,8 @@ test_uninstall() {
   rel_setup "${FUNCNAME[0]}"
   make_release v1.0.0
   ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh" --git-guard
-  echo "AB_SERVICES=redis" >> "$CFG/config.env"
-  echo "GH_OWNERS=MyOrg" >> "$CFG/config.env"
+  echo 'AB_SERVICES = ["redis"]' >> "$CFG/config.toml"
+  echo 'GH_OWNERS = ["MyOrg"]' >> "$CFG/config.toml"
   printf '%s\n' "ab-mcp-grafana x" "ab-claude-7 localhost/agentbox" "redis docker.io/library/redis:7" > "$STUB_DIR/running"
   printf '%s\n' ab-claude-home ab-cache mydata > "$STUB_DIR/volumes"
   printf '%s\n' ab-internal ab-services podman > "$STUB_DIR/networks"
@@ -2325,7 +2417,7 @@ test_uninstall() {
   [[ -e "$T/home/.local/bin/agentbox" || -e "$T/home/.local/bin/git" ]] && fail "command or git-guard left"
   [[ -L "$T/home/.local/share/bash-completion/completions/agentbox" ]] && fail "completion left"
   [[ -e "$T/home/.cache/agentbox" ]] && fail "cache left"
-  [[ -f "$CFG/config.env" ]] || fail "your files removed without --all"
+  [[ -f "$CFG/config.toml" ]] || fail "your files removed without --all"
   # --all: the secrets agentbox and its modules use, and your files.
   : > "$STUB_DIR/calls"
   env HOME="$T/home" PATH="$T/bin:$PATH" bash "$T/rel/agentbox-v1.0.0/agentbox" uninstall --yes --all > "$T/out" 2>&1 < /dev/null
@@ -2430,7 +2522,7 @@ test_trivy() {
   setup "${FUNCNAME[0]}"
   ab_run --
   grep -qE 'entrypoint trivy|ab-trivy|WITH_TRIVY' "$STUB_DIR/calls" && fail "Trivy used without AB_TRIVY"
-  config "AB_TRIVY=1"
+  config "AB_TRIVY=true"
   ab_run AB_UPGRADE=1 --
   assert_rc 0
   grep -q '^podman build .*--build-arg WITH_TRIVY=1' "$STUB_DIR/calls" || fail "image built without Trivy"
@@ -2532,7 +2624,7 @@ test_image_rebuilt_when_its_build_changes() {
   assert_rc 0
   grep -q '^podman build' "$STUB_DIR/calls" && fail "rebuilt without a change"
   # A build setting: only the agentbox image, a cached build, the old one retired.
-  config "AB_TRIVY=1"
+  config "AB_TRIVY=true"
   ab_run STUB_BUILT_ID=img-2 --
   assert_rc 0
   assert_out "localhost/agentbox was built from another Containerfile or build settings; rebuilding"
@@ -2572,7 +2664,6 @@ setup_entry() {  # <name>: its number in the menu
 test_setup_edits_config() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
-  cp "$ROOT/config.env.example" "$AB/"
   printf '%s\n' '# mine' 'AB_MCP=graylog # my note' 'GRAYLOG_URL=https://g.example' '#AB_TRIVY=1' > "$CFG/config.env"
   # Under a module: its settings and secrets, and how to change them.
   mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]  # mine' > "$CFG/egress.local.d/corp.toml"
@@ -2608,6 +2699,9 @@ AB_TRIVY=1
 AB_SERVICES=\"redis # db\"
 GRAFANA_URL=https://grafana.example" "config.env"
   assert_eq "$(head -n2 "$CFG/config.env.bak" | tail -n1)" "AB_MCP=graylog # my note" "backup"
+  # Until setup edits config.toml, a start reads config.env only through a
+  # new conversion: here without the config.toml that setup() made.
+  rm "$CFG/config.toml"; sed -i '/config\.env$/d' "$CFG/converted.list"
   # run.sh reads it as written: grafana with its URL and secret, Trivy.
   ab_run --
   assert_rc 0
@@ -2623,19 +2717,18 @@ GRAFANA_URL=https://grafana.example" "config.env"
 
 test_setup_quit_and_new_config() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  cp "$ROOT/agentbox" "$AB/"
   echo "AB_MCP=" > "$CFG/config.env"
   local grafana; grafana="$(setup_entry grafana)"
   # Changes, then q and yes: nothing written, no secret.
   setup_run "$grafana\nhttps://grafana.example\nsa-token\nq\ny\n"
   assert_eq "$(cat "$CFG/config.env")" "AB_MCP=" "config.env after quitting"
   [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret created without saving"
-  # No config.env yet: made from the example, then edited.
+  # No config.env yet: made new, then edited.
   rm "$CFG/config.env"
   setup_run "$grafana\nhttps://grafana.example\n\ns\n"
   assert_rc 0
   grep -qx 'AB_MCP=grafana' "$CFG/config.env" || fail "AB_MCP not set in the new file"
-  grep -q '^# agentbox settings' "$CFG/config.env" || fail "not made from the example"
 }
 
 # Secrets through the menu: a module makes the value from what you type
@@ -2643,7 +2736,7 @@ test_setup_quit_and_new_config() {
 # keeps it; spaces inside stay.
 test_setup_secrets() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  cp "$ROOT/agentbox" "$AB/"
   echo "AB_MCP=" > "$CFG/config.env"
   local graylog grafana
   graylog="$(setup_entry graylog)"; grafana="$(setup_entry grafana)"
@@ -2690,7 +2783,7 @@ test_setup_secrets() {
 # environment counts, and is named.
 test_setup_link_and_environment() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  cp "$ROOT/agentbox" "$AB/"
   mkdir -p "$T/dotfiles"
   echo "AB_MCP=" > "$T/dotfiles/agentbox.env"
   ln -sf "$T/dotfiles/agentbox.env" "$CFG/config.env"
@@ -2709,7 +2802,7 @@ test_setup_link_and_environment() {
 # leaves no config.env.
 test_setup_values_names_input() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  cp "$ROOT/agentbox" "$AB/"
   echo "AB_MCP=" > "$CFG/config.env"
   mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]' > "$CFG/egress.local.d/corp.net.toml"
   local services forward corp graylog
@@ -2776,7 +2869,7 @@ test_sidecar_recreated_when_its_setup_changes() {
   # image), not one per field.
   assert_eq "$(grep -c '^podman inspect .* ab-mcp-graylog$' "$STUB_DIR/calls")" 1 "inspects of an unchanged sidecar"
   # A changed setting reaches the sidecar only through a new container.
-  : > "$CFG/config.env"; config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog2.example"
+  : > "$CFG/config.toml"; config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog2.example"
   ab_run --
   run_line ab-mcp-graylog | grep -q 'GRAYLOG_URL=https://graylog2.example' || fail "not recreated after its setting changed"
   # So does a changed file it mounts, such as its nginx template.
@@ -2853,7 +2946,7 @@ test_disabled_sidecars_removed() {
   ab_run --
   assert_eq "$(started)" "ab-egress ab-llm-openai ab-mcp-grafana ab-mcp-graylog" "sidecars"
   echo "redis docker.io/library/redis:7" >> "$STUB_DIR/running"
-  : > "$CFG/config.env"; config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
+  : > "$CFG/config.toml"; config "AB_MCP=grafana" "GRAFANA_URL=https://g.example"
   grep -vx openai_api_key "$STUB_DIR/secrets" > "$STUB_DIR/secrets.new"; mv "$STUB_DIR/secrets.new" "$STUB_DIR/secrets"
   ab_run --
   assert_rc 0
@@ -3452,7 +3545,7 @@ test_pi_extension_sources_at_start() {
   # One that you installed with the script yourself.
   px_run byhand "$SRC"
   # Disabled: removed; one copied in by hand or installed by hand stays.
-  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  sed -i '/^AB_PI_EXTENSIONS =/d' "$CFG/config.toml"
   ab_run AB_AGENT=pi --
   assert_rc 0
   [[ -e "$(px_dir myext)" ]] && fail "disabled extension left"
@@ -3463,7 +3556,7 @@ test_pi_extension_sources_at_start() {
   config "AB_PI_EXTENSIONS=myext"
   ab_run AB_AGENT=pi --
   rm "$(px_rec myext)"
-  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  sed -i '/^AB_PI_EXTENSIONS =/d' "$CFG/config.toml"
   ab_run AB_AGENT=pi --
   [[ -e "$(px_dir myext)" ]] && fail "a disabled extension without its record left"
   [[ -f "$(px_dir byhand)/src/index.ts" ]] || fail "an extension installed by hand removed"
@@ -3493,13 +3586,13 @@ test_pi_extension_sources_at_start() {
   assert_out "uses the skill source 'acme'"
   rm "$CFG/skills.local.d/other.toml"
   rm "$CFG/skills.local.d/acme.toml" "$CFG/skills.local.d/mine.toml"
-  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  sed -i '/^AB_PI_EXTENSIONS =/d' "$CFG/config.toml"
   # An unknown source stops the start, like AB_SKILLS.
   config "AB_PI_EXTENSIONS=nope"
   ab_run AB_AGENT=pi --
   assert_out "no pi extension source 'nope'"
   # An unknown key and a missing url stop the start. The error names the line.
-  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  sed -i '/^AB_PI_EXTENSIONS =/d' "$CFG/config.toml"
   config "AB_PI_EXTENSIONS=myext"
   printf '%s\n' "url = '$SRC'" "reff = 'v1'" > "$CFG/pi-extensions.local.d/myext.toml"
   ab_run AB_AGENT=pi --
@@ -3543,7 +3636,7 @@ needs_skills = [\"acme\", \"other\"]"
   printf '%s\n' 'REF=v1' > "$CFG/pi-extensions.local.d/ponytail.conf"
   # A local shared source: no network if the start uses it by mistake.
   printf '%s\n' "url = '$SRC'" > "$AB/pi-extensions.d/ponytail.toml"
-  printf '%s\n' "AB_PI_EXTENSIONS=ponytail" > "$CFG/config.env"
+  printf '%s\n' 'AB_PI_EXTENSIONS = ["ponytail"]' > "$CFG/config.toml"
   ab_run AB_AGENT=pi --
   assert_rc 2
   assert_out "ponytail.conf was not converted to TOML .*does not use the shared pi extension source"
@@ -3553,7 +3646,7 @@ needs_skills = [\"acme\", \"other\"]"
 
 test_pi_extension_shared_sources_and_setup() {
   setup "${FUNCNAME[0]}"
-  cp "$ROOT/agentbox" "$ROOT/config.env.example" "$AB/"
+  cp "$ROOT/agentbox" "$AB/"
   local n
   for n in pi-subagents pi-prompt-history; do
     assert_file_has "$AB/pi-extensions.d/$n.toml" '^url = "https://github.com/'
@@ -3609,12 +3702,12 @@ test_updates_pi_extension_behind() {
   env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_AGENT=claude \
       bash "$AB/check-updates.sh" > "$T/out" 2>&1 < /dev/null
   assert_no_out "pi extension myext"
-  # Run by hand: the enabled list comes from config.env.
+  # Run by hand: the enabled list comes from config.toml.
   printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" "SOURCE=1" > "$CFG/pi-extensions.sources/myext"
   config "AB_PI_EXTENSIONS=other"
   cu_run
   assert_no_out "pi extension myext"
-  sed -i '/^AB_PI_EXTENSIONS=/d' "$CFG/config.env"
+  sed -i '/^AB_PI_EXTENSIONS =/d' "$CFG/config.toml"
   # Disabled (run.sh passes the enabled list): no offer.
   printf '%s\n' "URL=https://github.com/acme/pi-ext" "COMMIT=$(printf 'a%.0s' {1..40})" "REF=" "SOURCE=1" > "$CFG/pi-extensions.sources/myext"
   env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_PI_EXTENSIONS_ENABLED=" other " \
@@ -3701,7 +3794,7 @@ test_skills_source_disabled_removed_manual_kept() {
   git -C "$other" -c user.name=t -c user.email=t@t add -A
   git -C "$other" -c user.name=t -c user.email=t@t commit -qm init
   env HOME="$T/home" bash "$AB/sync-skills.sh" "$other" > /dev/null 2>&1
-  : > "$CFG/config.env"
+  : > "$CFG/config.toml"
   ab_run --
   assert_rc 0
   assert_out "removing skills of disabled source 'acme'"
@@ -3740,12 +3833,12 @@ test_skills_source_errors() {
   ab_run --
   assert_rc 2
   assert_out "no skill source 'nope'"
-  : > "$CFG/config.env"; config "AB_SKILLS=../x"
+  : > "$CFG/config.toml"; config "AB_SKILLS=../x"
   ab_run --
   assert_rc 2
   assert_out "invalid source name"
   # An unknown key and a missing or empty url: errors with the line.
-  : > "$CFG/config.env"; config "AB_SKILLS=acme"
+  : > "$CFG/config.toml"; config "AB_SKILLS=acme"
   src_conf skills.local.d acme "url = '$SRC'" "subdirr = 'eng'"
   ab_run --
   assert_rc 2
@@ -3809,7 +3902,7 @@ test_convert_failed_file_hides_no_shared_file() {
   assert_eq "$(installed)" ""
   # The same for an egress group: two hosts on one line.
   printf '%s\n' 'a.example b.example' > "$CFG/egress.local.d/pypi.conf"
-  printf '%s\n' "AB_EGRESS=anthropic pypi" > "$CFG/config.env"
+  printf '%s\n' 'AB_EGRESS = ["anthropic", "pypi"]' > "$CFG/config.toml"
   ab_run --
   assert_rc 2
   assert_out "pypi.conf was not converted to TOML .*does not use the shared group"
@@ -3867,7 +3960,19 @@ toml_case() {
     declare -A values=() lines=()
     rc=0
     toml_load "$1" "$(basename "$2")" values lines 2> "$T/err" || rc=$?
-    for k in "${!values[@]}"; do echo "$k ${lines[$k]} ${values[$k]}"; done | sort
+    # In the kind config, settings_load warns about a key that no module
+    # has, not the reader. A later Go port must match both. The cases have GH_TOOLSETS, GH_OWNERS and TABULARIS_PORT as keys
+    # of enabled modules, and GRAFANA_URL as a key of a module that is not.
+    if [[ "$1" == config && "$rc" == 0 ]]; then
+      (
+        for lib in paths config; do
+          # shellcheck source=/dev/null
+          source "$AB/lib/$lib.sh"
+        done
+        settings_load "$(basename "$2")" 1 "${CONFIG_KEYS[@]}" GH_TOOLSETS GH_OWNERS TABULARIS_PORT -- GRAFANA_URL
+      ) 2>> "$T/err"
+    fi
+    for k in "${!values[@]}"; do echo "$k ${lines[$k]} ${values[$k]}"; done | LC_ALL=C sort
     sed -E 's/^(agentbox: warning: )?([^:]+:[0-9]+): .*\(([a-z-]+)\)$/\2: \3/' "$T/err"
     exit "$rc"
   )
@@ -3887,6 +3992,17 @@ test_toml_conformance() {
     [[ "$got" == "$want" ]] || fail "${f#"$ROOT/"}: got"$'\n'"$got"$'\n'"expected"$'\n'"$want"
     if [[ -f "${f%.toml}.out" ]]; then assert_eq "$rc" 0 "${f#"$ROOT/"}"; else assert_eq "$rc" 2 "${f#"$ROOT/"}"; fi
   done
+  # The schema of config names the keys of CONFIG_KEYS, and gives the type
+  # list to the keys of CONFIG_LIST_KEYS.
+  # shellcheck source=/dev/null
+  got="$(source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"
+    printf '%s\n' "${CONFIG_KEYS[@]}" | LC_ALL=C sort | paste -sd' ' -
+    printf '%s\n' "${CONFIG_LIST_KEYS[@]}" | LC_ALL=C sort | paste -sd' ' -)"
+  want="$(python3 -I -c 'import sys, tomllib
+s = tomllib.load(open(sys.argv[1], "rb"))
+print(" ".join(sorted(s)))
+print(" ".join(sorted(k for k in s if s[k]["type"] == "list")))' "$ROOT/lib/toml-schema/config.toml")"
+  assert_eq "$got" "$want" "CONFIG_KEYS and CONFIG_LIST_KEYS against the schema"
 }
 
 # --- main -------------------------------------------------------------------

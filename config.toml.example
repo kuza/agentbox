@@ -1,38 +1,43 @@
-# agentbox settings. Copy to ~/.config/agentbox/config.env and adjust:
-#   mkdir -p ~/.config/agentbox && cp config.env.example ~/.config/agentbox/config.env
-# Format: KEY=VALUE, one per line, quotes are optional. # starts a comment at
-# the start of a line or after a space.
-# The file is parsed, not executed. Environment variables override it.
+# agentbox settings. Copy to ~/.config/agentbox/config.toml and adjust:
+#   mkdir -p ~/.config/agentbox && cp config.toml.example ~/.config/agentbox/config.toml
+# Format: TOML, one KEY = value on each line. # starts a comment.
+#   a string:  KEY = "text"
+#   a list:    KEY = ["a", "b"]
+#   a flag:    KEY = true (or false)
+#   a number:  KEY = 21600
+# agentbox reads the file and does not execute it. An environment variable
+# overrides a setting. In the environment, a list is a string with spaces or
+# commas.
 
 # MCP servers: modules from mcp/ (shared) or ~/.config/agentbox/mcp.local/
 # (yours), see README
 # "MCP servers". context7 is always on. Each module may need settings below
 # and Podman secrets (README, step 5).
-#AB_MCP=grafana graylog github woodpecker tabularis dbhub bb4
+#AB_MCP = ["grafana", "graylog", "github", "woodpecker", "tabularis", "dbhub", "bb4"]
 
 # Settings of the grafana and graylog modules: base URLs, without /api or /mcp.
-#GRAFANA_URL=https://grafana.example.internal
-#GRAYLOG_URL=https://graylog.example.internal
+#GRAFANA_URL = "https://grafana.example.internal"
+#GRAYLOG_URL = "https://graylog.example.internal"
 
 # Settings of the woodpecker module (README, Woodpecker (MCP)): the server's
 # base URL, without /api, and for an https server signed by your own CA its
 # CA certificate file.
-#WOODPECKER_URL=https://ci.example.internal
-#WOODPECKER_CA=/path/to/ca.pem
+#WOODPECKER_URL = "https://ci.example.internal"
+#WOODPECKER_CA = "/path/to/ca.pem"
 
 # Settings of the tabularis module (README, Tabularis (MCP)): the command that
 # runs Tabularis on the host (--mcp is appended) and the bridge's port on
 # 127.0.0.1.
-#TABULARIS_CMD=tabularis
-#TABULARIS_PORT=47821
+#TABULARIS_CMD = "tabularis"
+#TABULARIS_PORT = 47821
 
 # Settings of the bb4 module (README, Remote browser (bb4)): the browser
 # server's base URL, scheme, host and port only, and your user name there.
 # The agent's browser there reaches the whole internet, past squid.
-#BB4_URL=http://browser.example.internal:5101
-#BB4_USER=your-github-name
+#BB4_URL = "http://browser.example.internal:5101"
+#BB4_USER = "your-github-name"
 # The port of the browser's DevTools WebSocket on the same host (default 5100).
-#BB4_DEVTOOLS_PORT=5100
+#BB4_DEVTOOLS_PORT = 5100
 
 # The dbhub module has no settings here: it reads its databases from
 # ~/.config/agentbox/dbhub.toml (README, DBHub (MCP)).
@@ -40,46 +45,46 @@
 # Hosts the agent may reach: groups from egress.d/ (shared) or egress.local.d/
 # (yours), see README "Egress". Unset: anthropic openai pypi go. A list
 # replaces that; Claude Code needs anthropic.
-#AB_EGRESS=anthropic openai pypi go gcs
+#AB_EGRESS = ["anthropic", "openai", "pypi", "go", "gcs"]
 
 # Optional.
 # Setting of the github module.
-#GH_TOOLSETS=context,repos,issues,pull_requests,actions
+#GH_TOOLSETS = ["context", "repos", "issues", "pull_requests", "actions"]
 # More GitHub resource owners (organizations), each with its own token
 # github_pat_<owner>, see README "GitHub (MCP)", step 3.
-#GH_OWNERS=myorg
+#GH_OWNERS = ["myorg"]
 # Skill sources: skills.d/ (shared) or skills.local.d/ (yours), see README
 # "Skills". Installed into the skills directory on the next start.
-#AB_SKILLS=mattpocock
-#AB_SKILLS_DIR=/path/to/skills
+#AB_SKILLS = ["mattpocock"]
+#AB_SKILLS_DIR = "/path/to/skills"
 # pi extensions: pi-extensions.d/ (shared) or pi-extensions.local.d/ (yours),
 # see README "pi extensions". Installed on the host on the next start; pi
 # runs them in the box. Read an extension before you enable it.
-#AB_PI_EXTENSIONS=pi-subagents pi-prompt-history
+#AB_PI_EXTENSIONS = ["pi-subagents", "pi-prompt-history"]
 # Seconds between agent updates and between update checks (images, skills).
-#AB_UPDATE_EVERY=21600
-# 0: no check for newer sidecar images and vendored skills before a session.
-#AB_CHECK_UPDATES=1
-# 0: no question before the session when the start warned (the warnings
+#AB_UPDATE_EVERY = 21600
+# false: no check for newer sidecar images and vendored skills before a session.
+#AB_CHECK_UPDATES = true
+# false: no question before the session when the start warned (the warnings
 # are still printed; README, Daily usage).
-#AB_WARNINGS_ASK=1
+#AB_WARNINGS_ASK = true
 # graphify extras baked into the image, e.g. [terraform] for .tf/.hcl or
 # [sql,terraform]; takes effect on the next build: AB_UPGRADE=1 ./run.sh
-#AB_GRAPHIFY_EXTRAS=[terraform]
+#AB_GRAPHIFY_EXTRAS = "[terraform]"
 # Trivy in the box (trivy fs ., trivy config .), its database updated outside
 # the session; takes effect on the next build: AB_UPGRADE=1 agentbox
-#AB_TRIVY=1
+#AB_TRIVY = true
 # Tool versions baked into the image (default: see Containerfile); take effect
 # on the next build: AB_UPGRADE=1 ./run.sh. Go: "1.26" = latest 1.26.x,
 # "1.26.3" exact, empty = latest; golangci-lint: exact or empty = latest.
-#AB_PYTHON_VERSIONS=3.12 3.13 3.14
-#AB_GO_VERSION=1.26
-#AB_GOLANGCI_LINT_VERSION=
+#AB_PYTHON_VERSIONS = ["3.12", "3.13", "3.14"]
+#AB_GO_VERSION = "1.26"
+#AB_GOLANGCI_LINT_VERSION = ""
 # Your dev containers the agent may reach by name (redis:6379), see README.
-#AB_SERVICES=redis rabbitmq postgres
+#AB_SERVICES = ["redis", "rabbitmq", "postgres"]
 # Services outside the box (test databases, queues) the agent may reach by
-# name, here as db:5432; also per repo in env/<repo dir name>.conf. See
+# name, here as db:5432; also per repo in env/<repo dir name>.toml. See
 # README "Test servers".
-#AB_FORWARD=db=db.test.example:5432 mq=mq.test.example:5672
+#AB_FORWARD = ["db=db.test.example:5432", "mq=mq.test.example:5672"]
 # Per-project environment files, <repo dir name>.env, see README.
-#AB_ENV_DIR=/path/to/env
+#AB_ENV_DIR = "/path/to/env"
