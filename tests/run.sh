@@ -894,8 +894,6 @@ test_convert_broken_old_file_warns() {
   # agentbox setup converts too, and shows the corrected file.
   cp "$ROOT/agentbox" "$AB/"
   printf '%s\n' '# a group' 'ok.example' > "$CFG/egress.local.d/bad.conf"
-  # agentbox setup reads config.env until it edits config.toml.
-  echo "AB_EGRESS=bad latin" > "$CFG/config.env"
   setup_run "q\n"
   assert_out "egress.local.d/bad.conf -> bad.toml"
   assert_out '\[x\] bad +\(yours\) ok.example$'
@@ -2664,7 +2662,7 @@ setup_entry() {  # <name>: its number in the menu
 test_setup_edits_config() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
-  printf '%s\n' '# mine' 'AB_MCP=graylog # my note' 'GRAYLOG_URL=https://g.example' '#AB_TRIVY=1' > "$CFG/config.env"
+  printf '%s\n' '# mine' 'AB_MCP = ["graylog"] # my note' 'GRAYLOG_URL = "https://g.example/#x"  # a # note' '#AB_TRIVY = true' > "$CFG/config.toml"
   # Under a module: its settings and secrets, and how to change them.
   mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]  # mine' > "$CFG/egress.local.d/corp.toml"
   echo 'hostz = ["x.example"]' > "$CFG/egress.local.d/typo.toml"
@@ -2678,30 +2676,27 @@ test_setup_edits_config() {
   assert_out '\[x\] pypi +pypi.org files.pythonhosted.org$'
   assert_out '\[ \] corp +\(yours\) corp.example$'
   assert_out "\\[ \\] typo +\\(yours\\) \\(typo.toml:1: unknown key 'hostz'"
-  assert_out "GRAYLOG_URL=https://g.example · secret graylog_basic: MISSING · e [0-9]"
+  assert_out "GRAYLOG_URL=https://g.example/#x · secret graylog_basic: MISSING · e [0-9]"
   assert_out "GRAFANA_URL NEEDED · secret grafana_sa: MISSING · e [0-9]"
   assert_out "TABULARIS_CMD \\(default\\) · TABULARIS_PORT \\(default\\) · e [0-9]"
   secrets graylog_basic
-  local grafana trivy services
-  grafana="$(setup_entry grafana)"; trivy="$(setup_entry AB_TRIVY)"; services="$(setup_entry AB_SERVICES)"
-  [[ -n "$grafana" && -n "$trivy" && -n "$services" ]] || fail "entries not found: '$grafana' '$trivy' '$services'"
-  # grafana on: its URL (required) and its token; Trivy on; a value with " #".
-  setup_run "$grafana\n\nhttps://grafana.example\nsa-token\n$trivy\n$services\nredis # db\ns\n"
+  local grafana graylog trivy services
+  grafana="$(setup_entry grafana)"; graylog="$(setup_entry graylog)"; trivy="$(setup_entry AB_TRIVY)"; services="$(setup_entry AB_SERVICES)"
+  [[ -n "$grafana" && -n "$graylog" && -n "$trivy" && -n "$services" ]] || fail "entries not found: '$grafana' '$graylog' '$trivy' '$services'"
+  # grafana on: its URL (required) and its token; Trivy on from the
+  # commented line; a list; a new URL keeps the comment after the value.
+  setup_run "$grafana\n\nhttps://grafana.example\nsa-token\n$trivy\n$services\nredis, postgres\ne $graylog\nhttps://g2.example\n\ns\n"
   assert_rc 0
   assert_out "GRAFANA_URL is needed"
   assert_out "stored the Podman secret grafana_sa"
   assert_eq "$(cat "$STUB_DIR/secret-grafana_sa")" sa-token "token"
-  assert_eq "$(cat "$CFG/config.env")" "# mine
-AB_MCP=graylog grafana # my note
-GRAYLOG_URL=https://g.example
-#AB_TRIVY=1
-AB_TRIVY=1
-AB_SERVICES=\"redis # db\"
-GRAFANA_URL=https://grafana.example" "config.env"
-  assert_eq "$(head -n2 "$CFG/config.env.bak" | tail -n1)" "AB_MCP=graylog # my note" "backup"
-  # Until setup edits config.toml, a start reads config.env only through a
-  # new conversion: here without the config.toml that setup() made.
-  rm "$CFG/config.toml"; sed -i '/config\.env$/d' "$CFG/converted.list"
+  assert_eq "$(sed -n 1,4p "$CFG/config.toml")" '# mine
+AB_MCP = ["graylog", "grafana"] # my note
+GRAYLOG_URL = "https://g2.example"  # a # note
+AB_TRIVY = true' "config.toml"
+  assert_eq "$(sed -n '5,$p' "$CFG/config.toml" | sort)" 'AB_SERVICES = ["redis", "postgres"]
+GRAFANA_URL = "https://grafana.example"' "the new lines"
+  assert_eq "$(sed -n 2p "$CFG/config.toml.bak")" 'AB_MCP = ["graylog"] # my note' "backup"
   # run.sh reads it as written: grafana with its URL and secret, Trivy.
   ab_run --
   assert_rc 0
@@ -2709,26 +2704,97 @@ GRAFANA_URL=https://grafana.example" "config.env"
   session_args | grep -qx 'TRIVY_SKIP_DB_UPDATE=true' || fail "Trivy setting not read"
   # Off again: the line stays, without grafana; Trivy commented out.
   setup_run "$grafana\n$trivy\ns\n"
-  grep -qx 'AB_MCP=graylog # my note' "$CFG/config.env" || fail "grafana not removed: $(grep AB_MCP "$CFG/config.env")"
-  grep -qx '#AB_TRIVY=1' "$CFG/config.env" || fail "Trivy not off"
-  grep -qx 'AB_TRIVY=1' "$CFG/config.env" && fail "Trivy still on"
+  grep -qx 'AB_MCP = \["graylog"\] # my note' "$CFG/config.toml" || fail "grafana not removed: $(grep AB_MCP "$CFG/config.toml")"
+  assert_eq "$(sed -n 4p "$CFG/config.toml")" '#AB_TRIVY = true' "Trivy off"
   return 0
+}
+
+# Values of each type; a value on more lines and a file with an error are
+# not changed, and setup says why; the one-time note about config.env.
+test_setup_toml_values() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  echo "AB_MCP=" > "$CFG/config.env"
+  printf '%s\n' 'AB_UPDATE_EVERY = 100' 'AB_EGRESS = [' '  "anthropic",' ']' > "$CFG/config.toml"
+  local tabularis checks every openai
+  tabularis="$(setup_entry tabularis)"; checks="$(setup_entry AB_CHECK_UPDATES)"; every="$(setup_entry AB_UPDATE_EVERY)"; openai="$(setup_entry openai)"
+  # A command with quotes and a backslash, a flag that is on by default
+  # turned off, a number.
+  setup_run "e $tabularis\nmy \"tab\" c:\\\\x\n\n$checks\n$every\n200\ns\n"
+  assert_rc 0
+  assert_out "setup now saves your settings only in .*config.toml"
+  assert_eq "$(sed -n 1,4p "$CFG/config.toml")" 'AB_UPDATE_EVERY = 200
+AB_EGRESS = [
+  "anthropic",
+]' "config.toml"
+  assert_eq "$(sed -n '5,$p' "$CFG/config.toml" | sort)" 'AB_CHECK_UPDATES = false
+TABULARIS_CMD = "my \"tab\" c:\\x"' "the new lines"
+  assert_eq "$(cat "$CFG/config.env")" "AB_MCP=" "config.env"
+  # It reads back as typed.
+  assert_eq "$(SCRIPT_DIR="$AB" XDG_CACHE_HOME="$T/home/.cache"; source "$AB/lib/toml.sh"
+    declare -A v=(); toml_load config "$CFG/config.toml" v; echo "${v[TABULARIS_CMD]}")" 'my "tab" c:\x' "read back"
+  # Back on: true. The note comes once.
+  setup_run "$checks\ns\n"
+  grep -qx 'AB_CHECK_UPDATES = true' "$CFG/config.toml" || fail "flag not on: $(grep AB_CHECK "$CFG/config.toml")"
+  assert_no_out "setup now saves your settings only"
+  # A value on more lines: not changed, and setup says why.
+  setup_run "$openai\ns\nq\ny\n"
+  assert_out "config.toml:2: the value of AB_EGRESS is on more than one line"
+  assert_out "could not write"
+  grep -q openai "$CFG/config.toml" && fail "AB_EGRESS changed"
+  # A file with an error: shown, and the menu continues.
+  echo 'AB_TRIVY = yes' >> "$CFG/config.toml"
+  setup_run "$every\n300\ns\nq\ny\n"
+  assert_out "config.toml:7: "
+  assert_out "Other settings"
+  assert_out "could not write"
+  grep -q 300 "$CFG/config.toml" && fail "a file with an error changed"
+  return 0
+}
+
+# config_set on its own: the word "unset" as a value, and a setting of a
+# module that keeps the form of its line (an array, a number).
+test_config_set_forms() {
+  setup "${FUNCNAME[0]}"
+  # A comment in words that starts like a key stays.
+  printf '%s\n' '#GH_TOOLSETS = ["repos"]' '#TABULARIS_PORT = 47821' 'GRAFANA_URL = "x"' \
+    '# AB_SERVICES = names of containers' > "$CFG/c.toml"
+  ( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"
+    config_set "$CFG/c.toml" GH_TOOLSETS "repos, issues"
+    config_set "$CFG/c.toml" TABULARIS_PORT 5000
+    config_set "$CFG/c.toml" GRAFANA_URL unset
+    config_set "$CFG/c.toml" AB_SERVICES redis ) || fail "config_set failed"
+  assert_eq "$(cat "$CFG/c.toml")" 'GH_TOOLSETS = ["repos", "issues"]
+TABULARIS_PORT = 5000
+GRAFANA_URL = "unset"
+# AB_SERVICES = names of containers
+AB_SERVICES = ["redis"]'
+  ( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"
+    config_set "$CFG/c.toml" GRAFANA_URL ) || fail "config_set without a value failed"
+  assert_eq "$(sed -n 3p "$CFG/c.toml")" '#GRAFANA_URL = "unset"' "the key without a value"
 }
 
 test_setup_quit_and_new_config() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
-  echo "AB_MCP=" > "$CFG/config.env"
+  cp "$ROOT/config.toml.example" "$AB/"
+  config "AB_MCP="
   local grafana; grafana="$(setup_entry grafana)"
   # Changes, then q and yes: nothing written, no secret.
   setup_run "$grafana\nhttps://grafana.example\nsa-token\nq\ny\n"
-  assert_eq "$(cat "$CFG/config.env")" "AB_MCP=" "config.env after quitting"
+  assert_eq "$(cat "$CFG/config.toml")" "AB_MCP = []" "config.toml after quitting"
   [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret created without saving"
-  # No config.env yet: made new, then edited.
-  rm "$CFG/config.env"
+  # No config.toml yet: made from the example, its commented lines used.
+  rm "$CFG/config.toml"
   setup_run "$grafana\nhttps://grafana.example\n\ns\n"
   assert_rc 0
-  grep -qx 'AB_MCP=grafana' "$CFG/config.env" || fail "AB_MCP not set in the new file"
+  assert_eq "$(diff "$AB/config.toml.example" "$CFG/config.toml" | grep '^[<>]')" '< #AB_MCP = ["grafana", "graylog", "github", "woodpecker", "tabularis", "dbhub", "bb4"]
+> AB_MCP = ["grafana"]
+< #GRAFANA_URL = "https://grafana.example.internal"
+> GRAFANA_URL = "https://grafana.example"' "the new config.toml"
+  assert_eq "$(stat -c %a "$CFG/config.toml")" 600 "mode of the new config.toml"
 }
 
 # Secrets through the menu: a module makes the value from what you type
@@ -2737,7 +2803,6 @@ test_setup_quit_and_new_config() {
 test_setup_secrets() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
-  echo "AB_MCP=" > "$CFG/config.env"
   local graylog grafana
   graylog="$(setup_entry graylog)"; grafana="$(setup_entry grafana)"
   setup_run "$graylog\nhttps://g.example\n glt_abc \ns\n"
@@ -2753,14 +2818,14 @@ test_setup_secrets() {
   # On, settings and token typed, off again: none of it is saved.
   setup_run "$grafana\nhttps://grafana.example\nsa-token\n$grafana\ns\n"
   [[ -e "$STUB_DIR/secret-grafana_sa" ]] && fail "secret of a module turned off stored"
-  grep -q GRAFANA_URL "$CFG/config.env" && fail "setting of a module turned off saved"
+  grep -q GRAFANA_URL "$CFG/config.toml" && fail "setting of a module turned off saved"
   # github: the secret of an owner typed into GH_OWNERS is asked for at once.
   local github; github="$(setup_entry github)"
   setup_run "$github\n\nacme\nghp_main\nghp_acme\ns\n"
   assert_out "secret github_pat_acme for github \(a fine-grained personal access token with resource owner acme"
-  grep -qx 'GH_OWNERS=acme' "$CFG/config.env" || fail "GH_OWNERS not saved"
+  grep -qx 'GH_OWNERS = "acme"' "$CFG/config.toml" || fail "GH_OWNERS not saved"
   assert_eq "$(cat "$STUB_DIR/secret-github_pat_acme")" "ghp_acme" "owner secret"
-  # The token of an owner in config.env shows as MISSING at once, before
+  # The token of an owner in config.toml shows as MISSING at once, before
   # any change in the menu.
   rm -f "$STUB_DIR/secret-github_pat_acme"; sed -i '/^github_pat_acme$/d' "$STUB_DIR/secrets"
   setup_run "q\n"
@@ -2779,42 +2844,40 @@ test_setup_secrets() {
   return 0
 }
 
-# A config.env that is a link stays one; a module setting in the
+# A config.toml that is a link stays one; a module setting in the
 # environment counts, and is named.
 test_setup_link_and_environment() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
   mkdir -p "$T/dotfiles"
-  echo "AB_MCP=" > "$T/dotfiles/agentbox.env"
-  ln -sf "$T/dotfiles/agentbox.env" "$CFG/config.env"
+  echo "AB_MCP = []" > "$T/dotfiles/agentbox.toml"
+  ln -sf "$T/dotfiles/agentbox.toml" "$CFG/config.toml"
   local grafana; grafana="$(setup_entry grafana)"
   printf '%b' "$grafana\n\n\ns\n" | env HOME="$T/home" PATH="$T/bin:$PATH" GRAFANA_URL=https://env.example \
     bash "$AB/agentbox" setup > "$T/out" 2>&1
   assert_out "GRAFANA_URL=https://env.example \\(environment\\)"
-  assert_out "Note: set in your environment, which wins over config.env: GRAFANA_URL"
+  assert_out "Note: set in your environment, which wins over config.toml: GRAFANA_URL"
   assert_no_out "GRAFANA_URL is needed"
-  [[ -L "$CFG/config.env" ]] || fail "the link became a file"
-  grep -qx 'AB_MCP=grafana' "$T/dotfiles/agentbox.env" || fail "the linked file not edited"
+  [[ -L "$CFG/config.toml" ]] || fail "the link became a file"
+  grep -qx 'AB_MCP = \["grafana"\]' "$T/dotfiles/agentbox.toml" || fail "the linked file not edited"
 }
 
-# Values trimmed, a quoted value kept quoted; a name run.sh would reject
-# cannot be turned on; loose input is read right; a first save that fails
-# leaves no config.env.
+# Values trimmed; a name run.sh would reject cannot be turned on; loose
+# input is read right; a first save that fails leaves no config.toml.
 test_setup_values_names_input() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
-  echo "AB_MCP=" > "$CFG/config.env"
   mkdir -p "$CFG/egress.local.d"; echo 'hosts = ["corp.example"]' > "$CFG/egress.local.d/corp.net.toml"
   local services forward corp graylog
   services="$(setup_entry AB_SERVICES)"; forward="$(setup_entry AB_FORWARD)"
   corp="$(setup_entry corp.net)"; graylog="$(setup_entry graylog)"
-  setup_run " $services \n  redis  \n$forward\n\"db=x:1\"\n$corp\ne 1 2\ns\n"
+  setup_run " $services \n  redis  \n$forward\ndb=x:1,mq=y:2\n$corp\ne 1 2\ns\n"
   assert_out "corp.net .*cannot be used"
   assert_out "'corp.net' cannot be used"
   assert_out "a number, e <number>, s or q"
-  grep -qx 'AB_SERVICES=redis' "$CFG/config.env" || fail "value not trimmed: $(grep AB_SERVICES "$CFG/config.env")"
-  grep -qx "AB_FORWARD='\"db=x:1\"'" "$CFG/config.env" || fail "quoted value: $(grep AB_FORWARD "$CFG/config.env")"
-  grep -q corp "$CFG/config.env" && fail "a rejected name saved"
+  grep -qx 'AB_SERVICES = \["redis"\]' "$CFG/config.toml" || fail "value not trimmed: $(grep AB_SERVICES "$CFG/config.toml")"
+  grep -qx 'AB_FORWARD = \["db=x:1", "mq=y:2"\]' "$CFG/config.toml" || fail "list: $(grep AB_FORWARD "$CFG/config.toml")"
+  grep -q corp "$CFG/config.toml" && fail "a rejected name saved"
   # Only a secret typed: the menu says so, and calls it not saved yet.
   setup_run "e $graylog\nhttps://g.example\ntok\ne $graylog\n\n\nq\ny\n"
   assert_out "(changed, not saved)"
@@ -2823,7 +2886,7 @@ test_setup_values_names_input() {
   local openai; openai="$(setup_entry openai)"
   setup_run "$openai\n$openai\ns\n"
   assert_out "nothing to save"
-  grep -q '^AB_EGRESS' "$CFG/config.env" && fail "AB_EGRESS pinned"
+  grep -q '^AB_EGRESS' "$CFG/config.toml" && fail "AB_EGRESS pinned"
   # A file name with a space is one name, and cannot be used; a module that
   # cannot be read cannot be turned on.
   echo 'hosts = ["x"]' > "$CFG/egress.local.d/my group.toml"
@@ -2846,13 +2909,14 @@ test_setup_values_names_input() {
   setup_run "q\n"
   assert_out "NOT USABLE: its server 'a' is marked caller"
   rm -r "$CFG/mcp.local/odd"
-  # No config.env and the directory not writable: nothing left behind.
-  rm "$CFG/config.env"*
+  # No config.toml and the directory not writable: nothing left behind.
+  cp "$ROOT/config.toml.example" "$AB/"
+  rm "$CFG/config.toml"*
   chmod a-w "$CFG"
   setup_run "$services\nredis\ns\nq\ny\n"
   chmod u+w "$CFG"
   assert_out "could not write"
-  [[ -e "$CFG/config.env" ]] && fail "config.env left by a failed save"
+  [[ -e "$CFG/config.toml" ]] && fail "config.toml left by a failed save"
   return 0
 }
 
@@ -3651,7 +3715,6 @@ test_pi_extension_shared_sources_and_setup() {
   for n in pi-subagents pi-prompt-history; do
     assert_file_has "$AB/pi-extensions.d/$n.toml" '^url = "https://github.com/'
   done
-  echo "AB_MCP=" > "$CFG/config.env"
   # Setup shows the URL of each pi extension source. An old file of yours
   # that is not converted shows a note.
   mkdir -p "$CFG/pi-extensions.local.d"
@@ -3666,7 +3729,7 @@ test_pi_extension_shared_sources_and_setup() {
   [[ -n "$sub" ]] || fail "pi-subagents not in the setup menu"
   setup_run "$sub\ns\n"
   assert_out "pi extensions \(AB_PI_EXTENSIONS"
-  grep -qx 'AB_PI_EXTENSIONS=pi-subagents' "$CFG/config.env" || fail "not saved: $(grep AB_PI_EXTENSIONS "$CFG/config.env")"
+  grep -qx 'AB_PI_EXTENSIONS = \["pi-subagents"\]' "$CFG/config.toml" || fail "not saved: $(grep AB_PI_EXTENSIONS "$CFG/config.toml")"
 }
 
 test_updates_pi_extension_behind() {
@@ -3961,15 +4024,15 @@ toml_case() {
     rc=0
     toml_load "$1" "$(basename "$2")" values lines 2> "$T/err" || rc=$?
     # In the kind config, settings_load warns about a key that no module
-    # has, not the reader. A later Go port must match both. The cases have GH_TOOLSETS, GH_OWNERS and TABULARIS_PORT as keys
-    # of enabled modules, and GRAFANA_URL as a key of a module that is not.
+    # has, not the reader. A later Go port must match both. The cases have GH_TOOLSETS, GH_OWNERS, TABULARIS_CMD and
+    # TABULARIS_PORT as keys of enabled modules, and GRAFANA_URL as a key of a module that is not.
     if [[ "$1" == config && "$rc" == 0 ]]; then
       (
         for lib in paths config; do
           # shellcheck source=/dev/null
           source "$AB/lib/$lib.sh"
         done
-        settings_load "$(basename "$2")" 1 "${CONFIG_KEYS[@]}" GH_TOOLSETS GH_OWNERS TABULARIS_PORT -- GRAFANA_URL
+        settings_load "$(basename "$2")" 1 "${CONFIG_KEYS[@]}" GH_TOOLSETS GH_OWNERS TABULARIS_CMD TABULARIS_PORT -- GRAFANA_URL
       ) 2>> "$T/err"
     fi
     for k in "${!values[@]}"; do echo "$k ${lines[$k]} ${values[$k]}"; done | LC_ALL=C sort

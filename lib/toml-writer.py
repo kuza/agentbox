@@ -6,14 +6,15 @@ lib/convert.sh runs it; see there.
 The forms of the old file:
 
     hosts  one host per line, # starts a comment (an egress group)
-    keys   KEY=VALUE lines, as load_config in lib/config.sh reads them (the
+    keys   KEY=VALUE lines, as load_config of v0.1.x read them (the
            settings). A key outside the schema is a setting of a module:
            a string. An empty value of an int or bool, or a value with a
            control character, becomes a comment, with a warning.
     source the same parser, but the last of two equal keys wins, as in
-           source_value (lib/skills.sh). The parser of load_config also
-           removes quotes, "export " and a " # note", which source_value
-           did not: such a source gets the value that you meant.
+           source_value (lib/skills.sh). The parser of load_config
+           (v0.1.x) also removes quotes, "export " and a " # note", which
+           source_value did not: such a source gets the value that you
+           meant.
 
 Writes the TOML file to stdout. Each value gets the type of its key in the
 schema, not the type that its look suggests. A key that the schema does
@@ -120,7 +121,7 @@ def keys():
         s = s.removeprefix("export ")
         key, eq, value = s.partition("=")
         if not eq or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            # load_config ignores the line, with a warning.
+            # load_config of v0.1.x ignored the line, with a warning.
             message(n, "not KEY=VALUE, kept as a comment")
             out.append("# " + comment(s))
             continue
@@ -168,7 +169,7 @@ def keys():
             for e in errs:
                 errors.remove(e)
         elif name is None or name in seen:
-            # load_config takes the first of two equal keys.
+            # load_config of v0.1.x took the first of two equal keys.
             why = "unknown key" if name is None else "second time"
             message(n, f"{why} '{key}', kept as a comment")
             out.append("# " + comment(s))

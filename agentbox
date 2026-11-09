@@ -11,7 +11,7 @@
 #   agentbox update [--yes]               the newest signed release, after
 #                                         showing its changes
 #   agentbox rollback                     back to the version before
-#   agentbox setup                        a menu to edit config.env: MCP
+#   agentbox setup                        a menu to edit config.toml: MCP
 #                                         modules, skills, egress, settings
 #                                         (lib/setup.sh)
 #   agentbox uninstall [--yes] [--all]    remove agentbox from this host
@@ -50,9 +50,6 @@ case "${1:-}" in
       source "$SCRIPT_DIR/lib/$lib.sh"
     done
     convert_old_files
-    # shortcut: agentbox setup still edits the settings file of v0.1.x, and
-    # a start does not read it; remove this line when setup edits config.toml.
-    CONFIG_FILE="$CONFIG_OLD_FILE"
     agentbox_setup "$@" ;;
   uninstall)
     shift

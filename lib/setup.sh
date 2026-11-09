@@ -1,4 +1,4 @@
-# agentbox setup: a menu to edit config.env (README, Setup menu).
+# agentbox setup: a menu to edit config.toml (README, Setup menu).
 #
 #   agentbox setup
 #
@@ -7,18 +7,20 @@
 # module, its settings and secrets and whether they are there. A number
 # toggles an entry or edits a value; turning a module on asks for its
 # settings and for the Podman secrets it lacks, "e <number>" asks for all of
-# them again, replacing a secret only for a new value. Nothing is written
-# before "s": then config.env is edited in place (comments and order stay;
-# a "#KEY=" line from the example is used where the key is not set yet),
-# the old file kept as config.env.bak, and the secrets stored. Tokens never
-# go into config.env. A module may say what to type for a secret
+# them again, replacing a secret only for a new value. Setup writes nothing
+# before "s". Then config_set changes config.toml line by line. Comments
+# and the order of the lines stay. For a key that is not set, setup uses
+# its "#KEY =" line from the example. Setup keeps the old file as config.toml.bak, and stores
+# the secrets. Setup does not change config.env of v0.1.x. Tokens never go into
+# config.toml. A module may say what to type for a secret
 # (MCP_SECRET_HELP) and how that becomes the secret (mcp_secret_value).
 #
 # Reads its input from stdin: piped input works too, for scripts and tests.
 # Needs SCRIPT_DIR and lib/paths.sh, config.sh, sidecars.sh (secret_store),
 # mcp.sh, egress.sh, skills.sh and pi-extensions.sh.
 
-# Settings in "Other": key, kind (flag: 1 or unset; else a value), text.
+# Settings in "Other": key, kind (flag: on or unset; flagon: a flag that is
+# on when unset; else a value), text.
 SETUP_OTHER=(
   "AB_TRIVY flag Trivy in the box (rebuilds the image)"
   "AB_SERVICES value your dev containers the agent may reach, e.g. redis postgres"
@@ -28,25 +30,27 @@ SETUP_OTHER=(
   "AB_GOLANGCI_LINT_VERSION value golangci-lint version (empty: latest)"
   "AB_GRAPHIFY_EXTRAS value graphify extras, e.g. [terraform]"
   "AB_UPDATE_EVERY value seconds between update checks (default 21600)"
-  "AB_CHECK_UPDATES value 0: no update check before a session"
+  "AB_CHECK_UPDATES flagon update checks before a session (images, skills)"
 )
 
 # Pending changes: SETUP_NEW[key]="set <value>" or "unset"; secrets to store
 # in SETUP_SECRETS[name]=value. Caches for one run of the menu, emptied when
-# saved: what config.env holds, module info, which secrets exist.
+# saved: what config.toml holds, module info, which secrets exist; the
+# error of config.toml.
 declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_INFO=() SETUP_HAS=() SETUP_PROBLEM=()
+SETUP_ERROR=""
 
-# The value of <key> in config.env, as run.sh reads it: "set <value>" or
+# The value of <key> in config.toml, as run.sh reads it: "set <value>" or
 # "unset". The environment does not count here. From setup_prime.
 setup_file_value() {  # <key>
   echo "${SETUP_FILE[$1]:-unset}"
 }
 
 # Fills the caches, in this shell: every module's info, one read of
-# config.env for agentbox's keys and every module's, and the secrets there
+# config.toml for agentbox's keys and every module's, and the secrets there
 # are. Run at the start and after a save.
 setup_prime() {
-  local n info keys=("${CONFIG_KEYS[@]}") more=() k line
+  local n info keys=("${CONFIG_KEYS[@]}") more=() k line err
   # Once here, not in each setup_describe, which runs in a subshell.
   toml_version
   toml_python || :
@@ -56,22 +60,26 @@ setup_prime() {
     read -ra more <<<"$(sed -n 2p <<<"$info")"
     keys+=(${more[@]+"${more[@]}"})
   done < <(setup_names mcp "${MCP_DIRS[@]}")
+  # A file with an error gives no values; the menu shows the error and continues.
+  err="$(mktemp)" || return 1
   while IFS= read -r line; do
     SETUP_FILE[${line%%$'\t'*}]="${line#*$'\t'}"
   done < <(
     for k in "${keys[@]}"; do unset "$k"; done
-    [[ -f "$CONFIG_FILE" ]] && load_config "$CONFIG_FILE" 0 "${keys[@]}"
+    [[ -f "$CONFIG_FILE" ]] && settings_load "$CONFIG_FILE" 0 "${keys[@]}" 2> "$err"
     for k in "${keys[@]}"; do
       if [[ -n "${!k+x}" ]]; then printf '%s\tset %s\n' "$k" "${!k}"; else printf '%s\tunset\n' "$k"; fi
     done
   )
-  # Again, now with the values of config.env: a module's secrets can follow
+  SETUP_ERROR="$(cat -- "$err")"
+  rm -f -- "$err"
+  # Again, now with the values of config.toml: a module's secrets can follow
   # a setting there (github: GH_OWNERS).
   SETUP_INFO=()
   while IFS= read -r n; do setup_module_info "$n" >/dev/null || true; done < <(setup_names mcp "${MCP_DIRS[@]}")
   # Read anew after each save: a secret stored in a pipeline (setup_save)
   # does not reach this shell's list. A failed listing marks none, and the
-  # menu still works on config.env.
+  # menu still works on config.toml.
   if secret_ids_read 2>/dev/null; then
     for k in "${!SECRET_IDS[@]}"; do SETUP_HAS[$k]=1; done
   else
@@ -231,20 +239,6 @@ list_toggle() {  # <word> <list>: the list with <word> added or removed
   out="${out# }"; echo "${out% }"
 }
 
-# Whether config.env must hold <value> in quotes: with " #" (a comment to
-# the parser), or quoted itself (the parser would take the quotes off).
-setup_needs_quotes() {  # <value>
-  [[ "$1" == *" #"* || "$1" == *$'\t#'* || "$1" =~ ^\".*\"$ || "$1" =~ ^\'.*\'$ ]]
-}
-
-# A value config.env can hold: one line; in quotes, not both kinds of quote.
-setup_valid_value() {  # <value>
-  [[ "$1" != *$'\n'* ]] || return 1
-  if setup_needs_quotes "$1"; then
-    [[ "$1" != *\"* || "$1" != *\'* ]] || return 1
-  fi
-}
-
 setup_ask_value() {  # <key> <text> [required]: asks, records in SETUP_NEW
   local key="$1" cur reply
   cur="$(setup_get "$key")"
@@ -260,8 +254,9 @@ setup_ask_value() {  # <key> <text> [required]: asks, records in SETUP_NEW
       [[ -n "${3:-}" ]] && { echo "  $key is needed"; continue; }
       setup_record "$key" unset; return 0
     fi
-    if ! setup_valid_value "$reply"; then echo "  not a value config.env can hold"; continue; fi
-    if [[ "$key" == AB_UPDATE_EVERY && ! "$reply" =~ ^[0-9]+$ ]]; then echo "  a number of seconds"; continue; fi
+    # config.toml refuses a control character in a value.
+    if [[ "$reply" == *[[:cntrl:]]* ]]; then echo "  a value without control characters"; continue; fi
+    if [[ "$key" == AB_UPDATE_EVERY && ! "$reply" =~ ^(0|[1-9][0-9]*)$ ]]; then echo "  a number of seconds"; continue; fi
     setup_record "$key" "set $reply"; return 0
   done
 }
@@ -400,6 +395,7 @@ setup_show() {
   echo -n "agentbox setup: $CONFIG_FILE"
   (( ${#SETUP_NEW[@]} + ${#SETUP_SECRETS[@]} )) && echo -n " (changed, not saved)"
   echo
+  [[ -z "$SETUP_ERROR" ]] || printf '  Setup cannot read %s:\n%s\n  Setup cannot save changes to settings until it can read the file.\n' "$CONFIG_FILE" "$SETUP_ERROR"
   while read -r kind name; do
     i=$((i + 1))
     status=""
@@ -433,8 +429,9 @@ setup_show() {
       other)
         for entry in "${SETUP_OTHER[@]}"; do [[ "${entry%% *}" == "$name" ]] && break; done
         entry="${entry#* }"
-        if [[ "${entry%% *}" == flag ]]; then
-          [[ "$(setup_get "$name")" == 1 ]] && mark="[x]" || mark="[ ]"
+        if [[ "${entry%% *}" == flag* ]]; then
+          mark="[ ]"
+          [[ "$(setup_get "$name")" == 1 || ( "${entry%% *}" == flagon && "$(setup_get "$name" 1)" != 0 ) ]] && mark="[x]"
           text="$name: ${entry#* }"
         else
           mark="   "
@@ -449,7 +446,7 @@ setup_show() {
     [[ -n "$status" ]] && printf '        %s\n' "$status"
   done < <(setup_entries)
   for key in "${CONFIG_KEYS[@]}" ${keys[@]+"${keys[@]}"}; do [[ -n "${!key+x}" ]] && env+=" $key"; done
-  [[ -n "$env" ]] && echo "Note: set in your environment, which wins over config.env:$env"
+  [[ -n "$env" ]] && echo "Note: set in your environment, which wins over config.toml:$env"
   echo "number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit"
 }
 
@@ -487,7 +484,12 @@ setup_act() {  # <number> [e]
     other)
       for entry in "${SETUP_OTHER[@]}"; do [[ "${entry%% *}" == "$name" ]] && break; done
       entry="${entry#* }"
-      if [[ "${entry%% *}" == flag ]]; then
+      if [[ "${entry%% *}" == flagon ]]; then
+        # On again, and the file does not set it: no change (on is the default).
+        if [[ "$(setup_get "$name" 1)" != 0 ]]; then setup_record "$name" "set 0"
+        elif [[ "$(setup_file_value "$name")" == unset ]]; then setup_record "$name" unset
+        else setup_record "$name" "set 1"; fi
+      elif [[ "${entry%% *}" == flag ]]; then
         if [[ "$(setup_get "$name")" == 1 ]]; then setup_record "$name" unset; else setup_record "$name" "set 1"; fi
       else
         setup_ask_value "$name" "${entry#* }"
@@ -495,88 +497,66 @@ setup_act() {  # <number> [e]
   esac
 }
 
-# Applies SETUP_NEW to <file>: replaces a key's first active line (keeping
-# a comment after its value), else uncomments a "#KEY=" line, else
-# appends; "unset" comments the active lines out. Values are read from the
-# environment (awk -v would interpret backslashes). 1 on any failure.
-setup_apply() {  # <in> <out>
-  local key c val
-  cp -- "$1" "$2" || return 1
+# Applies SETUP_NEW to <file> with config_set, one key at a time; stops at
+# the first key that config_set refuses (it says why). 1 then.
+setup_apply() {  # <file: a work copy of CONFIG_FILE>
+  local key c CONFIG_SET_NAME="$CONFIG_FILE"
+  local -A check=()
+  # Read the real file first: an error then names it, not the work copy.
+  [[ ! -f "$CONFIG_FILE" ]] || toml_load config "$CONFIG_FILE" check || return 1
   for key in "${!SETUP_NEW[@]}"; do
     c="${SETUP_NEW[$key]}"
-    val=""
-    if [[ "$c" == set* ]]; then
-      val="${c#set }"
-      setup_needs_quotes "$val" && { [[ "$val" == *\"* ]] && val="'$val'" || val="\"$val\""; }
-    fi
-    SETUP_KEY="$key" SETUP_VAL="$val" SETUP_MODE="${c%% *}" awk '
-      BEGIN { k = ENVIRON["SETUP_KEY"]; v = ENVIRON["SETUP_VAL"]; mode = ENVIRON["SETUP_MODE"] }
-      # The comment after the value of a KEY=value line, with its spaces:
-      # after the closing quote of a quoted value, else from " #" on.
-      function comment(line,   val, q, rest) {
-        val = substr(line, index(line, "=") + 1)
-        q = substr(val, 1, 1)
-        if (q == "\"" || q == "\047") {
-          rest = substr(val, 2)
-          if (!index(rest, q)) return ""
-          rest = substr(rest, index(rest, q) + 1)
-          return (rest ~ /^[ \t]+#/) ? rest : ""
-        }
-        if (match(val, /[ \t]+#.*$/)) return substr(val, RSTART)
-        return ""
-      }
-      { lines[++n] = $0 }
-      END {
-        for (i = 1; i <= n; i++) {
-          l = lines[i]; sub(/^[ \t]+/, "", l); sub(/^export /, "", l)
-          if (index(l, k "=") == 1) active[i] = 1
-          else if (!hint && l ~ "^#[ \t]*" k "=") hint = i
-          if (active[i] && !first) first = i
-        }
-        for (i = 1; i <= n; i++) {
-          if (mode == "set" && i == first) { print k "=" v comment(lines[i]); continue }
-          if (active[i] && (mode == "unset" || i != first)) { print "#" lines[i]; continue }
-          print lines[i]
-          if (mode == "set" && !first && i == hint) print k "=" v
-        }
-        if (mode == "set" && !first && !hint) print k "=" v
-      }' "$2" > "$2.new" && mv -f -- "$2.new" "$2" || { rm -f -- "$2.new"; return 1; }
+    if [[ "$c" == unset ]]; then config_set "$1" "$key" || return 1
+    else config_set "$1" "$key" "${c#set }" || return 1; fi
   done
 }
 
-# Writes the pending changes. A config.env that is a link stays one: the
-# file it points to is edited. On a failure nothing is cleared, so "s" can
-# be tried again.
+# Writes the pending changes. All changes go into a work copy, and one mv
+# puts it over the file: a stop half way leaves the file as it was. A
+# config.toml that is a link stays one: setup changes the file that it
+# points to. On a failure, setup stores no secret and keeps the changes:
+# "s" tries again.
 setup_save() {
-  local target src tmp name failed=""
+  local target work="" name failed="" note="$AB_HOME_DIR/.setup-toml-noted"
   if (( ${#SETUP_NEW[@]} + ${#SETUP_SECRETS[@]} == 0 )); then
     echo "agentbox: nothing to save"
     return 0
   fi
   if (( ${#SETUP_NEW[@]} )); then
     target="$(realpath -m -- "$CONFIG_FILE")"
-    # No config.env yet: made new, in place only once complete.
-    # shortcut: no example file for config.env; use config.toml.example
-    # when setup edits config.toml.
-    src="$target"
-    [[ -f "$target" ]] || src=/dev/null
-    if mkdir -p "$(dirname "$target")" && tmp="$(mktemp "$target.XXXXXX")" && setup_apply "$src" "$tmp"; then
-      if [[ "$src" != "$target" ]]; then
-        chmod 600 -- "$tmp" && mv -f -- "$tmp" "$target" && echo "agentbox: saved $CONFIG_FILE" || failed=1
-      elif cmp -s "$target" "$tmp"; then
-        rm -f -- "$tmp"
-      elif cp -p -- "$target" "$target.bak" && chmod --reference="$target" -- "$tmp" && mv -f -- "$tmp" "$target"; then
+    # The work copy: of the file, or of the example for a new file (mktemp
+    # gives mode 600).
+    # A Ctrl-C during the save removes the work copy; the file stays as it was.
+    trap 'rm -f -- "$work" "$work".??????; exit 130' INT TERM
+    if ! { mkdir -p -- "$(dirname -- "$target")" && work="$(mktemp "$target.XXXXXX")"; }; then
+      failed=1
+    elif [[ -f "$target" ]]; then
+      cp -- "$target" "$work" && chmod --reference="$target" -- "$work" || failed=1
+    else
+      cp -- "$SCRIPT_DIR/config.toml.example" "$work" || failed=1
+    fi
+    [[ -z "$failed" ]] && { setup_apply "$work" || failed=1; }
+    if [[ -z "$failed" && -f "$target" ]] && cmp -s -- "$work" "$target"; then
+      rm -f -- "$work"
+    elif [[ -z "$failed" && -f "$target" ]]; then
+      if cp -p -- "$target" "$target.bak" && mv -f -- "$work" "$target"; then
         echo "agentbox: saved $CONFIG_FILE (the previous one is $target.bak)"
       else
         failed=1
       fi
-    else
-      failed=1
+    elif [[ -z "$failed" ]]; then
+      mv -f -- "$work" "$target" && echo "agentbox: saved $CONFIG_FILE" || failed=1
     fi
-    [[ -n "${tmp:-}" ]] && rm -f -- "$tmp"
+    trap - INT TERM
     if [[ -n "$failed" ]]; then
+      [[ -n "$work" ]] && rm -f -- "$work"
       echo "error: could not write $CONFIG_FILE; nothing saved" >&2
       return 1
+    fi
+    # Once: v0.1.x reads config.env, which setup no longer changes.
+    if [[ -f "$CONFIG_OLD_FILE" && ! -e "$note" ]]; then
+      echo "agentbox: note: setup now saves your settings only in $CONFIG_FILE. It does not change $CONFIG_OLD_FILE, which agentbox v0.1.x reads."
+      { : > "$note"; } 2>/dev/null
     fi
   fi
   # Only the secrets that a module lists now, enabled or not: one typed

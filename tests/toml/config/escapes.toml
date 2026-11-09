@@ -1,0 +1,2 @@
+# As agentbox setup (config_set) writes a value with " and \.
+TABULARIS_CMD = "my \"tab\" c:\\x"

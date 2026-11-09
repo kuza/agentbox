@@ -70,8 +70,7 @@ CONFIG_LIST_KEYS=(AB_MCP AB_EGRESS AB_SKILLS AB_PI_EXTENSIONS AB_SERVICES AB_FOR
 # (lib/convert.sh writes it).
 CONFIG_FILE="${AB_CONFIG:-$USER_CONFIG}"
 if [[ "$CONFIG_FILE" == *.env ]]; then CONFIG_FILE="${CONFIG_FILE%.env}.toml"; fi
-# The settings file of v0.1.x: the conversion reads it, and agentbox setup
-# still edits it.
+# The settings file of v0.1.x: the conversion reads it.
 CONFIG_OLD_FILE="${CONFIG_FILE%.toml}.env"
 
 # Reads the settings in <file> (TOML, the kind config) into variables of
@@ -102,41 +101,117 @@ settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
   done
 }
 
-# <file> of v0.1.x: KEY=VALUE lines, optional quotes. # starts a comment at
-# the start of a line or after a space (KEY=value # note); a # inside a
-# value (a URL fragment) stays. Only agentbox setup reads this form, until
-# it edits config.toml.
-load_config() {  # <file> <warn about unknown keys: 0|1> <allowed keys...>
-  local file="$1" warn="$2" line key val n=0
-  shift 2
-  local allowed=" $* "
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    n=$((n + 1))
-    line="${line#"${line%%[![:space:]]*}"}"            # trim leading space
-    line="${line%"${line##*[![:space:]]}"}"            # trim trailing space
-    [[ -z "$line" || "$line" == \#* ]] && continue
-    line="${line#export }"
-    key="${line%%=*}"; val="${line#*=}"
-    # A key must be a name: "A B=x" would match two allowed keys in a row,
-    # and ${!key} then stops the start.
-    if [[ "$line" != *=* || ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      [[ "$warn" == 1 ]] && ab_warn "$file:$n: not KEY=VALUE, ignored"
-      continue
+# Sets <key> in <file> (TOML, the kind config) to <value>, as bash gives
+# it (settings_load). With no <value>, it puts a # before the line of the
+# key (the key is then not set).
+# The other lines and the comment after the old value stay. A key that is
+# not set replaces its first "#KEY =" line (from config.toml.example), or
+# goes at the end. Give the real file: a link becomes a plain file.
+#
+# The type comes from lib/toml-schema/config.toml. A list is an array of
+# the words of <value>, split at spaces and commas. An int is digits. A bool
+# is true for 1. For 0, a bool that is on by default (AB_CHECK_UPDATES,
+# AB_WARNINGS_ASK) is false; another bool is unset. A key outside the schema
+# is a setting of a module. It keeps the form of its line in the file or in
+# the example: an array, a number, or a string.
+#
+# It refuses a value on more than one line, or a line that it does not
+# understand, and says why. It writes a temp file, and moves it over <file>
+# only when toml_load can read it. 1 on any failure. Needs lib/toml.sh.
+config_set() {  # <file> <key> [<value>]
+  # CONFIG_SET_NAME: the name of the file in messages, when <file> is a
+  # work copy (setup_save).
+  local file="$1" key="$2" value="${3:-}" del=0 type text="" old="" i at=0 end=0 tmp form="" shown="${CONFIG_SET_NAME:-$1}"
+  local -a items=() rows=()
+  local -A values=() lines=()
+  (( $# < 3 )) && del=1
+  toml_load config "$file" values lines || { echo "error: $shown: cannot change $key (see the error above)" >&2; return 1; }
+  type="$(awk -v k="[$key]" '$0 == k { f = 1; next } f && /^type *=/ { gsub(/^type *= *"|"$/, ""); print; exit }' "$SCRIPT_DIR/lib/toml-schema/config.toml")"
+  if [[ "$type" == bool && "$value" == 0 && " AB_CHECK_UPDATES AB_WARNINGS_ASK " != *" $key "* ]]; then del=1; fi
+  mapfile -t rows < "$file"
+  # The line of the key, or its first "#KEY =" line.
+  if [[ -n "${lines[$key]+x}" ]]; then
+    read -r at end <<< "${lines[$key]}"
+    form="${rows[at - 1]#*=}"
+  else
+    for i in "${!rows[@]}"; do
+      # A line of the example, such as "#AB_TRIVY = true": the value
+      # starts as a TOML value does. A comment in words does not count.
+      [[ "${rows[i]}" =~ ^#[[:space:]]*${key}[[:space:]]*=[[:space:]]*([\"\'\[0-9]|true|false) ]] \
+        && { at=$((i + 1)); form="${rows[i]#*=}"; break; }
+    done
+  fi
+  # A setting of a module keeps the form of that line.
+  if [[ -z "$type" ]]; then
+    form="${form#"${form%%[![:space:]]*}"}"
+    if [[ "$form" == "["* ]]; then type=list
+    elif [[ "$form" =~ ^[0-9]+([[:space:]]|$) && "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then type=int
     fi
-    if [[ "$val" =~ ^\"([^\"]*)\"([[:space:]]+#.*)?$ || "$val" =~ ^\'([^\']*)\'([[:space:]]+#.*)?$ ]]; then
-      val="${BASH_REMATCH[1]}"
-    else
-      val="${val%%[[:space:]]#*}"
-      val="${val%"${val##*[![:space:]]}"}"
+  fi
+  if (( ! del )); then
+    case "$type" in
+      list) read -ra items <<< "${value//,/ }"
+            for i in ${items[@]+"${items[@]}"}; do text+="${text:+, }$(config_string "$i")"; done
+            text="[$text]" ;;
+      int) [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "error: $key: '$value' is not a whole number" >&2; return 1; }
+           text="$value" ;;
+      bool) case "$value" in 1) text=true ;; 0) text=false ;; *) echo "error: $key: '$value' is not 1 or 0" >&2; return 1 ;; esac ;;
+      *) text="$(config_string "$value")" ;;
+    esac
+    text="$key = $text"
+  fi
+  if [[ -n "${lines[$key]+x}" ]]; then
+    if (( at != end )); then
+      echo "error: $shown:$at: the value of $key is on more than one line (to line $end). Change it in the file." >&2
+      return 1
     fi
-    if [[ "$allowed" != *" $key "* ]]; then
-      [[ "$warn" == 1 ]] && ab_warn "$file:$n: unknown key '$key', ignored"
-      continue
+    old="${rows[at - 1]}"
+    if [[ ! "$old" =~ ^[[:space:]]*${key}[[:space:]]*= ]]; then
+      echo "error: $shown:$at: agentbox does not understand this line of $key. Change it in the file." >&2
+      return 1
     fi
-    if [[ -z "${!key+x}" ]]; then
-      printf -v "$key" '%s' "$val"
+    if (( del )); then text="#$old"; else text+="$(config_comment "${old#*=}")"; fi
+  elif (( del )); then
+    return 0
+  fi
+  tmp="$(mktemp "$file.XXXXXX")" || return 1
+  {
+    for i in "${!rows[@]}"; do
+      if (( i + 1 == at )); then printf '%s\n' "$text"; else printf '%s\n' "${rows[i]}"; fi
+    done
+    (( at )) || printf '%s\n' "$text"
+  } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  # toml_load must read the new file: a bug here must not break your settings.
+  if ! toml_load config "$tmp" values >/dev/null || ! chmod --reference="$file" -- "$tmp" || ! mv -f -- "$tmp" "$file"; then
+    rm -f -- "$tmp"
+    echo "error: $shown: could not set $key" >&2
+    return 1
+  fi
+}
+
+# <value> as a TOML basic string: in double quotes, with \ and " escaped.
+config_string() {  # <value>
+  local v="${1//\\/\\\\}"
+  printf '"%s"' "${v//\"/\\\"}"
+}
+
+# The comment after a value, with the spaces before it: the text from the
+# first # outside a string. <rest> is the text after the = of a line that
+# toml_load has read, so its strings are closed.
+config_comment() {  # <rest>
+  local s="$1" i c q=""
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    if [[ -n "$q" ]]; then
+      if [[ "$q" == '"' && "$c" == '\' ]]; then i=$((i + 1)); elif [[ "$c" == "$q" ]]; then q=""; fi
+    elif [[ "$c" == '"' || "$c" == "'" ]]; then
+      q="$c"
+    elif [[ "$c" == '#' ]]; then
+      s="${s:0:i}"
+      printf '%s#%s' "${s##*[![:space:]]}" "${1:i+1}"
+      return
     fi
-  done < "$file"
+  done
 }
 
 # The first pass reads the keys of agentbox, AB_MCP too. The enabled modules
