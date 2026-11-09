@@ -29,7 +29,7 @@ agentbox mounts no host credentials into the agent container. All service tokens
 
 ### Quick start
 
-You need Linux with rootless Podman 4.x or newer on the netavark backend (`podman info --format '{{.Host.NetworkBackend}}'` prints `netavark`). You also need a Claude subscription.
+You need Linux with rootless Podman 4.x or newer on the netavark backend (`podman info --format '{{.Host.NetworkBackend}}'` prints `netavark`). You also need a Claude subscription and Python 3.11 or newer ([Requirements](#requirements)).
 
 **1. Install a release** and check its signature (the key is in [Releases](#releases)):
 
@@ -73,6 +73,11 @@ Then use `agentbox setup` to enable what you need: MCP servers for Grafana, Gray
   podman --version
   podman info --format '{{.Host.NetworkBackend}}'   # must print: netavark
   ```
+- Python **3.11 or newer** on the host. agentbox reads your settings and its TOML files with it. `install.sh` checks for it. Without it, a start and `agentbox setup` stop, but `agentbox update`, `rollback` and `uninstall` work. agentbox uses the first of `python3`, `python3.13`, `python3.12` and `python3.11` that is 3.11 or newer.
+  - Fedora: `python3` is new enough.
+  - RHEL 9: `sudo dnf install python3.11`.
+  - Ubuntu 22.04: `sudo apt install python3.11` (a release candidate build from `jammy-updates`), or `python3.11` from the deadsnakes PPA.
+- `flock` from util-linux
 - For the optional Grafana and Graylog MCP servers: network access from the host to them, and **Graylog 7.0+** for its built-in MCP endpoint (Graylog marks this endpoint as experimental)
 - A Claude subscription or an Anthropic account for `claude setup-token`
 
@@ -101,21 +106,32 @@ agentbox-$v/install.sh
 
 - It puts the release into `~/.local/share/agentbox/versions/`.
 - It links `~/.local/bin/agentbox` to the release.
-- It creates `~/.config/agentbox/config.env` from the example.
+- It creates `~/.config/agentbox/config.toml` from `config.toml.example`. If a `config.env` of v0.1.x is there, it does not: the first start converts that file ([Conversion to TOML](#conversion-to-toml)).
+- It checks for Python 3.11 or newer. If it does not find it, it tells you how to install it ([Requirements](#requirements)).
 - It offers to install [git-guard](#git-on-the-host). It never installs git-guard over a `~/.local/bin/git` of your own.
 
 After that, `agentbox update` installs newer releases and verifies their signatures itself.
 
-Edit `config.env`. Choose the MCP servers with `AB_MCP`, for example `AB_MCP=grafana graylog`. Set the values that those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL`. Use base URLs only, without `/api` or `/api/mcp`; agentbox removes these trailing parts anyway.
+Edit `config.toml`, or use `agentbox setup` ([Setup menu](#setup-menu)). Choose the MCP servers with `AB_MCP`, for example `AB_MCP = ["grafana", "graylog"]`. Set the values that those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL`. Use base URLs only, without `/api` or `/api/mcp`; agentbox removes these trailing parts anyway.
 
 Context7 is always on. Skip the steps below for the servers that you do not use. See [MCP servers](#mcp-servers).
 
 ```bash
-$EDITOR ~/.config/agentbox/config.env
+$EDITOR ~/.config/agentbox/config.toml
 cp ~/.local/share/agentbox/current/agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md   # optional: personal instructions for the agents, see Memory and personal instructions
 ```
 
-agentbox parses `config.env`, but does not execute it. The file accepts only known keys, and updates of `run.sh` do not change it. Environment variables override it. `AB_CONFIG=/path/to/file` selects a different file, for example one file for each environment. If an enabled MCP module does not have its settings or secrets (step 5), the script stops with an error that names them.
+`config.toml` is a flat TOML file: one `KEY = value` for each setting, and `#` starts a comment. agentbox reads it, but does not execute it. Updates of agentbox do not change it. `config.toml.example` shows each setting with a comment.
+
+- A string is in quotes: `GRAFANA_URL = "https://grafana.example.internal"`.
+- A list is an array: `AB_MCP = ["grafana", "graylog"]`. An array can continue on more lines.
+- A flag is `true` or `false`: `AB_TRIVY = true`.
+- A number has no quotes: `AB_UPDATE_EVERY = 21600`.
+- agentbox refuses a float, a date, a table, a quoted key and a multi-line string. Put a version in quotes: `AB_PYTHON_VERSIONS = ["3.12", "3.13"]`, `AB_GO_VERSION = "1.26"`.
+
+If the file is not valid TOML, the start stops and names the file and the line. A key that agentbox and the enabled modules do not know gets a warning with its line. The settings of a module that is not enabled get no warning.
+
+An environment variable overrides the same key in the file, for example `AB_MCP=bb4 agentbox`. In the environment, a list is a string with spaces or commas (`AB_MCP="grafana bb4"`), and a flag is `1` or `0`. `AB_CONFIG=/path/to/file.toml` selects a different file, for example one file for each environment. If an enabled MCP module does not have its settings or secrets (step 5), the script stops with an error that names them.
 
 The agent can reach the network only through squid. Squid allows the hosts of the enabled MCP modules and of the egress groups in `AB_EGRESS`. By default, these groups are:
 
@@ -217,7 +233,7 @@ In the session:
 agentbox [repo-dir] [claude args...]        Claude Code
 agentbox pi [repo-dir] [pi args...]         pi
 agentbox shell [repo-dir] [bash args...]    bash in the same box, no agent
-agentbox setup                              a menu for config.env (below)
+agentbox setup                              a menu for config.toml (below)
 ```
 
 If the first argument is a directory that exists, agentbox mounts it as the repo. If not, agentbox mounts the **current directory** and gives all arguments to the agent. agentbox prints which directory it mounts. It refuses to mount agentbox's own code, the installed versions, git-guard or your files in `~/.config/agentbox`.
@@ -239,7 +255,7 @@ Several sessions can run in parallel. Each session gets its own `ab-claude-<pid>
 
 During the start, agentbox prints warnings (`agentbox: warning: ...`). Examples are an MCP module that agentbox left out, a git on the host that is not git-guard, and an update that failed. The agent's screen would push these warnings out of view. Thus, at a terminal, agentbox shows them again immediately before the session and asks `start the session? [Y/n]`. Enter starts the session, and `n` stops agentbox there.
 
-agentbox does not ask this question without a terminal, for an agent run with `-p` or `--print`, or for `agentbox shell` with a command. To disable the question in all cases, set `AB_WARNINGS_ASK=0` in `config.env`.
+agentbox does not ask this question without a terminal, for an agent run with `-p` or `--print`, or for `agentbox shell` with a command. To disable the question in all cases, set `AB_WARNINGS_ASK = false` in `config.toml`.
 
 agentbox mounts the repo at `/work/<repo dir name>`. This path is also the working directory. Claude Code keeps per-project state (memory, session history, `/resume`, project permissions) by that path. Thus each repo gets its own state, but two repos with the same directory name share it.
 
@@ -253,7 +269,7 @@ The box has no access to the clipboard of your desktop (no X11 or Wayland socket
 
 #### Setup menu
 
-`agentbox setup` edits `~/.config/agentbox/config.env` (or `AB_CONFIG`) through a menu:
+`agentbox setup` edits `~/.config/agentbox/config.toml` (or `AB_CONFIG`) through a menu:
 
 ```
 MCP servers (AB_MCP; context7 is always on)
@@ -279,9 +295,16 @@ The menu lists all MCP modules, skill sources and egress groups: the shared ones
 - A number enables or disables an entry, or asks for a value. For a value, Enter keeps the current value, and `-` unsets it.
 - When you enable a module, the menu asks for its settings. It also asks, with hidden input, for the secrets that the module does not have. The prompt tells what to type, and the module changes that input into the secret (the Graylog token becomes its basic-auth value). If you disable the module again before you save, the menu discards what you typed for it.
 - `e <number>` asks for all settings and secrets of a module, enabled or disabled. It does not enable or disable the module. For a stored secret, a new value replaces it, and Enter keeps it. Use this to enter a renewed token.
-- `s` saves. The menu edits `config.env` in place and keeps your comments and the order of its lines. If `config.env` is a link, it stays a link, and the menu edits the file that the link points to. The menu keeps the previous file as `config.env.bak` and stores the secrets. `q` quits. If some changes are not saved, `q` asks first.
+- `s` saves. The menu keeps the previous file next to it, with `.bak` added, and stores the secrets. If `config.toml` is a link, it stays a link, and the menu edits the file that the link points to.
+- `q` quits. If some changes are not saved, `q` asks first.
 
-Tokens never go into `config.env`. The menu only edits the file. The next `agentbox` start applies the changes: it starts or removes sidecars, changes the squid list, installs skills, and rebuilds the image. Sessions that are open keep the configuration that they started with. If your environment also sets a setting, the environment value overrides the file. The menu shows the names of such settings.
+The menu edits `config.toml` line by line, and keeps your comments and the order of its lines. It writes a list as an array. A flag that you enable gets `true`. A flag that you disable gets `false` if it is on by default. Otherwise, the menu puts a `#` before its line. For a key that is not set, the menu uses the `#KEY = ...` line from the example, if the file has one.
+
+The menu does not change a key whose value is on more than one line, and it says why. Edit that key yourself.
+
+If `config.toml` has an error, the menu shows the error and opens anyway. It cannot save changes to settings until you correct the file. The menu works before the first start too. If there is no `config.toml`, the menu makes it from the example when it saves. Before it opens, the menu converts the files of v0.1.x, as the first start does ([Conversion to TOML](#conversion-to-toml)). It does not change `config.env`, which agentbox v0.1.x reads, and it tells you so one time. The menu needs Python 3.11 or newer ([Requirements](#requirements)).
+
+Tokens never go into `config.toml`. The menu only edits the file. The next `agentbox` start applies the changes: it starts or removes sidecars, changes the squid list, installs skills, and rebuilds the image. Sessions that are open keep the configuration that they started with. If your environment also sets a setting, the environment value overrides the file. The menu shows the names of such settings.
 
 ## How it works
 
@@ -420,10 +443,10 @@ Apart from the remote servers of the MCP modules, the hosts that the agent can r
 
 | Where | What |
 |---|---|
-| `egress.d/<name>.conf` | Shared groups, in git |
-| `egress.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `egress.d/` replaces that group |
+| `egress.d/<name>.toml` | Shared groups, in git |
+| `egress.local.d/<name>.toml` | Your own, in [your files](#your-files). A name that also exists in `egress.d/` replaces that group |
 
-`AB_EGRESS` in `config.env` lists the enabled groups. If it is not set, its value is `anthropic openai pypi go`. A list replaces this default fully, and `AB_EGRESS=` (empty) enables no groups.
+`AB_EGRESS` in `config.toml` lists the enabled groups. If it is not set, its value is `["anthropic", "openai", "pypi", "go"]`. A list replaces this default fully, and `AB_EGRESS = []` enables no groups.
 
 Claude Code does not start without `anthropic`. pi needs `openai` only with a ChatGPT subscription (with an API key, pi goes through its sidecar). Thus, if you use only pi with a key, you can omit both groups. At each start, `run.sh` writes the hosts of the enabled groups and of the enabled MCP modules into a file that `squid.conf` includes. If this file changed, `run.sh` recreates squid. Open sessions lose egress for a short time.
 
@@ -437,17 +460,20 @@ Claude Code does not start without `anthropic`. pi needs `openai` only with a Ch
 | `github-read` | `github.com` and its content hosts | anonymous read access to public GitHub (see [GitHub read access](#github-read-access-optional)) |
 | `gcs` | `storage.googleapis.com` | Google Cloud Storage, all buckets |
 
-A group file is data, and agentbox never runs it. Put one host on each line. `#` starts a comment.
+A group file is TOML data, and agentbox never runs it. It has one key, `hosts`: an array of hosts. `#` starts a comment, also after a host. A missing `hosts` or an unknown key is an error, with its line.
 
 ```
-# egress.local.d/test-data.conf
-test-data.s3.eu-central-1.amazonaws.com   # HTTPS (port 443) and plain HTTP (port 80) to this host
-.test.example                             # test.example and all its subdomains
-minio.test.example:9000                   # this host on this port only, HTTPS or plain HTTP
+# egress.local.d/test-data.toml
+hosts = [
+  "test-data.s3.eu-central-1.amazonaws.com",   # HTTPS (port 443) and plain HTTP (port 80) to this host
+  ".test.example",                             # test.example and all its subdomains
+  "minio.test.example:9000",                   # this host on this port only, HTTPS or plain HTTP
+]
 ```
 
 ```
-AB_EGRESS=anthropic openai pypi go test-data
+# config.toml
+AB_EGRESS = ["anthropic", "openai", "pypi", "go", "test-data"]
 ```
 
 - Use exact hosts, not domains, where possible. `.amazonaws.com` is all of AWS. Each API that accepts uploads with a token is an exfiltration path (see [Security model](#security-model)), because the agent can use a token that a prompt injection planted. An S3 bucket host is narrower than the regional endpoint.
@@ -489,7 +515,7 @@ There are two ways to give pi access to OpenAI models. Both use the **OpenAI** p
 
 **The agent can read the token**, as Claude Code can read the Claude OAuth token. pi must write and refresh the token, so it cannot be in a sidecar. To revoke the token, run `/logout` in pi. Then end the session in the security settings of your ChatGPT account.
 
-`auth.openai.com` and `api.openai.com` come from the `openai` [egress group](#egress), which is enabled by default. All sessions share squid, so Claude Code sessions can also reach these hosts. If you use pi with an API key or do not use pi, remove `openai` from `AB_EGRESS`. The legacy provider also needs `chatgpt.com`, from the `chatgpt` group. To allow it, enable `chatgpt` in `agentbox setup`, or add it to `AB_EGRESS` (for example `AB_EGRESS=anthropic openai chatgpt pypi go`).
+`auth.openai.com` and `api.openai.com` come from the `openai` [egress group](#egress), which is enabled by default. All sessions share squid, so Claude Code sessions can also reach these hosts. If you use pi with an API key or do not use pi, remove `openai` from `AB_EGRESS`. The legacy provider also needs `chatgpt.com`, from the `chatgpt` group. To allow it, enable `chatgpt` in `agentbox setup`, or add it to `AB_EGRESS` (for example `AB_EGRESS = ["anthropic", "openai", "chatgpt", "pypi", "go"]`).
 
 #### Setup: OpenAI API key
 
@@ -526,14 +552,14 @@ An extension is code that pi runs in the box, with the same access as the agent.
 
 | Directory | |
 |---|---|
-| `pi-extensions.d/<name>.conf` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`) |
-| `pi-extensions.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
+| `pi-extensions.d/<name>.toml` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`) |
+| `pi-extensions.local.d/<name>.toml` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
 
-A source is `KEY=VALUE` data, and agentbox never runs it. `URL` is the git URL of the repository (required). `REF` is a branch, tag or commit to pin to (optional). Without `REF`, agentbox installs the default branch and offers updates. `NEEDS_SKILLS` lists the skill sources that the extension uses (optional). If one of them is not in `AB_SKILLS`, the start of pi says so. The extension works without it, but its skill commands fail.
+A source is TOML data, and agentbox never runs it. `url` is the git URL of the repository (required). `ref` is a branch, tag or commit to pin to (optional). Without `ref`, agentbox installs the default branch and offers updates. `needs_skills` is an array of the skill sources that the extension uses (optional). If one of them is not in `AB_SKILLS`, the start of pi says so. The extension works without it, but its skill commands fail. A missing `url` or an unknown key is an error, with its line.
 
-`AB_PI_EXTENSIONS` in `config.env` lists the enabled sources (`AB_PI_EXTENSIONS=pi-subagents pi-prompt-history`), or you enable them in `agentbox setup`. At the next start of pi (not of Claude Code), `sync-pi-extension.sh` installs each source into `pi-extensions/<name>/` on the host:
+`AB_PI_EXTENSIONS` in `config.toml` lists the enabled sources (`AB_PI_EXTENSIONS = ["pi-subagents", "pi-prompt-history"]`), or you enable them in `agentbox setup`. At the next start of pi (not of Claude Code), `sync-pi-extension.sh` installs each source into `pi-extensions/<name>/` on the host:
 
-1. It makes a new clone in a scratch directory, with hooks off, and checks out `REF` or the default branch.
+1. It makes a new clone in a scratch directory, with hooks off, and checks out `ref` or the default branch.
 2. It checks that the repository is a pi extension: a `package.json` with `pi.extensions`, or an `index.ts` or `index.js`. It refuses symlinks.
 3. If the extension has `dependencies`, it runs `npm ci --omit=dev --omit=peer --ignore-scripts --no-bin-links` from its `package-lock.json`. This needs Node.js and npm on the host. It removes the `.npmrc` of the repository first. pi gives the extension its own packages (the peer dependencies). It refuses an extension with dependencies and no lock file. It also refuses a package that is not from the npm registry (a git, file or link dependency). The reason: npm runs the scripts of a git dependency on the host, also with `--ignore-scripts`.
 4. It copies the result into place in one step, so a session that starts meanwhile does not see a part of it. It records the URL, the commit and the pin in `pi-extensions.sources/<name>`, outside the directory that sessions mount.
@@ -586,7 +612,7 @@ agentbox/
         └── scripts/collect.sh
 ```
 
-To keep skills in a different location, set `AB_SKILLS_DIR=/path/to/skills`. Changes apply at the next session start, and you do not need to restart the sidecars. To check, run `/skills` in a session.
+To keep skills in a different location, set `AB_SKILLS_DIR = "/path/to/skills"` in `config.toml`. Changes apply at the next session start, and you do not need to restart the sidecars. To check, run `/skills` in a session.
 
 **Why read-only.** `~/.claude` is in the writable `ab-claude-home` volume. If the agent wrote skills there, they would silently stay in every future session and every repo. Thus, they are a convenient place where a prompt injection can survive. With the read-only mount, only you can change personal skills, from the host. Project skills are part of the repo, and they go through your normal diff review.
 
@@ -600,28 +626,35 @@ A skill source is a git repository of skills, described in a small file:
 
 | Directory | |
 |---|---|
-| `skills.d/<name>.conf` | Shared sources, in git: `mattpocock`, `ponytail` |
-| `skills.local.d/<name>.conf` | Your own, in [your files](#your-files). A name that also exists in `skills.d/` replaces that source |
+| `skills.d/<name>.toml` | Shared sources, in git: `mattpocock`, `ponytail` |
+| `skills.local.d/<name>.toml` | Your own, in [your files](#your-files). A name that also exists in `skills.d/` replaces that source |
 
-`AB_SKILLS` in `config.env` lists the enabled sources (`AB_SKILLS=mattpocock`). Nobody gets skills that they did not enable. The `.conf` file is `KEY=VALUE` data, and agentbox never runs it. Each repository can be only one source. If two sources have the same `URL`, the start stops with an error. In that case, list the skills of both sources in one `ONLY`.
+`AB_SKILLS` in `config.toml` lists the enabled sources (`AB_SKILLS = ["mattpocock"]`). Nobody gets skills that they did not enable. The `.toml` file is data, and agentbox never runs it. A missing `url` or an unknown key is an error, with its line. Each repository can be only one source. If two sources have the same `url`, the start stops with an error. In that case, list the skills of both sources in one `only`.
 
 | Key | |
 |---|---|
-| `URL` | Required. Git URL of the repository |
-| `ONLY` | Comma-separated skills to install, as the repository names them. Default: all |
-| `SUBDIR` | The directory in the repository where agentbox looks for skills. Default: the full repository |
-| `PREFIX` | Prefix for the installed names. Default: the repository owner; `PREFIX=` (empty) for none |
-| `REF` | Branch, tag or commit to pin to. Default: the default branch, with updates that the [update check](#update-check) offers |
+| `url` | Required. Git URL of the repository |
+| `only` | An array of the skills to install, as the repository names them. Default: all |
+| `subdir` | The directory in the repository where agentbox looks for skills. Default: the full repository |
+| `prefix` | Prefix for the installed names. Default: the repository owner; `prefix = ""` for none |
+| `ref` | Branch, tag or commit to pin to. Default: the default branch, with updates that the [update check](#update-check) offers |
 
-Use `SUBDIR` for a repository that also keeps copies of its skills for other agents, as `ponytail` does (`SUBDIR=skills`). Without it, the same skill name occurs twice, and the sync stops.
+```
+# skills.local.d/team.toml
+url = "https://git.example.internal/team/skills"
+only = ["review", "deploy"]
+ref = "v1.2.0"
+```
 
-At each start, `run.sh` compares each enabled source with the installed skills. If they are different, `run.sh` syncs on the host: it installs a new source, syncs again a source whose `.conf` changed, and removes the skills of a source that you removed from `AB_SKILLS`. It syncs a changed source at the installed commit, so a changed `ONLY` does not also upgrade it. If nothing changed, there is no network access. If a sync fails, `run.sh` shows a warning, and the session starts with the installed skills.
+Use `subdir` for a repository that also keeps copies of its skills for other agents, as `ponytail` does (`subdir = "skills"`). Without it, the same skill name occurs twice, and the sync stops.
+
+At each start, `run.sh` compares each enabled source with the installed skills. If they are different, `run.sh` syncs on the host: it installs a new source, syncs again a source whose `.toml` file changed, and removes the skills of a source that you removed from `AB_SKILLS`. It syncs a changed source at the installed commit, so a changed `only` does not also upgrade it. If nothing changed, there is no network access. If a sync fails, `run.sh` shows a warning, and the session starts with the installed skills.
 
 Read the skills that you enable. Skills are instructions that the agent obeys, and their bundled scripts run in the box. Before you accept an update, read the compare link that the update check shows. Put the skills of a team into a repository of their own and a source in `skills.d/`, the same as the skills of other authors.
 
 ##### How a source is installed: `sync-skills.sh`
 
-`run.sh` calls `sync-skills.sh`, and you can also run it by hand for a one-off repository. It makes a new clone of the repository in a temporary directory. It does not keep the clone: the clone would be in a location that a session which mounts agentbox can write, and a hook planted in it would run on the host. It finds each directory with a `SKILL.md` at any depth, in the whole repository or under `SUBDIR`. It copies each of these directories **flat** into `skills/<name>/`, because Claude Code looks only one level deep.
+`run.sh` calls `sync-skills.sh`, and you can also run it by hand for a one-off repository. It makes a new clone of the repository in a temporary directory. It does not keep the clone: the clone would be in a location that a session which mounts agentbox can write, and a hook planted in it would run on the host. It finds each directory with a `SKILL.md` at any depth, in the whole repository or under `subdir`. It copies each of these directories **flat** into `skills/<name>/`, because Claude Code looks only one level deep.
 
 It records in `skills/.sources/<owner>__<repo>` what it installed, from where and at which commit. It removes skills that the upstream repository dropped or that you deselected. It never overwrites a skill that it did not install. It does not install a skill that contains symlinks: the link could point at a file on your host, and that file would then be in the skills of the agent.
 
@@ -639,7 +672,7 @@ SKILLS_PREFIX=mp ./sync-skills.sh <git-url>     # another prefix; SKILLS_PREFIX=
 
 ##### Example: mattpocock/skills
 
-`skills.d/mattpocock.conf` installs engineering and productivity skills from the repository, but not the unfinished `in-progress` skills. To enable it, set `AB_SKILLS=mattpocock`.
+`skills.d/mattpocock.toml` installs engineering and productivity skills from the repository, but not the unfinished `in-progress` skills. To enable it, set `AB_SKILLS = ["mattpocock"]`.
 
 Then run `/mattpocock-setup-matt-pocock-skills` in a session, once per repo. Important points for this box:
 
@@ -656,7 +689,7 @@ Each MCP server is a module: a directory with an `mcp.sh` file and the other fil
 | `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub`, `bb4` |
 | `mcp.local/<name>/` | Your own modules, in [your files](#your-files). If a module has the same name as a module in `mcp/`, it replaces that module |
 
-`AB_MCP` in `config.env` lists the enabled modules (`AB_MCP=grafana graylog`). The `context7` module is always enabled. At each start, `run.sh` checks the settings and secrets of the enabled modules and starts their sidecars. It writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`). It also writes the remote hosts for squid (see [Egress](#egress)).
+`AB_MCP` in `config.toml` lists the enabled modules (`AB_MCP = ["grafana", "graylog"]`). The `context7` module is always enabled. At each start, `run.sh` checks the settings and secrets of the enabled modules and starts their sidecars. It writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`). It also writes the remote hosts for squid (see [Egress](#egress)).
 
 A module can lack a setting or a secret, can be absent from this version, or can fail to start. Such a module is left out of that session with a warning that gives the reason (see [Daily usage](#daily-usage) for how agentbox shows warnings again). The other modules work. If the start of the module failed, what the module already runs stays for the sessions that use it. If a setting or a secret is gone, agentbox removes what the module runs, as for a module that you removed from `AB_MCP`. Nobody gets servers that they did not enable, and a new module does not change `run.sh`.
 
@@ -669,7 +702,7 @@ A module can lack a setting or a secret, can be absent from this version, or can
 | `MCP_URL` | Required if `MCP_SERVERS` is not set. The URL that the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar. For a remote server, the URL of the server (and put its host in `MCP_EGRESS`) |
 | `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`). Each item is `"<name>\|<url>\|<caller or ->\|<description>"`. The items replace the one server that has the name of the module. `caller`: the agents send the caller token of the module to the server. `-`: the agents send no token (a remote server). `caller` needs `MCP_CALLER_SECRET`. Each server name must be different from the other server names in the module and in other modules. If a module does not obey a rule, the start leaves it out and gives the reason. As for `MCP_URL`, the agents reach a host without a dot without the proxy, unless the host is in `MCP_EGRESS` |
 | `MCP_DESCRIPTION` | One line that pi shows |
-| `MCP_CONFIG=(...)` | The `config.env` keys that the module reads. `run.sh` reads them only while the module is enabled. While it is not, they can stay in `config.env`, and agentbox ignores them without a warning. Write the array on one line: agentbox reads this line as text for a module that is not enabled or does not parse |
+| `MCP_CONFIG=(...)` | The `config.toml` keys that the module reads. `run.sh` reads them only while the module is enabled. While it is not, they can stay in `config.toml`, and agentbox ignores them without a warning. Write the array on one line: agentbox reads this line as text for a module that is not enabled or does not parse |
 | `MCP_REQUIRED_CONFIG=(...)` | The keys from `MCP_CONFIG` that must have a value |
 | `MCP_SECRETS=(...)` | Podman secrets that must exist, for example the API token of the service |
 | `MCP_SECRET_HELP=(...)` | Optional: `"<secret>: what to type"` for each secret. `agentbox setup` shows it when it asks for the secret |
@@ -695,7 +728,7 @@ If a server needs a credential, give it a sidecar that holds the credential. The
 
 ### GitHub (MCP)
 
-Optional: the `github` module (`AB_MCP=... github`). With it, `run.sh` starts two more sidecars, and the agent gets GitHub through MCP. The agent can use pull requests, issues, review comments, CI runs and logs, and it can read repository contents. **The token never enters the agent container**, and `github.com` stays out of the egress allowlist.
+Optional: the `github` module (add `github` to `AB_MCP`). With it, `run.sh` starts two more sidecars, and the agent gets GitHub through MCP. The agent can use pull requests, issues, review comments, CI runs and logs, and it can read repository contents. **The token never enters the agent container**, and `github.com` stays out of the egress allowlist.
 
 What the agent can **not** do: `git fetch`/`git push`, or change code on GitHub. Code goes through you:
 
@@ -714,7 +747,7 @@ What the agent can **not** do: `git fetch`/`git push`, or change code on GitHub.
 
 The agent can add its own MCP registrations in `ab-claude-home`. Thus nginx, not the client config, enforces the server behaviour. **The real boundary is still the PAT's permissions.**
 
-Default toolsets: `context,repos,issues,pull_requests,actions`. To change them, set `GH_TOOLSETS` in `config.env`. The next start recreates the sidecar.
+Default toolsets: `context,repos,issues,pull_requests,actions`. To change them, set `GH_TOOLSETS` in `config.toml`. The next start recreates the sidecar.
 
 Lockdown mode hides content in public repositories from users without push access to them. At this time, it applies only when the agent reads issues. Thus content that other tools get from public repositories can still carry prompt injection.
 
@@ -748,13 +781,13 @@ Also protect `main` with a branch ruleset that requires a pull request, so that 
 read -rsp 'GitHub token: ' T && printf '%s' "$T" | tr -d '[:space:]' | podman secret create github_pat -; echo; unset T
 ```
 
-Add `github` to `AB_MCP` in `config.env`. The next start creates `github_mcp_caller` and the sidecars. To check, use `/mcp` in a session.
+Add `github` to `AB_MCP` in `config.toml`. The next start creates `github_mcp_caller` and the sidecars. To check, use `/mcp` in a session.
 
 #### 3. More resource owners (optional)
 
 A fine-grained token has one resource owner: your account or one organization. If the agent works on repositories of more owners, it needs a token for each owner.
 
-1. List the other owners in `GH_OWNERS`, space- or comma-separated (`GH_OWNERS=myorg`). `github_pat` stays the token of the first owner.
+1. List the other owners in `GH_OWNERS` (`GH_OWNERS = ["myorg"]`). `github_pat` stays the token of the first owner.
 2. For each owner, create a token as in step 1, with that owner as resource owner.
 3. Store it as `github_pat_<owner>`, in lowercase (`github_pat_myorg`). `agentbox setup` asks for these secrets when you enter `GH_OWNERS`.
 
@@ -769,7 +802,7 @@ podman rm -f ab-mcp-github ab-mcp-github-srv
 podman secret rm github_pat github_mcp_caller   # and github_pat_<owner> for each owner
 ```
 
-`agentbox uninstall --all` removes the tokens of the owners that `GH_OWNERS` lists at that time. Remove the token of an owner that you took out of `GH_OWNERS` yourself.
+`agentbox uninstall --all` removes the tokens of the owners that `GH_OWNERS` lists at that time. Remove the token of an owner that you took out of `GH_OWNERS` yourself. Without Python 3.11 or newer, uninstall cannot read `GH_OWNERS`: it keeps these tokens and says so.
 
 #### GitHub read access (optional)
 
@@ -785,7 +818,7 @@ A more contained alternative: leave it off, and tell the agent to read public re
 
 ### Woodpecker (MCP)
 
-Optional: the `woodpecker` module (`AB_MCP=... woodpecker`). The agent reads [Woodpecker CI](https://woodpecker-ci.org/): repositories, pipelines and their status, step logs, pipeline configs, and the queue. **Read only**: the agent cannot start, restart, cancel or approve anything.
+Optional: the `woodpecker` module (add `woodpecker` to `AB_MCP`). The agent reads [Woodpecker CI](https://woodpecker-ci.org/): repositories, pipelines and their status, step logs, pipeline configs, and the queue. **Read only**: the agent cannot start, restart, cancel or approve anything.
 
 Woodpecker has no official MCP server. The module runs [`rtuszik/woodpecker-mcp`](https://github.com/rtuszik/woodpecker-mcp). `mcp/woodpecker/mcp.sh` pins it to one release, and agentbox scans it daily with the other images.
 
@@ -802,7 +835,10 @@ Woodpecker's personal access tokens have no scopes: a token can do all that its 
 
 1. In Woodpecker, log in as a user for the agent. This user must be able to read only the repositories that the agent needs. Woodpecker takes permissions from your forge (Gitea, GitHub, GitLab, ...), so read access there is sufficient. Your own user also works, with all your rights behind the token, but the GET-only proxy still limits it to reads.
 2. Under the settings of your user, copy the personal access token.
-3. `agentbox setup`: enable `woodpecker`, and enter `WOODPECKER_URL` (for example `https://ci.example.internal`) and the token. agentbox stores the token as the Podman secret `woodpecker_token`. To do it by hand, set `WOODPECKER_URL=...` in `config.env`, add `woodpecker` to `AB_MCP`, and run `read -rsp 'Woodpecker token: ' T && printf '%s' "$T" | podman secret create woodpecker_token -; echo; unset T`.
+3. `agentbox setup`: enable `woodpecker`, and enter `WOODPECKER_URL` (for example `https://ci.example.internal`) and the token. agentbox stores the token as the Podman secret `woodpecker_token`. To do it by hand:
+   - Set `WOODPECKER_URL = "..."` in `config.toml`.
+   - Add `woodpecker` to `AB_MCP`.
+   - Run `read -rsp 'Woodpecker token: ' T && printf '%s' "$T" | podman secret create woodpecker_token -; echo; unset T`.
 4. If Woodpecker uses https with a certificate from your own CA, set `WOODPECKER_CA` to the CA certificate file on the host.
 
 #### Things to watch
@@ -816,7 +852,7 @@ Remove `woodpecker` from `AB_MCP`. The next start removes the sidecars. The secr
 
 ### Tabularis (MCP)
 
-Optional: the `tabularis` module (`AB_MCP=... tabularis`). [Tabularis](https://tabularis.dev) is a desktop database client with a built-in MCP server. With the module, the agent sees the connections that you saved in Tabularis. Through them, it can list tables, read schemas and run SQL. **Database passwords stay on the host**, in Tabularis and your system keychain. The agent container gets neither the passwords nor a route to the databases.
+Optional: the `tabularis` module (add `tabularis` to `AB_MCP`). [Tabularis](https://tabularis.dev) is a desktop database client with a built-in MCP server. With the module, the agent sees the connections that you saved in Tabularis. Through them, it can list tables, read schemas and run SQL. **Database passwords stay on the host**, in Tabularis and your system keychain. The agent container gets neither the passwords nor a route to the databases.
 
 #### How it is wired
 
@@ -833,7 +869,7 @@ Tabularis writes each query and its result to stderr. The module sends that outp
 
 #### Setup
 
-1. Install Tabularis on the host and save your connections in it. The command `tabularis` must be in `PATH`. If it is not, set `TABULARIS_CMD` in `config.env`, for example `TABULARIS_CMD=flatpak run <app id>` (agentbox adds `--mcp`).
+1. Install Tabularis on the host and save your connections in it. The command `tabularis` must be in `PATH`. If it is not, set `TABULARIS_CMD` in `config.toml`, for example `TABULARIS_CMD = "flatpak run <app id>"` (agentbox adds `--mcp`).
 2. Install Node.js (`node` and `npm`) on the host. The first start uses it to install supergateway, and this needs the npm registry one time. `ss` (iproute2) must also be on the host, as it is on Fedora. agentbox uses it to make sure that the program on `TABULARIS_PORT` is its bridge.
 3. In Tabularis, under Settings → MCP, select what the agent can do:
    - **Read-only mode**, for each connection (off by default). Use it for each connection that the agent must only read: Tabularis then refuses all statements other than `SELECT` on that connection.
@@ -866,7 +902,7 @@ rm -r ~/.cache/agentbox/tabularis
 
 ### DBHub (MCP)
 
-Optional: the `dbhub` module (`AB_MCP=... dbhub`). The agent reads the SQL databases that you list. It searches schemas, tables, columns and indexes and runs queries, **read only**. [DBHub](https://github.com/bytebase/dbhub) supports PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and SQLite. It has only two tools, so it uses little of the agent's context. Unlike [Tabularis](#tabularis-mcp), it needs nothing on the host, but it has no window to approve writes: it only reads.
+Optional: the `dbhub` module (add `dbhub` to `AB_MCP`). The agent reads the SQL databases that you list. It searches schemas, tables, columns and indexes and runs queries, **read only**. [DBHub](https://github.com/bytebase/dbhub) supports PostgreSQL, MySQL, MariaDB, SQL Server, Oracle and SQLite. It has only two tools, so it uses little of the agent's context. Unlike [Tabularis](#tabularis-mcp), it needs nothing on the host, but it has no window to approve writes: it only reads.
 
 #### How it is wired
 
@@ -915,7 +951,7 @@ Remove `dbhub` from `AB_MCP`. The next start removes the sidecar and the copy wi
 
 ### Remote browser (bb4)
 
-Optional: the `bb4` module (`AB_MCP=... bb4`). The agent controls a browser that runs on a browser server, one browser for each user. The browser is not in the box and not on your host, so its windows do not disturb you, and sites see a real browser. The agent gets two MCP servers:
+Optional: the `bb4` module (add `bb4` to `AB_MCP`). The agent controls a browser that runs on a browser server, one browser for each user. The browser is not in the box and not on your host, so its windows do not disturb you, and sites see a real browser. The agent gets two MCP servers:
 
 - **`bb4`**, the MCP server of the browser server itself: it starts the browser and configures it (a proxy, a time zone);
 - **`bb4-devtools`**, [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp) connected to that browser: it opens pages, reads them, clicks, types and takes screenshots.
@@ -937,7 +973,7 @@ The browser server identifies users by the name in the path and has **no authent
 #### Setup
 
 1. Connect to the VPN, so that the host resolves and answers. squid and the sidecar resolve it through the DNS of the host.
-2. `agentbox setup`: enable `bb4` and enter `BB4_URL` and `BB4_USER`. `BB4_URL` is the base URL of the server, with only scheme, host and port (`http://browser.example.internal:5101`). `BB4_USER` is your user name on the server (your GitHub user name). `BB4_DEVTOOLS_PORT` is the port of the DevTools WebSocket of the browser on the same host (default `5100`). To do it by hand, add the lines to `config.env` and add `bb4` to `AB_MCP`.
+2. `agentbox setup`: enable `bb4` and enter `BB4_URL` and `BB4_USER`. `BB4_URL` is the base URL of the server, with only scheme, host and port (`http://browser.example.internal:5101`). `BB4_USER` is your user name on the server (your GitHub user name). `BB4_DEVTOOLS_PORT` is the port of the DevTools WebSocket of the browser on the same host (default `5100`). To do it by hand, add the lines to `config.toml` and add `bb4` to `AB_MCP`.
 3. The first start builds the image `localhost/agentbox-bb4-devtools`. This needs the npm registry one time and takes about a minute. To check, use `/mcp` in a session: `bb4` starts the browser, and then `bb4-devtools` works on its pages.
 
 If `BB4_URL` has a path, `BB4_USER` is not a plain name, or a port is not a valid port, the module is left out of that start with the reason. Then agentbox adds nothing to squid. `AB_UPGRADE=1` rebuilds the image on a fresh base. Maintainers update the pinned packages with `cd mcp/bb4/devtools && npm install --package-lock-only --ignore-scripts` after they change a version in `package.json`. They check the lock file with `trivy fs mcp/bb4/devtools` and `npm audit`, and review its diff. The same overrides as for the Tabularis bridge apply, and the same known issue too (zod 3 in supergateway, see [Tabularis (MCP)](#tabularis-mcp)).
@@ -969,7 +1005,7 @@ The image has [uv](https://docs.astral.sh/uv/) and preinstalled interpreters, so
 
 | | |
 |---|---|
-| Interpreters | `AB_PYTHON_VERSIONS` in `config.env` (default `3.12 3.13 3.14`, from the `Containerfile`). The build installs them into `/opt/uv-python`. They are on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is the 3.13 of Debian 13; the virtualenv of graphify uses it |
+| Interpreters | `AB_PYTHON_VERSIONS` in `config.toml` (default `["3.12", "3.13", "3.14"]`, from the `Containerfile`). Put each version in quotes: agentbox refuses a float. The build installs them into `/opt/uv-python`. They are on `PATH` as `python3.12`, `python3.13`, `python3.14`. The system `python3` is the 3.13 of Debian 13; the virtualenv of graphify uses it |
 | Packages | `uv add`, `uv sync`, `uv run` and `pip` in a venv work, because PyPI is in the egress allowlist |
 | Virtualenv | One per repo, **outside the repo**, in `ab-cache` (`~/.cache/venvs/<repo>-<hash>`), set through `UV_PROJECT_ENVIRONMENT`. Both agents share it |
 | uv cache | In `ab-cache`. It stays across sessions, and both agents share it |
@@ -986,7 +1022,7 @@ The image has the Go toolchain and [golangci-lint](https://golangci-lint.run). B
 
 | | |
 |---|---|
-| Versions | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` in `config.env` (defaults from the `Containerfile`). The Go default is `1.26`. A minor version means its latest stable patch release at build time. An exact version (`1.26.3`) pins it. An empty value means the latest stable Go. An empty golangci-lint version (the default) means the latest release at build time. `AB_UPGRADE` gets the versions that these values resolve to; the build log prints what it installed |
+| Versions | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` in `config.toml` (defaults from the `Containerfile`). The Go default is `1.26`. A minor version means its latest stable patch release at build time. An exact version (`"1.26.3"`) pins it. An empty value means the latest stable Go. An empty golangci-lint version (the default) means the latest release at build time. `AB_UPGRADE` gets the versions that these values resolve to; the build log prints what it installed |
 | Modules | `proxy.golang.org` and `sum.golang.org` are in the egress allowlist, so `go mod download`, `go get` and `go build` work |
 | Caches | The module cache is in `ab-go` (`~/go`), and the build cache is in `ab-cache`. Both stay across sessions, and both agents share them |
 | Tools | `go install pkg@version` puts the tool in `~/go/bin`, which is on `PATH` |
@@ -1005,7 +1041,7 @@ Things to know:
 
 [graphify](https://github.com/Graphify-Labs/graphify) makes a knowledge graph of the repo that you can query. It is a Python CLI plus a `/graphify` skill that calls the CLI. Thus, unlike plain skills, it must be **in the image**: the agent cannot install it from PyPI.
 
-The `Containerfile` installs it into `/opt/graphify` and makes it available as `/usr/local/bin/graphify`. `GRAPHIFY_VERSION` pins the version. `AB_GRAPHIFY_EXTRAS` in `config.env` sets optional extras (none by default), for example `[terraform]` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `[sql,terraform]`. A change to either setting rebuilds the image at the next start.
+The `Containerfile` installs it into `/opt/graphify` and makes it available as `/usr/local/bin/graphify`. `GRAPHIFY_VERSION` pins the version. `AB_GRAPHIFY_EXTRAS` in `config.toml` sets optional extras (none by default), for example `AB_GRAPHIFY_EXTRAS = "[terraform]"` for Terraform/HCL (`.tf`, `.tfvars`, `.hcl`) or `"[sql,terraform]"`. A change to either setting rebuilds the image at the next start.
 
 #### The skill
 
@@ -1044,10 +1080,10 @@ What does **not** work, by design: `/graphify add <url>`, `graphify clone` and v
 
 ### Trivy
 
-[Trivy](https://trivy.dev) scans the repository in the box. `trivy fs .` finds known vulnerabilities in dependencies (lock files, `go.mod`, ...). `trivy config .` finds misconfigurations in Terraform, Dockerfiles, Kubernetes manifests and similar files. It is off by default. To enable it, set it in `config.env` and rebuild:
+[Trivy](https://trivy.dev) scans the repository in the box. `trivy fs .` finds known vulnerabilities in dependencies (lock files, `go.mod`, ...). `trivy config .` finds misconfigurations in Terraform, Dockerfiles, Kubernetes manifests and similar files. It is off by default. To enable it, set it in `config.toml` and rebuild:
 
 ```
-AB_TRIVY=1
+AB_TRIVY = true
 ```
 
 ```bash
@@ -1063,10 +1099,10 @@ AB_UPGRADE=1 agentbox
 
 ### Local services
 
-To let the agent use your dev containers (Redis, RabbitMQ, PostgreSQL, ...), list them in `config.env`:
+To let the agent use your dev containers (Redis, RabbitMQ, PostgreSQL, ...), list them in `config.toml`:
 
 ```
-AB_SERVICES=redis rabbitmq postgres
+AB_SERVICES = ["redis", "rabbitmq", "postgres"]
 ```
 
 On start, `run.sh` attaches each one to `ab-services`. This is a separate `--internal` network that the session joins. The agent connects by container name and the container's own port: `redis:6379`, `rabbitmq:5672` (management UI `rabbitmq:15672`), `postgres:5432`. Ports published on the host (`-p`) are not used and not necessary. The session's `NO_PROXY` contains the service names, so HTTP clients reach them directly, not through squid.
@@ -1090,21 +1126,21 @@ On start, `run.sh` attaches each one to `ab-services`. This is a separate `--int
 To let the agent use databases, queues and other TCP services outside the box, for example on test servers, give each one a name and a target:
 
 ```
-# config.env: for every session
-AB_FORWARD=db=db.test.example:5432
+# config.toml: for every session
+AB_FORWARD = ["db=db.test.example:5432"]
 
-# env/<repo dir name>.conf: only for sessions in that repo
-AB_FORWARD=mq=mq.test.example:5672 cache=redis.test.example:6379
+# env/<repo dir name>.toml: only for sessions in that repo
+AB_FORWARD = ["mq=mq.test.example:5672", "cache=redis.test.example:6379"]
 ```
 
 The agent connects by name and the port of the target: `db:5432`, `mq:5672`. For each target, `run.sh` starts a sidecar that runs `socat` on the agentbox image. The sidecar is on `ab-egress` (the way out) and on an `--internal` network that the session joins. On that network, it answers to the name:
 
 | List | Network | Sidecars |
 |---|---|---|
-| `config.env` | `ab-forward` | `ab-fwd-<name>` |
-| `env/<repo dir name>.conf` | `ab-fwd-<key>`; only sessions in that repo join it | `ab-fwd-<key>-<name>` |
+| `config.toml` | `ab-forward` | `ab-fwd-<name>` |
+| `env/<repo dir name>.toml` | `ab-fwd-<key>`; only sessions in that repo join it | `ab-fwd-<key>-<name>` |
 
-`<key>` comes from the path of the repo, so the sessions of another repo cannot reach these targets. The repo file uses the same `KEY=VALUE` format as `config.env` and accepts only `AB_FORWARD`. It is with the [per-project environment](#per-project-environment) files, outside the repo: thus the agent cannot add targets for its next session.
+`<key>` comes from the path of the repo, so the sessions of another repo cannot reach these targets. The repo file uses the same TOML format as `config.toml` and accepts only `AB_FORWARD`. It is with the [per-project environment](#per-project-environment) files, outside the repo: thus the agent cannot add targets for its next session.
 
 - **Needs socat in the image.** If an image is from before agentbox added socat, the next start rebuilds it. If a start with forwards still says that socat is missing, run `AB_UPGRADE=1 agentbox`.
 - **Plain TCP.** The target sees connections from your host, through your network and VPN, like any other client there. TLS (`sslmode=require`, `amqps`) goes end to end. The certificates name the real host, so clients that verify host names need explicit settings (for example `sslrootcert` with `sslmode=verify-ca` instead of `verify-full`).
@@ -1176,7 +1212,7 @@ It checks the version, the clean and pushed `main`, the CHANGELOG section and th
 | Trivy | Binary pinned (`TRIVY_VERSION` in `Containerfile`); its database **automatically**, at most every 6 hours, outside the session | Increase `TRIVY_VERSION`; the next start rebuilds. `AB_UPDATE=1 agentbox` gets the database now |
 | Go, golangci-lint | Go: latest 1.26.x at build time; golangci-lint: latest. `Containerfile` sets both | `AB_UPGRADE=1 agentbox` |
 | uv, Python interpreters | Pinned in `Containerfile` | Increase `UV_VERSION` in `Containerfile` / set `AB_PYTHON_VERSIONS`; the next start rebuilds. The uv version decides which patch release of each version the build installs, so increase `UV_VERSION` to get newer patch releases |
-| Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`REF`) are skipped | Answer `y` at the prompt, or change `REF` |
+| Skills from sources (`AB_SKILLS`) | **Checked at most every 6 hours**, updated after you confirm (see below); pinned sources (`ref`) are skipped | Answer `y` at the prompt, or change `ref` |
 | Tokens (Claude, Grafana, Graylog, GitHub, Woodpecker) | They expire on their own schedule | `agentbox login` for Claude Code; for a module, `e <number>` in `agentbox setup` (or recreate the Podman secret). The next start recreates the sidecars that hold it |
 
 `AB_UPGRADE=1` does all of this in one run: it pulls the sidecar images, rebuilds the base image from scratch (`--pull --no-cache`), updates Claude Code and recreates the sidecars. It does not change volumes, secrets or MCP registrations. A good interval is one or two weeks. It takes a few minutes because of the full rebuild.
@@ -1191,7 +1227,7 @@ You do not need it after you change a build setting (`AB_TRIVY`, `AB_PYTHON_VERS
 - **pi extensions.** The same check for the sources in `AB_PI_EXTENSIONS` that are not pinned, from the records in `pi-extensions.sources/`. An extension is code, so it installs an update only on `y` at a terminal.
 - **Vendored skills.** `sync-skills.sh` records each sync in `skills/.sources/<owner>__<repo>` (URL, installed commit, `SKILLS_ONLY`, `SKILLS_SUBDIR`, prefix, source, pin, installed names). The check compares that commit with the remote default branch (`git ls-remote`). It prints a GitHub compare link to read before you update. On `y`, it does the sync again with the same settings.
 
-Without a terminal (`run.sh -p ...` from a script), it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES=0` skips it. `AB_UPGRADE=1` also skips it, because that updates the images anyway. To check without a session start, run `./check-updates.sh` alone.
+Without a terminal (`run.sh -p ...` from a script), it only prints what is out of date. A failed check (no network, registry down) prints a warning and does not stop the session. `AB_CHECK_UPDATES = false` skips it. `AB_UPGRADE=1` also skips it, because that updates the images anyway. To check without a session start, run `./check-updates.sh` alone.
 
 A session that has the agentbox directory mounted can write to the skills directory. Thus the check reads the records as data, accepts only `https://` URLs, and runs git outside any repository. As a result, a hook or config planted in the box does not run on the host. For the same reason, `sync-skills.sh` makes a new clone in a scratch directory.
 
@@ -1249,12 +1285,15 @@ It lists what it removes and asks before it removes anything:
 Then it asks two more questions. The default answer to each is no:
 
 - the Podman secrets that agentbox and its modules use (`claude_oauth`, `openai_api_key`, the MCP tokens and caller tokens);
-- your files in `~/.config/agentbox`: `config.env`, `env/` with passwords, your skills, `AGENTS.md`, local modules.
+- your files in `~/.config/agentbox`: `config.toml` (and the `config.env` of v0.1.x), `env/` with passwords, your skills, `AGENTS.md`, local modules.
 
 `agentbox uninstall --yes` removes without questions, but keeps the secrets and your files. `--yes --all` removes those too. It does not touch the repositories that you opened in the box. If you use a clone, run `./agentbox uninstall` in it. The clone itself stays; delete it yourself.
 
 A setting from `environment.d` stays in your login session until you log out.
 
+Uninstall works without Python 3.11 or newer, but then it cannot read `GH_OWNERS`. It keeps the `github_pat_<owner>` secrets and says so. Remove them yourself (`podman secret ls`).
+
+### Troubleshooting
 
 ```bash
 podman logs ab-mcp-grafana        # Grafana auth or URL errors
@@ -1269,6 +1308,8 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | Symptom | Likely cause / fix |
 |---|---|
 | The session cannot read some files of the repo, or all of it (`Permission denied`); `git status` in the box lists files as modified that nobody changed, or `git add` fails | Another podman container mounted them with `:Z`, which gives them an SELinux label private to that container. A typical cause: your own `podman run -v .:/dst:Z ...` in the repo. For code that you also open in the box, use lowercase `:z` (shared label). If the whole repo got a new label, the next session start restores it. Single files stay private, because podman does not relabel a volume that it already relabeled with `:z`. Restore them on the host: `chcon -R -t container_file_t -l s0 <path>`. The sidecars and sessions of agentbox mount copies of the agentbox files from the cache, so they do not cause this. Also, the files of an installed version are read-only, so podman cannot relabel them |
+| `agentbox needs Python 3.11 or newer` | Install it ([Requirements](#requirements)). `agentbox update`, `rollback` and `uninstall` work without it. |
+| `... was not converted to TOML` | agentbox could not read that old file. The warning above names the line. Correct the old file. Then start again. You can also write its `.toml` file yourself. See [Conversion to TOML](#conversion-to-toml). |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. |
 | `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A setting that is not correct: the reason names it; `agentbox setup` shows it too. A server in its `MCP_SERVERS` that does not have the correct form, `caller` without `MCP_CALLER_SECRET`, or a server name that another module also has: fix the `mcp.sh` of the module. The session starts without the module. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
@@ -1284,7 +1325,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | pi: *Sign in with ChatGPT* says "operation not permitted" | Your ChatGPT account (a business workspace) does not permit it. Use "OpenAI Codex (legacy)" with the `chatgpt` egress group enabled (see [pi (OpenAI)](#pi-openai)). |
 | An MCP server is `failed` in `/mcp` | Check the `podman logs` of its sidecar. Both agents list only enabled modules. Thus a failed module has a sidecar that should run, or (Context7) a host that squid should allow. |
 | `claude mcp list` does not show grafana, graylog, ... | Expected: the servers of the modules come from `--mcp-config`, and `mcp list` ignores it. Use `/mcp` in a session. |
-| `uv` says a Python version is not available and downloads are set to `never` | The image does not contain that version. Add it to `AB_PYTHON_VERSIONS` in `config.env`, and run `AB_UPGRADE=1 agentbox`. |
+| `uv` says a Python version is not available and downloads are set to `never` | The image does not contain that version. Add it to `AB_PYTHON_VERSIONS` in `config.toml`, and run `AB_UPGRADE=1 agentbox`. |
 | Sidecar can't resolve Grafana/Graylog | Containers cannot see the internal DNS. Add `--dns <server>` or `--add-host` to the sidecar in `run.sh`. |
 | `/mcp` shows a server as failed | Check the `podman logs` of the sidecar. |
 | `podman logs ab-mcp-graylog` shows `POST /mcp ... 405 59` | The 59-byte body is the `HTTP 405 Method Not Allowed` API error of Graylog itself. Thus nginx works, but Graylog has no MCP endpoint there. Enable MCP in System → Configurations → MCP, and make sure that the Graylog version is 7.0+. |
@@ -1340,12 +1381,14 @@ agentbox . -p "say ok"
 
 ### Configuration reference
 
+In `config.toml`, a list is an array and a flag is `true` or `false`. In the environment, a list is a string with spaces or commas, and a flag is `1` or `0`.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `AB_HOME` | `~/.config/agentbox` | The directory with your files. See [Your files](#your-files) |
-| `AB_CONFIG` | `<AB_HOME>/config.env` | The settings file. You can set all variables in this table there, except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE`. `run.sh` accepts the settings of a module there only while the module is in `AB_MCP` |
-| `AB_MCP` | unset | The MCP modules to enable, space- or comma-separated, for example `grafana graylog github`. `context7` is always on. See [MCP servers](#mcp-servers) |
-| `AB_EGRESS` | `anthropic openai pypi go` | The egress groups to enable, space- or comma-separated, from `egress.local.d/` or `egress.d/`. An empty value enables no group. See [Egress](#egress) |
+| `AB_CONFIG` | `<AB_HOME>/config.toml` | The settings file. If it names a `.env` file of v0.1.x, agentbox reads the `.toml` file next to it: change `AB_CONFIG` to that file. You can set all variables in this table there, except `AB_AGENT`, `AB_UPDATE`, `AB_RESTART`, `AB_UPGRADE`. `run.sh` accepts the settings of a module there only while the module is in `AB_MCP` |
+| `AB_MCP` | unset | The list of MCP modules to enable, for example `["grafana", "graylog", "github"]`. `context7` is always on. See [MCP servers](#mcp-servers) |
+| `AB_EGRESS` | `["anthropic", "openai", "pypi", "go"]` | The list of egress groups to enable, from `egress.local.d/` or `egress.d/`. An empty list enables no group. See [Egress](#egress) |
 | `GRAFANA_URL` | unset | A setting of the `grafana` module: the Grafana base URL (needs the `grafana_sa` secret) |
 | `GRAYLOG_URL` | unset | A setting of the `graylog` module: the Graylog base URL (needs the `graylog_basic` secret) |
 | `AB_UPDATE` | unset | `1` forces a Claude Code update |
@@ -1356,22 +1399,22 @@ agentbox . -p "say ok"
 | `WOODPECKER_URL` | unset | A setting of the `woodpecker` module: the base URL of Woodpecker, without `/api` (needs the `woodpecker_token` secret) |
 | `WOODPECKER_CA` | unset | A setting of the `woodpecker` module: a CA certificate file for an https Woodpecker that your own CA signed |
 | `TABULARIS_PORT` | `47821` | A setting of the `tabularis` module: the port of supergateway on `127.0.0.1` |
-| `AB_PI_EXTENSIONS` | unset | The pi extension sources to enable, space- or comma-separated, from `pi-extensions.local.d/` or `pi-extensions.d/`. See [pi extensions](#pi-extensions) |
-| `AB_SKILLS` | unset | The skill sources to enable, space- or comma-separated, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
+| `AB_PI_EXTENSIONS` | unset | The list of pi extension sources to enable, from `pi-extensions.local.d/` or `pi-extensions.d/`. See [pi extensions](#pi-extensions) |
+| `AB_SKILLS` | unset | The list of skill sources to enable, from `skills.local.d/` or `skills.d/`. See [Skills](#skills) |
 | `AB_SKILLS_DIR` | `<AB_HOME>/skills` | The personal skills directory, mounted read-only |
-| `AB_GRAPHIFY_EXTRAS` | unset | The graphify extras baked into the image, for example `[terraform]`. If you change the value, the next start rebuilds the image. See [Graphify](#graphify) |
-| `AB_TRIVY` | unset | `1`: the image contains Trivy. Its database is kept current outside the session. If you change the value, the next start rebuilds the image. See [Trivy](#trivy) |
-| `AB_PYTHON_VERSIONS` | `3.12 3.13 3.14` | The Python interpreters baked into the image. If you change the value, the next start rebuilds the image. See [Python](#python) |
+| `AB_GRAPHIFY_EXTRAS` | unset | The graphify extras baked into the image, for example `"[terraform]"`. If you change the value, the next start rebuilds the image. See [Graphify](#graphify) |
+| `AB_TRIVY` | unset | `true`: the image contains Trivy. Its database is kept current outside the session. If you change the value, the next start rebuilds the image. See [Trivy](#trivy) |
+| `AB_PYTHON_VERSIONS` | `["3.12", "3.13", "3.14"]` | The Python interpreters baked into the image, as strings. If you change the value, the next start rebuilds the image. See [Python](#python) |
 | `AB_GO_VERSION`, `AB_GOLANGCI_LINT_VERSION` | `1.26`, latest | The Go and golangci-lint versions in the image. An empty value means the latest release. If you change a value, the next start rebuilds the image. See [Go](#go) |
-| `AB_SERVICES` | unset | Your own containers (space- or comma-separated names) attached to the `ab-services` network. The session reaches them by name. See [Local services](#local-services) |
-| `AB_FORWARD` | unset | Services outside the box, `name=host:port`, space- or comma-separated. The session reaches them by name. You can also set it per repo in `<env dir>/<repo dir name>.conf`. See [Test servers](#test-servers) |
+| `AB_SERVICES` | unset | The list of your own containers attached to the `ab-services` network. The session reaches them by name. See [Local services](#local-services) |
+| `AB_FORWARD` | unset | The list of services outside the box, each `name=host:port`. The session reaches them by name. You can also set it per repo in `<env dir>/<repo dir name>.toml`. See [Test servers](#test-servers) |
 | `AB_ENV_DIR` | `<AB_HOME>/env` | The directory with the per-project environment files, `<repo dir name>.env`. See [Per-project environment](#per-project-environment) |
 | `AB_AGENT` | `claude` | `pi` runs pi instead of Claude Code (`agentbox pi` sets this value). `shell` runs bash in the same box instead of an agent, with its own home volume `ab-shell-home`. The arguments go to bash: none for an interactive shell, a script, or `-c '...'` |
 | `AB_UPGRADE` | unset | `1` pulls the sidecar images, rebuilds the base image, updates Claude Code and recreates the sidecars |
 | `AB_RESTART` | unset | `1` recreates all sidecars. You rarely need it: a sidecar is recreated automatically when its settings, image tag, mounted files (nginx templates, `squid.conf`, egress hosts) or Podman secrets change |
-| `AB_WARNINGS_ASK` | `1` | `0`: if the start shows warnings, agentbox asks no question before the session. It still prints the warnings. See [Daily usage](#daily-usage) |
+| `AB_WARNINGS_ASK` | `true` | `false`: if the start shows warnings, agentbox asks no question before the session. It still prints the warnings. See [Daily usage](#daily-usage) |
 | `BB4_URL`, `BB4_USER`, `BB4_DEVTOOLS_PORT` | unset, unset, `5100` | The settings of the `bb4` module: the base URL of the browser server (scheme, host, port), your user name on that server, and its DevTools WebSocket port. See [Remote browser (bb4)](#remote-browser-bb4) |
-| `AB_CHECK_UPDATES` | `1` | `0` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
+| `AB_CHECK_UPDATES` | `true` | `false` skips the check for newer sidecar images and vendored skills before a session. See [Update check](#update-check) |
 
 agentbox starts each sidecar once and then uses it again. The next start recreates a sidecar if its settings, image tag, mounted files or Podman secrets changed. A secret also counts as changed when you create it again, for example with a renewed token. The next start also removes the sidecars of modules that are no longer in `AB_MCP`. To recreate all sidecars anyway:
 
@@ -1389,18 +1432,19 @@ AB_RESTART=1 agentbox .
 | `run.sh` | The entry point: the steps in order (config, image, updates, sidecars, session). The steps themselves are in `lib/` |
 | `lib/*.sh` | The steps of `run.sh`: settings, agent, sidecars, MCP modules, local services, skills, session |
 | `mcp/<name>/` | MCP server modules, which you enable with `AB_MCP`: `mcp.sh` plus files such as nginx templates. See [MCP servers](#mcp-servers) |
-| `config.env.example` | The settings template. Copy it to `~/.config/agentbox/config.env` |
+| `config.toml.example` | The settings template. `install.sh` copies it to `~/.config/agentbox/config.toml` |
+| `lib/toml-reader.py`, `lib/toml-writer.py`, `lib/toml-schema/` | The TOML reader of the settings, the sources and the egress groups, the writer of the [conversion](#conversion-to-toml), and the keys and types of each kind of file |
 | `pi.sh` | The same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | The pi configuration: the model endpoint for API-key mode. Each start makes a copy in `~/.cache/agentbox/session/pi/` and mounts the copy read-only |
 | `pi/llm-openai.conf.template` | The nginx config for the OpenAI sidecar (pi with an API key): it checks the caller and injects the API key |
 | `Containerfile` | The base image (`node:24-trixie-slim`, Debian 13, Node.js 24 LTS): node, git, ripgrep, fd, make, gcc, uv with preinstalled Python versions, Go, golangci-lint, graphify |
 | `Containerfile.squid` | The image of the egress proxy: Debian's squid, built here like the base image |
 | `squid.conf` | The egress proxy settings and access rules. It includes a generated file with the allowed hosts |
-| `egress.d/<name>.conf` | Egress groups (PyPI, Go modules, ...), which you enable with `AB_EGRESS`. See [Egress](#egress) |
+| `egress.d/<name>.toml` | Egress groups (PyPI, Go modules, ...), which you enable with `AB_EGRESS`. See [Egress](#egress) |
 | `agents/AGENTS.md.example` | The template for `~/.config/agentbox/AGENTS.md`: optional personal instructions for both agents in every repo, mounted read-only (Claude Code: `~/.claude/CLAUDE.md`, pi: `~/.pi/agent/AGENTS.md`) |
 | `claude/statusline.py` | The Claude Code status line (context use, subscription limits, cost). A copy from `~/.cache/agentbox/session/claude/` is mounted read-only. Claude Code uses it unless you set your own `statusLine`. See [Status line](#status-line) |
-| `skills.d/<name>.conf` | Skill sources (git repositories of skills), which you enable with `AB_SKILLS`. See [Skills](#skills) |
-| `pi-extensions.d/<name>.conf` | pi extension sources, which you enable with `AB_PI_EXTENSIONS`. See [pi extensions](#pi-extensions) |
+| `skills.d/<name>.toml` | Skill sources (git repositories of skills), which you enable with `AB_SKILLS`. See [Skills](#skills) |
+| `pi-extensions.d/<name>.toml` | pi extension sources, which you enable with `AB_PI_EXTENSIONS`. See [pi extensions](#pi-extensions) |
 | `sync-pi-extension.sh` | Installs a pi extension from git on the host. See [pi extensions](#pi-extensions) |
 | `completions/agentbox.bash` | Tab completion for the `agentbox` command in bash. The install and every update link it into `~/.local/share/bash-completion/completions/` |
 | `git-guard` | A host-side git wrapper, installed as `~/.local/bin/git`. It refuses repositories whose `.git` a session redirected. See [Git on the host](#git-on-the-host) |
@@ -1410,25 +1454,55 @@ AB_RESTART=1 agentbox .
 
 #### Your files
 
-Your settings and data are apart from the code, in `~/.config/agentbox/` (`AB_HOME` changes this location). Thus you can replace the code with a new version or a fresh clone, and your files stay unchanged. Also, a session that has agentbox's own code open as its repo does not see them. In this README, `config.env`, `env/` and the other files below mean the files in this directory.
+Your settings and data are apart from the code, in `~/.config/agentbox/` (`AB_HOME` changes this location). Thus you can replace the code with a new version or a fresh clone, and your files stay unchanged. Also, a session that has agentbox's own code open as its repo does not see them. In this README, `config.toml`, `env/` and the other files below mean the files in this directory.
 
 | File | Purpose |
 |---|---|
-| `config.env` | The settings, made from `config.env.example` |
-| `env/` | Optional. The per-project environment files, `<repo dir name>.env`, and the per-project settings, `<repo dir name>.conf` (`AB_FORWARD`, see [Test servers](#test-servers)) |
+| `config.toml` | The settings, made from `config.toml.example` |
+| `env/` | Optional. The per-project environment files, `<repo dir name>.env`, and the per-project settings, `<repo dir name>.toml` (`AB_FORWARD`, see [Test servers](#test-servers)) |
 | `skills/` | Optional. Personal skills, mounted read-only into the agent. `skills/.sources/` records which skills `sync-skills.sh` installed and from where |
 | `AGENTS.md` | Optional. Personal instructions for both agents, made from `agents/AGENTS.md.example` |
 | `mcp.local/<name>/` | Your own MCP modules. A module with the name of a module in `mcp/` replaces that module |
-| `skills.local.d/<name>.conf` | Your own skill sources |
-| `egress.local.d/<name>.conf` | Your own egress groups |
+| `skills.local.d/<name>.toml` | Your own skill sources |
+| `egress.local.d/<name>.toml` | Your own egress groups |
 | `dbhub.toml` | Optional. The databases of the `dbhub` module, with their passwords; mode 600. See [DBHub (MCP)](#dbhub-mcp) |
 | `pi-extensions/` | The pi extensions that you allow, mounted read-only. The first start of pi creates it empty. agentbox installs the sources in `AB_PI_EXTENSIONS` here |
-| `pi-extensions.local.d/<name>.conf` | Your own pi extension sources |
+| `pi-extensions.local.d/<name>.toml` | Your own pi extension sources |
 | `pi-extensions.sources/` | The records of the pi extensions that agentbox installed (URL, commit, pin) |
+| `converted.list` | The old files that the [conversion to TOML](#conversion-to-toml) converted |
+| `convert.lock` | The lock of the conversion: one process converts at a time |
+| `.setup-toml-noted` | `agentbox setup` said one time that it saves only in `config.toml` |
 
 `run.sh` refuses to mount a repo that is, contains or lies inside one of these: agentbox's code, any installed version (`~/.local/share/agentbox`; `agentbox rollback` would run it), git-guard (`~/.local/bin/git`), or the files above. Otherwise, a session could change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
 
 Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS.md`, `pi/extensions/` for `pi-extensions/`). If one of these files is still there, `run.sh` stops before it starts anything. It prints the commands that move the file.
+
+#### Conversion to TOML
+
+agentbox v0.1.x kept your settings, sources and egress groups in other formats. The first start of v0.2.0, or `agentbox setup`, converts these files to TOML one time:
+
+| Old file | New file |
+|---|---|
+| `config.env`, or the `.env` file that `AB_CONFIG` names | `config.toml`, or the `.toml` file next to that `.env` file |
+| `env/<repo dir name>.conf`, in `AB_ENV_DIR` | `env/<repo dir name>.toml` |
+| `skills.local.d/<name>.conf` | `skills.local.d/<name>.toml` |
+| `pi-extensions.local.d/<name>.conf` | `pi-extensions.local.d/<name>.toml` |
+| `egress.local.d/<name>.conf` | `egress.local.d/<name>.toml` |
+
+- The start names each file that it converts. Read the new files.
+- The old files stay unchanged, so that `agentbox rollback` to v0.1.x works. They stay until v0.3.0.
+- A list with spaces or commas becomes an array, and `0` and `1` of a flag become `false` and `true`. A version such as `AB_GO_VERSION=1.22` becomes the string `"1.22"`. The keys of a source become lowercase. A setting of a module becomes a string.
+- In a source, a key that the new format does not know goes into the TOML file as a comment, with a warning.
+- In `config.env` and `env/<repo>.conf`, each key stays a setting. These lines become a comment, with a warning: a flag or a number with a wrong value (`AB_TRIVY=yes`), a line that is not `KEY=VALUE`, and the second line of the same key.
+- If a TOML file of yours is there already, agentbox does not change it. It lists the old file as `kept`.
+- If agentbox cannot read an old file, it gives a warning with the line, and the next start tries again. Until then, a start that needs the file stops. agentbox does not use a shared file of the same name in its place.
+- `converted.list` in `AB_HOME` lists each converted old file. agentbox does not convert a file in this list again, also when you remove its TOML file. The next start converts a `.conf` file that you add later.
+- To convert a file again, remove its line from `converted.list`.
+- The conversion does not change your modules in `mcp.local/`.
+- If you change an old file after a rollback, the next start of v0.2.0 says that it is newer than its TOML file. agentbox reads only the TOML file: put the change there.
+- If `AB_CONFIG` names a `.env` file, change `AB_CONFIG` to the `.toml` file next to it. The start tells you this.
+- If you changed `AB_CONFIG` to a `.toml` file, set it back to the `.env` file before a rollback. v0.1.x cannot read a TOML file.
+- If `AB_CONFIG` names a file of v0.1.x without `.env`, agentbox reads it as TOML and stops. Copy the file to a name with the `.env` extension. Set `AB_CONFIG` to the copy.
 
 ### Tests
 
@@ -1437,9 +1511,9 @@ Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS
 ./tests/run.sh test_mcp_  # tests whose name starts with test_mcp_
 ```
 
-The tests need no podman, network or registry: `tests/stub/podman` replaces podman and records every call. Fake `curl` and `git ls-remote` replace the registries and GitHub, and `sync-skills.sh` clones a local repository. Each test works on a copy of agentbox's code in a scratch directory, never on your `config.env` or `skills/`. The tests check what `run.sh` asks podman to do (sidecars, secrets, the session's mounts and arguments), the generated MCP configs, and the error paths.
+The tests need no podman, network or registry: `tests/stub/podman` replaces podman and records every call. Fake `curl` and `git ls-remote` replace the registries and GitHub, and `sync-skills.sh` clones a local repository. Each test works on a copy of agentbox's code in a scratch directory, never on your `config.toml` or `skills/`. The tests check what `run.sh` asks podman to do (sidecars, secrets, the session's mounts and arguments), the generated MCP configs, and the error paths.
 
-The tests need bash 4+ and git. The JSON checks need python3; without it, the tests skip them.
+The tests need bash 4+, git, `flock` and Python 3.11 or newer.
 
 Run the tests after you change `run.sh`, `lib/`, a module in `mcp/`, `check-updates.sh` or `sync-skills.sh`. If you add a new module or setting, add a test for it next to the existing tests in `tests/run.sh`.
 

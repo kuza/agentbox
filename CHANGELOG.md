@@ -4,6 +4,78 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.2.0
+
+- Your settings are in `config.toml`, a flat TOML file, not in
+  `config.env`. A list is an array (`AB_MCP = ["grafana", "bb4"]`), a flag
+  is `true` or `false`, and a number has no quotes. The settings of one
+  repository are in `env/<repo>.toml`, in the same form. `env/<repo>.env`
+  does not change. `config.toml.example` replaces `config.env.example`.
+- An environment variable still overrides a setting. In the environment, a
+  list is a string with spaces or commas (`AB_MCP="grafana bb4"`).
+- agentbox refuses a float, a date, a table, a quoted key and a multi-line
+  string, with the file and the line. Put versions in quotes:
+  `AB_PYTHON_VERSIONS = ["3.12", "3.13"]`. A key that agentbox and the
+  enabled modules do not know gets a warning with its line. The settings
+  of a module that is not enabled get no warning.
+- Skill sources, pi extension sources and egress groups are `.toml` files
+  with lowercase keys and arrays:
+  - a skill source: `url`, `only`, `prefix`, `ref`, `subdir`;
+  - a pi extension source: `url`, `ref`, `needs_skills`;
+  - an egress group: `hosts`. A host can have a comment on its line.
+
+  An unknown key, or a missing `url` (`hosts` in a group), is an error,
+  with its line.
+- The first start, or `agentbox setup`, converts your files one time:
+  - `config.env`, or the `.env` file of `AB_CONFIG`;
+  - `env/<repo>.conf`;
+  - the `.conf` files in `skills.local.d/`, `pi-extensions.local.d/` and
+    `egress.local.d/`.
+
+  The start names each converted file. In a source, a key that the new
+  format does not know becomes a comment, with a warning. In the settings
+  files, each key stays a setting. A flag or a number with a wrong value,
+  a line that is not `KEY=VALUE` and a second line of the same key become
+  a comment, with a warning. `converted.list` in `~/.config/agentbox`
+  (`AB_HOME`) lists the converted files. To convert a file again, remove
+  its line from the list (README, "Conversion to TOML").
+- While a `.conf` file of yours is not converted, agentbox does not use
+  the shared file of the same name in its place.
+- The conversion reads a skill or pi extension source with the parser of
+  `config.env`. This parser removes quotes, `export ` and a ` # note` at
+  the end, and it reads an indented line. The parser of sources in v0.1.x
+  did not. If your `.conf` had such a line, agentbox now uses its value
+  (an indented `REF=v1` now pins the source), and the first start syncs
+  that source one more time.
+- `agentbox setup` edits `config.toml` line by line. It keeps your
+  comments and the order of the lines. It does not change a key whose
+  value is on more than one line, and says why. It no longer writes
+  `config.env`.
+- agentbox needs Python 3.11 or newer on the host to start a session and
+  to run `agentbox setup`. `install.sh` checks for it and tells you how to
+  install it. `agentbox update`, `rollback` and `uninstall` work without
+  it. Without it, `agentbox uninstall --all` cannot read `GH_OWNERS`: it
+  keeps the `github_pat_<owner>` secrets and says so.
+- The conversion uses `flock` (util-linux), so that only one start
+  converts at a time.
+
+Action:
+
+- Read the converted files that the first start or `agentbox setup`
+  names. The old files stay unchanged until v0.3.0, for
+  `agentbox rollback`. After a rollback, v0.1.x reads only the old files,
+  and v0.2.0 reads only the TOML files.
+- If you do not have Python 3.11 or newer, install it before the update.
+  README, "Requirements", gives the package for Fedora, RHEL 9 and
+  Ubuntu 22.04.
+- If `AB_CONFIG` names a `.env` file, change it to the `.toml` file next
+  to it after the first start. Before a rollback, set it back to the
+  `.env` file: v0.1.x cannot read a TOML file.
+- If `AB_CONFIG` names a file without `.env`, do these steps before the
+  first start:
+  1. Copy the file to a name with the `.env` extension.
+  2. Set `AB_CONFIG` to the copy.
+
 ## v0.1.14
 
 - The settings of a module that is not enabled (for example, bb4 was
