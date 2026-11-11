@@ -1,0 +1,41 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    "dbhub": { "type": "http", "url": "http://ab-mcp-dbhub:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_DBHUB}" } }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+    "dbhub": { "url": "http://ab-mcp-dbhub:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_DBHUB}" }, "description": "SQL databases listed in dbhub.toml: schemas and queries (read-only)" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+dbhub http://ab-mcp-dbhub:8080/mcp
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-dbhub
+podman rm -f -v ab-mcp-dbhub
+podman run -d --replace --name ab-mcp-dbhub --label agentbox.config=<hash> --label agentbox.module=dbhub --network ab-internal --network ab-egress --secret dbhub_mcp_caller,type=env,target=DBHUB_AUTH_TOKEN -e DBHUB_ALLOWED_HOSTS=ab-mcp-dbhub -v <T>/home/.cache/agentbox/sidecars/ab-mcp-dbhub/dbhub.toml:/etc/dbhub/dbhub.toml:ro,Z docker.io/bytebase/dbhub:1.5.0 --transport http --port 8080 --config /etc/dbhub/dbhub.toml
+podman secret create dbhub_mcp_caller -
+== session
+NO_PROXY=ab-mcp-dbhub,ab-llm-openai
+dbhub_mcp_caller,type=env,target=AB_MCP_TOKEN_DBHUB
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-dbhub/dbhub.toml
+[[sources]]
+id = "billing"
+dsn = "postgres://ro:secret@db.example.internal:5432/billing"
+
+# Added by agentbox: read-only tools for each source.
+
+[[tools]]
+name = "execute_sql"
+source = "billing"
+readonly = true
+
+[[tools]]
+name = "search_objects"
+source = "billing"

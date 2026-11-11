@@ -1,0 +1,67 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    "tabularis": { "type": "http", "url": "http://ab-mcp-tabularis:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_TABULARIS}" } }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+    "tabularis": { "url": "http://ab-mcp-tabularis:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_TABULARIS}" }, "description": "Databases from your Tabularis connections: schemas and SQL queries" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-tabularis
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-tabularis-relay
+podman rm -f -v ab-mcp-tabularis
+podman rm -f -v ab-mcp-tabularis-relay
+podman run -d --replace --name ab-mcp-tabularis --label agentbox.config=<hash> --label agentbox.module=tabularis --network ab-internal --label agentbox.bridge=<hash> --secret tabularis_mcp_caller,type=env,target=TABULARIS_CALLER_TOKEN --secret tabularis_bridge_key,type=env,target=TABULARIS_BRIDGE_KEY -v ab-mcp-tabularis-sock:/run/tabularis -v <T>/home/.cache/agentbox/sidecars/ab-mcp-tabularis/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
+podman run -d --replace --name ab-mcp-tabularis-relay --label agentbox.config=<hash> --label agentbox.module=tabularis --network host --label agentbox.image=img-1 --user=0 --cap-drop=ALL --security-opt=no-new-privileges --read-only -v ab-mcp-tabularis-sock:/run/tabularis --entrypoint=socat localhost/agentbox UNIX-LISTEN:/run/tabularis/mcp.sock,fork,mode=666,unlink-early TCP:127.0.0.1:<port>
+podman secret create tabularis_bridge_key -
+podman secret create tabularis_mcp_caller -
+podman secret inspect tabularis_bridge_key
+podman secret rm tabularis_bridge_key
+systemctl --user is-active --quiet agentbox-mcp-tabularis.service
+systemctl --user show -p ControlGroup --value agentbox-mcp-tabularis.service
+systemctl --user show -p Description --value agentbox-mcp-tabularis.service
+systemctl --user stop agentbox-mcp-tabularis.service
+systemd-run --user --quiet --collect --unit=agentbox-mcp-tabularis --description=agentbox host service of tabularis [<hash>] --property=Restart=on-failure --property=RestartSec=5 --property=StartLimitIntervalSec=60 --property=StartLimitBurst=3 --setenv=PATH=<PATH> -- <T>/home/.cache/agentbox/tabularis/bridge-<hash>/node_modules/.bin/supergateway --stdio <T>/bin/tabularis --flag --mcp 2>/dev/null --outputTransport streamableHttp --stateful --host 127.0.0.1 --port <port> --apiKeyFile <T>/home/.cache/agentbox/tabularis/bridge.key --logLevel none
+tabularis http://ab-mcp-tabularis:8080/mcp
+== session
+NO_PROXY=ab-mcp-tabularis,ab-llm-openai
+tabularis_mcp_caller,type=env,target=AB_MCP_TOKEN_TABULARIS
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-tabularis/nginx.conf.template
+# nginx template, rendered by the official nginx image's envsubst entrypoint.
+# Only variables defined in the environment are substituted:
+#   TABULARIS_CALLER_TOKEN  the caller token the agent sends, from the podman
+#                           secret tabularis_mcp_caller (created by run.sh)
+#   TABULARIS_BRIDGE_KEY    supergateway's key, from the podman secret
+#                           tabularis_bridge_key (created by mcp/tabularis)
+# nginx's own variables ($http_authorization) are left untouched.
+server {
+    listen 8080;
+
+    location = /mcp {
+        if ($http_authorization != "Bearer ${TABULARIS_CALLER_TOKEN}") {
+            return 401;
+        }
+        # The relay's socket, forwarded to supergateway on the host.
+        proxy_pass http://unix:/run/tabularis/mcp.sock:/mcp;
+        proxy_set_header Authorization "Bearer ${TABULARIS_BRIDGE_KEY}";
+        proxy_set_header X-API-Key "";
+        proxy_set_header Host 127.0.0.1;
+
+        # Streamable HTTP: no buffering, allow long-running responses. A
+        # write waits for approval in the Tabularis window, 120 s by default.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location / { return 404; }
+}

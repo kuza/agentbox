@@ -1,0 +1,19 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+context7 https://mcp.context7.com/mcp
+== session
+NO_PROXY=ab-llm-openai

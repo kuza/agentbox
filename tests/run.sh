@@ -1683,6 +1683,139 @@ test_tabularis_errors() {
   return 0
 }
 
+# --- golden starts of the 8 shared modules (v0.2.1) -------------------------
+# Each test starts one shared module with fixed settings, and compares the
+# result with tests/golden/<module>. The golden file holds the MCP JSON for
+# Claude and for pi, the egress hosts, the stub calls of the module and its
+# session arguments (each part sorted), and each file that its sidecars mount
+# (as it is). golden_dump replaces the values that change from run to run.
+# If a change of a module changes its start on purpose, do these steps:
+#   1. Write the golden files again: GOLDEN_UPDATE=1 bash tests/run.sh golden
+#      (all 8: each start also holds context7).
+#   2. Read the diff of tests/golden/<module>.
+#   3. Name each change in the ticket.
+#   4. Commit the golden file with the change.
+
+# golden_setup <test name>: setup with no egress groups. With the agent pi
+# (golden_check), the egress hosts are only those of the modules.
+golden_setup() {
+  setup "$1"
+  config "AB_EGRESS="
+}
+
+# golden_check <module>: a start, then its dump against tests/golden/<module>.
+golden_check() {
+  local want="$ROOT/tests/golden/$1" got="$T/golden"
+  ab_run AB_AGENT=pi AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  assert_json "$(cache mcp-claude.json)"
+  assert_json "$(cache mcp-pi.json)"
+  golden_dump "$1" > "$got"
+  # A template that the harness could not copy (SELinux label, see setup)
+  # is a placeholder: say so, and never write it into a golden file.
+  if grep -qx '# placeholder' "$got"; then
+    fail "a mounted file is a placeholder of the test harness: tests/golden/$1 not compared"
+    return 0
+  fi
+  if [[ "${GOLDEN_UPDATE:-}" == 1 && "$RC" == 0 ]]; then
+    cp "$got" "$want"
+  elif ! diff -u "$want" "$got" > "$T/golden.diff"; then
+    fail "the start differs from tests/golden/$1 (-golden, +start):"$'\n'"$(sed 's/^/      | /' "$T/golden.diff")"
+  fi
+}
+
+# golden_dump <module>: what the last start gave, with the values that
+# change from run to run replaced.
+golden_dump() {
+  local f T_RE
+  # $T as a sed pattern: its . and other special characters escaped.
+  T_RE="$(printf '%s' "$T" | sed 's/[][\\.*^$|/]/\\&/g')"
+  {
+    for f in mcp-claude.json mcp-pi.json squid-allow.conf; do
+      echo "== $f"
+      grep -v '^#' "$(cache "$f")" | sed 's/,$//' | LC_ALL=C sort
+    done
+    # The calls that name the module. A program text in one argument puts
+    # more lines in the calls file: the filter drops them, but keeps the
+    # "<server> <url>" lines of AB_MCP_MANAGED. The session line holds the
+    # caller tokens (target=AB_MCP_TOKEN_*): the next part shows it.
+    echo "== calls"
+    # The home volume prep of the session holds AB_MCP_MANAGED: keep only
+    # its "<server> <url>" lines, as for the other modules.
+    grep -E '^(podman|systemd-run|systemctl) |^[a-z0-9-]+ https?://[^ ]+$' "$STUB_DIR/calls" \
+      | sed -e 's/^podman run .* -e AB_MCP_MANAGED=//' -e "s|$T_RE|<T>|g" -e 's/ -c """.*/ -c <program>/' | grep -F -- "$1" \
+      | grep -v 'target=AB_MCP_TOKEN_' | LC_ALL=C sort
+    echo "== session"
+    session_args | grep -E 'AB_MCP_TOKEN_|^NO_PROXY=' | LC_ALL=C sort
+    # Each file that a sidecar of a module mounts: a replaced
+    # agentbox.config hash must not hide a change of its content.
+    while IFS= read -r f; do
+      [[ -f "$f" ]] || continue
+      echo "== $f"
+      cat "$f"
+    done < <(grep '^podman run -d --replace --name ab-mcp-' "$STUB_DIR/calls" | grep -oE ' -v /[^:]+' | cut -c5- | LC_ALL=C sort -u)
+  } | # agentbox.build: the bb4 image hash changes with each update of its package-lock.json.
+    sed -E -e "s|$T_RE|<T>|g" -e 's/(agentbox\.(config|bridge|build)=)[0-9a-f]+/\1<hash>/g' \
+        -e 's/\[[0-9a-f]{16}\]/[<hash>]/; s/bridge-[0-9a-f]{16}/bridge-<hash>/; s/--setenv=PATH=[^ ]*/--setenv=PATH=<PATH>/' \
+        ${TAB_PORT:+-e "s/\\b$TAB_PORT\\b/<port>/g"}
+}
+
+test_golden_context7() {
+  golden_setup "${FUNCNAME[0]}"
+  golden_check context7
+}
+
+test_golden_grafana() {
+  golden_setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example.internal/"
+  secrets grafana_sa
+  golden_check grafana
+}
+
+test_golden_graylog() {
+  golden_setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example.internal/graylog/api/"
+  secrets graylog_basic
+  golden_check graylog
+}
+
+test_golden_woodpecker() {
+  golden_setup "${FUNCNAME[0]}"
+  printf '%s\n' "-----BEGIN CERTIFICATE-----" "golden" "-----END CERTIFICATE-----" > "$T/ca.pem"
+  config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example.internal/api" "WOODPECKER_CA=$T/ca.pem"
+  secrets woodpecker_token
+  golden_check woodpecker
+}
+
+test_golden_bb4() {
+  golden_setup "${FUNCNAME[0]}"
+  config "AB_MCP=bb4" "BB4_URL=http://browser.example.internal:5101/" "BB4_USER=octo-cat" "BB4_DEVTOOLS_PORT=6100"
+  golden_check bb4
+}
+
+test_golden_github() {
+  golden_setup "${FUNCNAME[0]}"
+  config "AB_MCP=github" 'GH_OWNERS = ["MyOrg", "other-org"]' "GH_TOOLSETS=repos,issues"
+  secrets github_pat github_pat_myorg github_pat_other-org
+  golden_check github
+}
+
+test_golden_dbhub() {
+  # The stub runs config.py with the python3 of the host (tomllib: 3.11+).
+  python3 -c 'import tomllib' 2>/dev/null || { echo "  (skipped: needs Python 3.11+ for tomllib)"; return 0; }
+  golden_setup "${FUNCNAME[0]}"
+  config "AB_MCP=dbhub"
+  printf '%s\n' '[[sources]]' 'id = "billing"' 'dsn = "postgres://ro:secret@db.example.internal:5432/billing"' > "$CFG/dbhub.toml"
+  chmod 600 "$CFG/dbhub.toml"
+  golden_check dbhub
+}
+
+test_golden_tabularis() {
+  tab_setup "${FUNCNAME[0]}"
+  config "AB_EGRESS=" "TABULARIS_CMD=$T/bin/tabularis --flag"
+  golden_check tabularis
+}
+
 test_skill_sources_same_repository() {
   ss_setup "${FUNCNAME[0]}"
   src_conf skills.d a "url = '$SRC'" "only = ['tdd']"

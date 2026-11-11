@@ -1,0 +1,69 @@
+== mcp-claude.json
+    "bb4": { "type": "http", "url": "http://browser.example.internal:5101/u/octo-cat/mcp" }
+    "bb4-devtools": { "type": "http", "url": "http://ab-mcp-bb4:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_BB4}" } }
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "bb4": { "url": "http://browser.example.internal:5101/u/octo-cat/mcp", "description": "The remote browser on the browser server: start it, set it up" }
+    "bb4-devtools": { "url": "http://ab-mcp-bb4:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_BB4}" }, "description": "Pages in the remote browser: open, read, click, type, screenshots" }
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl ab_host_1 dstdomain browser.example.internal
+acl ab_port_1 port 5101
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+http_access allow ab_host_1 ab_port_1
+== calls
+bb4 http://browser.example.internal:5101/u/octo-cat/mcp
+bb4-devtools http://ab-mcp-bb4:8080/mcp
+podman image exists localhost/agentbox-bb4-devtools
+podman images -q --filter reference=localhost/agentbox-bb4-devtools --filter label=agentbox.build=<hash>
+podman inspect -f {{.Id}} ab-mcp-bb4-devtools
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-bb4
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-bb4-devtools
+podman rm -f -v ab-mcp-bb4
+podman rm -f -v ab-mcp-bb4-devtools
+podman run -d --replace --name ab-mcp-bb4 --label agentbox.config=<hash> --label agentbox.module=bb4 --network ab-internal --network ab-egress --label agentbox.upstream=ab-mcp-bb4-devtools-1 --secret bb4_mcp_caller,type=env,target=BB4_CALLER_TOKEN --secret bb4_bridge_key,type=env,target=BB4_BRIDGE_KEY -v <T>/home/.cache/agentbox/sidecars/ab-mcp-bb4/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
+podman run -d --replace --name ab-mcp-bb4-devtools --label agentbox.config=<hash> --label agentbox.module=bb4 --network ab-egress --secret bb4_bridge_key localhost/agentbox-bb4-devtools --stdio chrome-devtools-mcp --wsEndpoint=ws://browser.example.internal:6100/u/octo-cat/devtools/browser --no-usage-statistics --no-performance-crux --outputTransport streamableHttp --stateful --host 0.0.0.0 --port 8000 --apiKeyFile /run/secrets/bb4_bridge_key --logLevel none
+podman secret create bb4_bridge_key -
+podman secret create bb4_mcp_caller -
+== session
+NO_PROXY=ab-mcp-bb4,ab-llm-openai
+bb4_mcp_caller,type=env,target=AB_MCP_TOKEN_BB4
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-bb4/nginx.conf.template
+# nginx template for ab-mcp-bb4, rendered by the official nginx image's
+# envsubst entrypoint. Only variables defined in the environment are
+# substituted:
+#   BB4_CALLER_TOKEN  the caller token the agent sends, from the podman
+#                     secret bb4_mcp_caller (created by run.sh)
+#   BB4_BRIDGE_KEY    supergateway's key in ab-mcp-bb4-devtools, from the
+#                     podman secret bb4_bridge_key (created by mcp/bb4)
+# nginx's own variables ($http_authorization) are left untouched.
+server {
+    listen 8080;
+
+    location = /mcp {
+        if ($http_authorization != "Bearer ${BB4_CALLER_TOKEN}") {
+            return 401;
+        }
+        proxy_pass http://ab-mcp-bb4-devtools:8000/mcp;
+        proxy_set_header Authorization "Bearer ${BB4_BRIDGE_KEY}";
+        proxy_set_header X-API-Key "";
+        proxy_set_header Host 127.0.0.1;
+
+        # Streamable HTTP: no buffering, allow long-running responses (a page
+        # that loads slowly, a trace).
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location / { return 404; }
+}

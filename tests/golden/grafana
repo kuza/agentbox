@@ -1,0 +1,26 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    "grafana": { "type": "http", "url": "http://ab-mcp-grafana:8000/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GRAFANA}" } }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+    "grafana": { "url": "http://ab-mcp-grafana:8000/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GRAFANA}" }, "description": "Grafana dashboards, alerts and Prometheus/Loki queries (read-only)" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+grafana http://ab-mcp-grafana:8000/mcp
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-grafana
+podman rm -f -v ab-mcp-grafana
+podman run -d --replace --name ab-mcp-grafana --label agentbox.config=<hash> --label agentbox.module=grafana --network ab-internal --network ab-egress -e GRAFANA_URL=https://grafana.example.internal -e GRAFANA_USAGE_STATS=disabled --secret grafana_sa,type=env,target=GRAFANA_SERVICE_ACCOUNT_TOKEN --secret grafana_mcp_caller,type=env,target=MCP_GRAFANA_SERVER_TOKEN docker.io/grafana/mcp-grafana:latest -t streamable-http --address 0.0.0.0:8000 --allowed-hosts ab-mcp-grafana:8000,ab-mcp-grafana --disable-write
+podman secret create grafana_mcp_caller -
+== session
+NO_PROXY=ab-mcp-grafana,ab-llm-openai
+grafana_mcp_caller,type=env,target=AB_MCP_TOKEN_GRAFANA

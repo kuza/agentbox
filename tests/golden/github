@@ -1,0 +1,127 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    "github": { "type": "http", "url": "http://ab-mcp-github:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" } }
+    "github-myorg": { "type": "http", "url": "http://ab-mcp-github:8080/o/myorg/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" } }
+    "github-other-org": { "type": "http", "url": "http://ab-mcp-github:8080/o/other-org/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" } }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+    "github": { "url": "http://ab-mcp-github:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" }, "description": "GitHub: pull requests, issues, CI runs and contents of the repositories of the github_pat token" }
+    "github-myorg": { "url": "http://ab-mcp-github:8080/o/myorg/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" }, "description": "GitHub: pull requests, issues, CI runs and contents of the repositories of myorg" }
+    "github-other-org": { "url": "http://ab-mcp-github:8080/o/other-org/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GITHUB}" }, "description": "GitHub: pull requests, issues, CI runs and contents of the repositories of other-org" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+github http://ab-mcp-github:8080/mcp
+github-myorg http://ab-mcp-github:8080/o/myorg/mcp
+github-other-org http://ab-mcp-github:8080/o/other-org/mcp
+podman inspect -f {{.Id}} ab-mcp-github-srv
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-github
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-github-srv
+podman rm -f -v ab-mcp-github
+podman rm -f -v ab-mcp-github-srv
+podman run -d --replace --name ab-mcp-github --label agentbox.config=<hash> --label agentbox.module=github --network ab-internal --network ab-egress --label agentbox.upstream=ab-mcp-github-srv-1 -e GH_TOOLSETS=repos,issues --secret github_pat,type=env,target=GH_PAT --secret github_pat_myorg,type=env,target=GH_PAT_1 --secret github_pat_other-org,type=env,target=GH_PAT_2 --secret github_mcp_caller,type=env,target=GH_CALLER_TOKEN -v <T>/home/.cache/agentbox/sidecars/ab-mcp-github/default.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
+podman run -d --replace --name ab-mcp-github-srv --label agentbox.config=<hash> --label agentbox.module=github --network ab-egress ghcr.io/github/github-mcp-server:latest http
+podman secret create github_mcp_caller -
+== session
+NO_PROXY=ab-mcp-github,ab-mcp-github,ab-mcp-github,ab-llm-openai
+github_mcp_caller,type=env,target=AB_MCP_TOKEN_GITHUB
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-github/default.conf.template
+# nginx template, rendered by the official nginx image's envsubst entrypoint.
+# Sits between Claude and github-mcp-server:
+#   - checks the caller's bearer token (GH_CALLER_TOKEN),
+#   - replaces it with the GitHub PAT (GH_PAT), which Claude never sees,
+#   - pins server behaviour headers so the client cannot change them.
+# Only variables defined in the environment are substituted; nginx's own
+# variables ($http_authorization, $proxy_host) are left untouched.
+# mcp.sh repeats the account block for each owner in GH_OWNERS, at
+# /o/<owner>/mcp with that owner's PAT (GH_PAT_<n>).
+server {
+    listen 8080;
+
+    # --- account ---
+    location = /mcp {
+        if ($http_authorization != "Bearer ${GH_CALLER_TOKEN}") {
+            return 401;
+        }
+
+        # Fixed upstream path: the client cannot reach /readonly or /x/<toolset>.
+        proxy_pass http://ab-mcp-github-srv:8082/;
+        proxy_set_header Authorization "Bearer ${GH_PAT}";
+        proxy_set_header Host $proxy_host;
+
+        # Server behaviour, enforced here. An empty value removes the header,
+        # so client-supplied overrides are dropped.
+        proxy_set_header X-MCP-Toolsets "${GH_TOOLSETS}";
+        proxy_set_header X-MCP-Lockdown "true";
+        proxy_set_header X-MCP-Readonly "";
+        proxy_set_header X-MCP-Tools "";
+        proxy_set_header X-MCP-Insiders "";
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+    # --- end account ---
+    # --- account ---
+    location = /o/myorg/mcp {
+        if ($http_authorization != "Bearer ${GH_CALLER_TOKEN}") {
+            return 401;
+        }
+
+        # Fixed upstream path: the client cannot reach /readonly or /x/<toolset>.
+        proxy_pass http://ab-mcp-github-srv:8082/;
+        proxy_set_header Authorization "Bearer ${GH_PAT_1}";
+        proxy_set_header Host $proxy_host;
+
+        # Server behaviour, enforced here. An empty value removes the header,
+        # so client-supplied overrides are dropped.
+        proxy_set_header X-MCP-Toolsets "${GH_TOOLSETS}";
+        proxy_set_header X-MCP-Lockdown "true";
+        proxy_set_header X-MCP-Readonly "";
+        proxy_set_header X-MCP-Tools "";
+        proxy_set_header X-MCP-Insiders "";
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+    # --- end account ---
+    # --- account ---
+    location = /o/other-org/mcp {
+        if ($http_authorization != "Bearer ${GH_CALLER_TOKEN}") {
+            return 401;
+        }
+
+        # Fixed upstream path: the client cannot reach /readonly or /x/<toolset>.
+        proxy_pass http://ab-mcp-github-srv:8082/;
+        proxy_set_header Authorization "Bearer ${GH_PAT_2}";
+        proxy_set_header Host $proxy_host;
+
+        # Server behaviour, enforced here. An empty value removes the header,
+        # so client-supplied overrides are dropped.
+        proxy_set_header X-MCP-Toolsets "${GH_TOOLSETS}";
+        proxy_set_header X-MCP-Lockdown "true";
+        proxy_set_header X-MCP-Readonly "";
+        proxy_set_header X-MCP-Tools "";
+        proxy_set_header X-MCP-Insiders "";
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+    # --- end account ---
+
+    location / { return 404; }
+}

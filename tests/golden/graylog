@@ -1,0 +1,56 @@
+== mcp-claude.json
+    "context7": { "type": "http", "url": "https://mcp.context7.com/mcp" }
+    "graylog": { "type": "http", "url": "http://ab-mcp-graylog:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GRAYLOG}" } }
+  "mcpServers": {
+  }
+{
+}
+== mcp-pi.json
+    "context7": { "url": "https://mcp.context7.com/mcp", "description": "Current library documentation and code examples, by library and version" }
+    "graylog": { "url": "http://ab-mcp-graylog:8080/mcp", "headers": { "Authorization": "Bearer ${AB_MCP_TOKEN_GRAYLOG}" }, "description": "Search and analyse logs in Graylog (read-only)" }
+  "mcpServers": {
+  }
+{
+}
+== squid-allow.conf
+acl allowed dstdomain .invalid
+acl allowed dstdomain mcp.context7.com
+== calls
+graylog http://ab-mcp-graylog:8080/mcp
+podman inspect -f {{.State.Running}}|{{index .Config.Labels "agentbox.config"}}|{{.ImageName}}|{{.Image}} ab-mcp-graylog
+podman rm -f -v ab-mcp-graylog
+podman run -d --replace --name ab-mcp-graylog --label agentbox.config=<hash> --label agentbox.module=graylog --network ab-internal --network ab-egress -e GRAYLOG_URL=https://graylog.example.internal/graylog --secret graylog_basic,type=env,target=GRAYLOG_BASIC --secret graylog_mcp_caller,type=env,target=GRAYLOG_CALLER_TOKEN -v <T>/home/.cache/agentbox/sidecars/ab-mcp-graylog/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
+podman secret create graylog_mcp_caller -
+== session
+NO_PROXY=ab-mcp-graylog,ab-llm-openai
+graylog_mcp_caller,type=env,target=AB_MCP_TOKEN_GRAYLOG
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-graylog/nginx.conf.template
+# nginx template, rendered by the official nginx image's envsubst entrypoint.
+# Only variables defined in the environment are substituted:
+#   GRAYLOG_URL    Graylog base URL (from run.sh)
+#   GRAYLOG_BASIC  base64("<api-token>:token"), from the podman secret
+#   GRAYLOG_CALLER_TOKEN  the caller token the agent sends, from the podman
+#                  secret graylog_mcp_caller (created by run.sh)
+# nginx's own variables (e.g. $proxy_host) are left untouched.
+server {
+    listen 8080;
+
+    location = /mcp {
+        if ($http_authorization != "Bearer ${GRAYLOG_CALLER_TOKEN}") {
+            return 401;
+        }
+        proxy_pass ${GRAYLOG_URL}/api/mcp;
+        proxy_set_header Authorization "Basic ${GRAYLOG_BASIC}";
+        proxy_set_header Host $proxy_host;
+        # Graylog's CSRF protection requires this header on non-GET API calls.
+        proxy_set_header X-Requested-By agentbox;
+        proxy_ssl_server_name on;
+
+        # Streamable HTTP: no buffering, allow long-running responses.
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+
+    location / { return 404; }
+}
