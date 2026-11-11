@@ -520,6 +520,36 @@ test_mcp_server_names_and_urls_checked() {
   grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its server's URL setting emptied"
 }
 
+# mcp_load on its own: the status codes, the normalized variables, and
+# mcp_names (each module once, yours first).
+test_mcp_load_status() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/mcp.local/a" "$CFG/mcp.local/broken" "$CFG/mcp.local/grafana"
+  printf '%s\n' 'MCP_URL=https://a.example/mcp' 'MCP_DESCRIPTION=A' 'MCP_CALLER_SECRET=a_caller' \
+    'MCP_SECRET_HELP=("a_tok: what to type: a token")' > "$CFG/mcp.local/a/mcp.sh"
+  printf 'MCP_URL=https://a.example/mcp\nif\n' > "$CFG/mcp.local/broken/mcp.sh"
+  printf 'MCP_URL=https://g.example/mcp\n' > "$CFG/mcp.local/grafana/mcp.sh"
+  local out
+  out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/mcp.sh"
+    rc=0; mcp_load nope || rc=$?; echo "nope $rc $MCP_PROBLEM"
+    rc=0; mcp_load broken --declared || rc=$?; echo "broken $rc $MCP_PROBLEM"
+    rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
+    rc=0; mcp_load grafana || rc=$?; echo "grafana $rc ${MCP_SERVERS[*]} ${#MCP_SECRET_HELP_OF[@]}"
+    rc=0; mcp_load github || rc=$?; echo "github $rc ${MCP_SERVERS[0]%%|*}"
+    echo "names $(mcp_names | tr '\n' ' ')" )"
+  assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for $CFG/mcp.local/nope/mcp.sh and mcp/nope/mcp.sh)"
+  assert_eq "$(sed -n 2p <<<"$out")" "broken 2 its mcp.sh does not parse (bash -n $CFG/mcp.local/broken/mcp.sh)"
+  assert_eq "$(sed -n 3p <<<"$out")" "a 0 a|https://a.example/mcp|caller|A what to type: a token"
+  assert_eq "$(sed -n 4p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|| 0" "yours wins"
+  assert_eq "$(sed -n 5p <<<"$out")" "github 0 github"
+  local names; names="$(sed -n 6p <<<"$out")"
+  [[ "$names" == "names a broken grafana "* ]] || fail "yours not first: $names"
+  [[ "$names" == *" context7 "* ]] || fail "no shared module: $names"
+  (( $(grep -o ' grafana ' <<<"$names" | wc -l) == 1 )) || fail "grafana not once: $names"
+}
+
 test_mcp_missing_setting() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=grafana"
@@ -2533,6 +2563,9 @@ test_uninstall() {
   # A module of yours: indented, in single quotes, ${VAR}.
   mkdir -p "$CFG/mcp.local/mine"
   printf '%s\n' "  MINE_IMAGE='ghcr.io/me/mine:1'" "  MCP_IMAGES=(\"\${MINE_IMAGE}\" 'ghcr.io/me/other:2')" > "$CFG/mcp.local/mine/mcp.sh"
+  # A module of yours that replaces a shared one: the images of both go.
+  mkdir -p "$CFG/mcp.local/grafana"
+  echo "MCP_IMAGES=(ghcr.io/me/grafana:1)" > "$CFG/mcp.local/grafana/mcp.sh"
   mkdir -p "$T/home/.cache/agentbox"
   echo "localhost/agentbox old-image-id" > "$T/home/.cache/agentbox/retired-images"
   : > "$STUB_DIR/calls"
@@ -2547,7 +2580,7 @@ test_uninstall() {
   grep -qx 'podman rmi old-image-id' "$STUB_DIR/calls" || fail "replaced image left behind"
   local img
   for img in docker.io/grafana/mcp-grafana:latest docker.io/bytebase/dbhub:1.5.0 ghcr.io/rtuszik/woodpecker-mcp:0.5.3 \
-             ghcr.io/me/mine:1 ghcr.io/me/other:2; do
+             ghcr.io/me/mine:1 ghcr.io/me/other:2 ghcr.io/me/grafana:1; do
     grep -qx "podman rmi $img" "$STUB_DIR/calls" || fail "module image $img left behind"
   done
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "claude_oauth grafana_sa grafana_mcp_caller tabularis_bridge_key github_pat_myorg github_pat_ci mine" "secrets kept"

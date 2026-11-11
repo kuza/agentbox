@@ -59,7 +59,7 @@ setup_prime() {
     SETUP_INFO[$n]="$info"
     read -ra more <<<"$(sed -n 2p <<<"$info")"
     keys+=(${more[@]+"${more[@]}"})
-  done < <(setup_names mcp "${MCP_DIRS[@]}")
+  done < <(mcp_names | sort)
   # A file with an error gives no values; the menu shows the error and continues.
   err="$(mktemp)" || return 1
   while IFS= read -r line; do
@@ -76,7 +76,7 @@ setup_prime() {
   # Again, now with the values of config.toml: a module's secrets can follow
   # a setting there (github: GH_OWNERS).
   SETUP_INFO=()
-  while IFS= read -r n; do setup_module_info "$n" >/dev/null || true; done < <(setup_names mcp "${MCP_DIRS[@]}")
+  while IFS= read -r n; do setup_module_info "$n" >/dev/null || true; done < <(mcp_names | sort)
   # Read anew after each save: a secret stored in a pipeline (setup_save)
   # does not reach this shell's list. A failed listing marks none, and the
   # menu still works on config.toml.
@@ -151,20 +151,15 @@ setup_describe() {  # <egress|skill|piext> <file>
   echo "$text"
 }
 
-# Names of <dir>/*.<extension> or <dir>/*/mcp.sh over all <dirs>, sorted,
-# once each. For toml, also each old file of yours (the first dir) that is
-# not converted (lib/convert.sh).
-setup_names() {  # <toml|mcp> <dirs: yours, then shared>
+# Names of <dir>/*.toml over all <dirs>, sorted, once each, and each old
+# file of yours (the first dir) that is not converted (lib/convert.sh).
+setup_names() {  # <extension> <dirs: yours, then shared>
   local ext="$1" d f yours="$2"
   shift
   for d in "$@"; do
-    if [[ "$ext" == mcp ]]; then
-      for f in "$d"/*/mcp.sh; do [[ -f "$f" ]] && basename "$(dirname "$f")"; done
-    else
-      for f in "$d"/*."$ext"; do [[ -f "$f" ]] && basename "$f" ".$ext"; done
-      if [[ "$ext" == toml && "$d" == "$yours" ]]; then
-        for f in "$d"/*.conf; do convert_pending "$f" && basename "$f" .conf; done
-      fi
+    for f in "$d"/*."$ext"; do [[ -f "$f" ]] && basename "$f" ".$ext"; done
+    if [[ "$ext" == toml && "$d" == "$yours" ]]; then
+      for f in "$d"/*.conf; do convert_pending "$f" && basename "$f" .conf; done
     fi
   done | sort -u
 }
@@ -172,16 +167,18 @@ setup_names() {  # <toml|mcp> <dirs: yours, then shared>
 
 # A module's description, settings, required settings, secrets and secret
 # help (entries split by a tab), read in a subshell, so that a broken module
-# of yours does not end the menu. 1 if it cannot be read.
+# of yours does not end the menu. 1 if it cannot be read (mcp_load status 2
+# or more).
 setup_module_info() {  # <name>: five lines
   if [[ -z "${SETUP_INFO[$1]+x}" ]]; then
     SETUP_INFO[$1]="$(
-      mcp_parses "$1" || exit 1
-      mcp_load "$1" >/dev/null 2>&1 || exit 1
+      rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
+      (( rc <= 1 )) || exit 1
       # Its settings as they are now in the menu, then again: secrets and
       # servers can follow a setting (github: GH_OWNERS).
       setup_apply_settings ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}
-      mcp_load "$1" >/dev/null 2>&1 || exit 1
+      rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
+      (( rc <= 1 )) || exit 1
       echo "${MCP_DESCRIPTION:-}"
       echo "${MCP_CONFIG[*]-}"
       echo "${MCP_REQUIRED_CONFIG[*]-}"
@@ -206,11 +203,12 @@ setup_secret_help() {  # <module> <secret>: what to type, from MCP_SECRET_HELP
 }
 
 # The value of secret <secret> for what was typed: the module's
-# mcp_secret_value, or as typed.
+# mcp_secret_value, or as typed. Also at mcp_load status 1: you can type
+# the token before the setting is saved.
 setup_secret_value() {  # <module> <secret> <typed>
   (
-    mcp_parses "$1" || exit 1
-    mcp_load "$1" >/dev/null 2>&1 || exit 1
+    rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
+    (( rc <= 1 )) || exit 1
     if declare -F mcp_secret_value >/dev/null; then mcp_secret_value "$2" "$3"; else printf '%s' "$3"; fi
   )
 }
@@ -319,12 +317,14 @@ setup_module_problem() {  # <name>
 
 setup_module_problem_now() {  # <name>
   (
-    local k v
+    local k v rc
     setup_module_info "$1" >/dev/null || exit 0
     # shellcheck disable=SC2046  # the keys are words
     setup_apply_settings $(setup_module_line "$1" 2)
     for k in $(setup_module_line "$1" 3); do [[ -n "${!k:-}" ]] || exit 0; done
-    mcp_load "$1" >/dev/null 2>&1
+    rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
+    (( rc == 1 )) && { echo "$MCP_PROBLEM"; exit 0; }
+    (( rc == 0 )) || exit 0
     if declare -F mcp_check >/dev/null; then
       v="$(mcp_check 2>/dev/null || true)"; v="${v%%$'\n'*}"
       [[ -z "$v" ]] || { echo "$v"; exit 0; }
@@ -377,7 +377,7 @@ setup_module_status() {  # <name> <n>
 setup_entries() {
   local n
   # Line by line: a file name with a space or * stays one name.
-  while IFS= read -r n; do [[ "$n" == context7 ]] || echo "mcp $n"; done < <(setup_names mcp "${MCP_DIRS[@]}")
+  while IFS= read -r n; do [[ "$n" == context7 ]] || echo "mcp $n"; done < <(mcp_names | sort)
   while IFS= read -r n; do echo "skill $n"; done < <(setup_names toml "${SKILLS_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "piext $n"; done < <(setup_names toml "${PI_EXTENSION_SOURCE_DIRS[@]}")
   while IFS= read -r n; do echo "egress $n"; done < <(setup_names toml "${EGRESS_DIRS[@]}")
@@ -562,7 +562,7 @@ setup_save() {
   # for an owner that was then taken out of GH_OWNERS is not stored, and
   # the save says so.
   local wanted=" " m
-  while IFS= read -r m; do wanted+="$(setup_module_line "$m" 4) "; done < <(setup_names mcp "${MCP_DIRS[@]}")
+  while IFS= read -r m; do wanted+="$(setup_module_line "$m" 4) "; done < <(mcp_names | sort)
   for name in "${!SETUP_SECRETS[@]}"; do
     if [[ "$wanted" != *" $name "* ]]; then
       echo "agentbox: not storing the Podman secret $name: no module uses it now"

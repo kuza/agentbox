@@ -62,6 +62,8 @@ case "${1:-}" in
     source "$SCRIPT_DIR/lib/toml.sh"
     # shellcheck source=lib/sidecars.sh
     source "$SCRIPT_DIR/lib/sidecars.sh"
+    # shellcheck source=lib/mcp.sh
+    source "$SCRIPT_DIR/lib/mcp.sh"
     # shellcheck source=lib/uninstall.sh
     source "$SCRIPT_DIR/lib/uninstall.sh"
     agentbox_uninstall "$@" ;;

@@ -13,8 +13,17 @@
 # completion, and the installed versions. Secrets: those
 # agentbox and its modules use.
 # Your files: <AB_HOME> (config.toml, env/ with passwords, skills, ...).
-# Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh, IMG_* from lib/config.sh and
-# lib/sidecars.sh.
+# Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh, IMG_* from lib/config.sh,
+# lib/sidecars.sh and lib/mcp.sh (mcp_names).
+
+# The mcp.sh of each module of mcp_names: yours and the shared one, also
+# when yours replaces it. Images and secrets of both can be on the host.
+uninstall_mcp_files() {
+  local n d
+  while IFS= read -r n; do
+    for d in "${MCP_DIRS[@]}"; do [[ ! -f "$d/$n/mcp.sh" ]] || printf '%s\n' "$d/$n/mcp.sh"; done
+  done < <(mcp_names)
+}
 
 # Values of an MCP_ variable in all modules, read as text, not run: names
 # like grafana_sa or images like ghcr.io/x/y:tag, in "", '' or no quotes,
@@ -24,8 +33,7 @@
 # anyway.
 uninstall_names() {  # <MCP_ variable>
   local f v vals
-  for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
-    [[ -f "$f" ]] || continue
+  while IFS= read -r f; do
     # Split, never globbed; a trailing comment is not a name.
     read -ra vals <<<"$(sed -n "s/^[[:space:]]*$1=//p" "$f" | sed 's/[[:space:]]#.*//' | tr -d "()\"'" | tr '\n' ' ')"
     for v in ${vals[@]+"${vals[@]}"}; do
@@ -35,7 +43,7 @@ uninstall_names() {  # <MCP_ variable>
         printf '%s\n' "$v"
       fi
     done
-  done | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
+  done < <(uninstall_mcp_files) | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
 }
 
 # The Podman secrets whose names come from a setting of a module:
@@ -69,10 +77,9 @@ uninstall_secrets_by_setting() {
   # cannot be read gives an error, and its secrets stay.
   if [[ -n "$known" && -f "$path" ]] && ! toml_load config "$path" values; then known=""; fi
   rm -f -- "$tmp"
-  for f in "$SCRIPT_DIR"/mcp/*/mcp.sh "$USER_MCP_DIR"/*/mcp.sh; do
-    [[ -f "$f" ]] || continue
+  while IFS= read -r f; do
     sed -n 's/^[[:space:]]*MCP_SECRETS_BY_SETTING=(\(.*\))[[:space:]]*$/\1/p' "$f" | tr -d "\"'"
-  done | while read -r key prefix; do
+  done < <(uninstall_mcp_files) | while read -r key prefix; do
     [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ ]] || continue
     if [[ -z "$known" ]]; then
       echo "agentbox: agentbox cannot read $key in $file, so it keeps any secrets $prefix<name>. If you have such secrets, remove them yourself (podman secret ls)." >&2

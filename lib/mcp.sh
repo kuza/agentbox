@@ -81,38 +81,76 @@ mcp_find() {  # <name>: prints the module's directory; 1 if there is none
   return 1
 }
 
-# 0 if module <name>'s mcp.sh parses (bash -n). Checked once, by mcp_init
-# and agentbox setup: mcp_load sources it without asking again.
-mcp_parses() {  # <name> [its directory, from mcp_find]
-  local dir="${2:-}"
-  [[ -n "$dir" ]] || dir="$(mcp_find "$1")" || return 1
-  bash -n "$dir/mcp.sh" 2>/dev/null
+# Each module once, yours first: a directory with an mcp.sh.
+mcp_names() {
+  local d f name
+  local -A found=()
+  for d in "${MCP_DIRS[@]}"; do
+    for f in "$d"/*/mcp.sh; do
+      name="${f%/mcp.sh}"; name="${name##*/}"
+      [[ -f "$f" && -z "${found[$name]+x}" ]] || continue
+      found[$name]=1
+      printf '%s\n' "$name"
+    done
+  done
 }
 
-mcp_load() {  # <name>: source the module, resetting the MCP_* variables first
+# 0 if the mcp.sh in <directory> parses (bash -n).
+mcp_parses() {  # <name> <its directory, from mcp_find>
+  bash -n "$2/mcp.sh" 2>/dev/null
+}
+
+# Loads again a module that mcp_check_secrets let through (status 0). A
+# module that changed during the start stops the start, as before.
+mcp_load_again() {  # <name>
+  mcp_load "$1" && return 0
+  echo "error: MCP module '$1': $MCP_PROBLEM" >&2
+  exit 2
+}
+
+# Reads module <name> into the MCP_* variables, reset first. It never
+# exits. Status: 0 usable, 1 a setting fails or is missing, 2 broken, 3 no
+# Python, 4 no such module. MCP_PROBLEM gives the reason.
+# A module with only mcp.sh gives 0, 2 or 4. mcp_load sources its mcp.sh,
+# also with --declared. MCP_SERVERS always has the servers.
+# MCP_SECRET_HELP_OF[<secret>] holds the text of each MCP_SECRET_HELP line.
+mcp_load() {  # <name> [--declared]
+  local h
   unset -f mcp_start mcp_secret_value mcp_check
+  MCP_PROBLEM=""; MCP_ONE_SERVER=""
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
+  declare -gA MCP_SECRET_HELP_OF=()
   if ! MCP_DIR="$(mcp_find "$1")"; then
-    echo "error: AB_MCP: no MCP module '$1' (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)" >&2
-    exit 2
+    MCP_PROBLEM="this agentbox has no such module (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)"
+    return 4
+  fi
+  if ! mcp_parses "$1" "$MCP_DIR"; then
+    MCP_PROBLEM="its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
+    return 2
   fi
   # Its last line's status does not count: a false "[[ ... ]] && ..." there
   # would end the start under set -e. "|| true" turns set -e off for the
   # whole file (README, Writing a module).
   # shellcheck source=/dev/null
   source "$MCP_DIR/mcp.sh" || true
+  # A module without MCP_SERVERS has one server: <name> at MCP_URL.
+  # mcp_servers_problem checks that MCP_URL.
+  if (( ! ${#MCP_SERVERS[@]} )); then
+    MCP_ONE_SERVER=1
+    MCP_SERVERS=("$1|$MCP_URL|${MCP_CALLER_SECRET:+caller}|$MCP_DESCRIPTION")
+  fi
+  for h in ${MCP_SECRET_HELP[@]+"${MCP_SECRET_HELP[@]}"}; do
+    # The first line of a secret wins, as in setup_secret_help.
+    [[ "$h" == ?*": "* && -z "${MCP_SECRET_HELP_OF[${h%%: *}]+x}" ]] && MCP_SECRET_HELP_OF[${h%%: *}]="${h#*: }"
+  done
   return 0
 }
 
 # The servers of the module mcp_load loaded, "<name>|<url>|<caller or
-# ->|<description>" per line: its MCP_SERVERS, or the one it has.
-mcp_servers() {  # <module name>
-  if (( ${#MCP_SERVERS[@]} )); then
-    printf '%s\n' "${MCP_SERVERS[@]}"
-  else
-    printf '%s|%s|%s|%s\n' "$1" "$MCP_URL" "${MCP_CALLER_SECRET:+caller}" "$MCP_DESCRIPTION"
-  fi
+# ->|<description>" per line.
+mcp_servers() {
+  printf '%s\n' ${MCP_SERVERS[@]+"${MCP_SERVERS[@]}"}
 }
 
 # What is wrong with the servers of the module mcp_load loaded, on stdout;
@@ -122,10 +160,10 @@ mcp_servers() {  # <module name>
 # ("keep"; see mcp_check_secrets).
 mcp_servers_problem() {  # <module name> <taken>
   local server url auth names=" " owner
-  if (( ! ${#MCP_SERVERS[@]} )) && [[ -z "$MCP_URL" ]]; then
+  if [[ -n "$MCP_ONE_SERVER" && -z "$MCP_URL" ]]; then
     echo "no URL: its mcp.sh sets no MCP_URL, or the setting it comes from is empty"; return 3
   fi
-  if (( ! ${#MCP_SERVERS[@]} )) && [[ "$MCP_URL" == *"|"* ]]; then
+  if [[ -n "$MCP_ONE_SERVER" && "$MCP_URL" == *"|"* ]]; then
     echo "its MCP_URL has a |"; return
   fi
   while IFS='|' read -r server url auth _; do
@@ -149,7 +187,7 @@ mcp_servers_problem() {  # <module name> <taken>
       echo "its server '$server' has the name of one of module '$owner'"; return
     fi
     names+="$server "
-  done < <(mcp_servers "$1")
+  done < <(mcp_servers)
 }
 
 mcp_egress_has() {  # <host>: 0 if the loaded module's MCP_EGRESS lists it
@@ -172,7 +210,7 @@ mcp_config_keys_text() {  # <mcp.sh>
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.toml), before the second.
 mcp_init() {
-  local name dir keys d f seen=" " list="${AB_MCP:-}"
+  local name keys rc d seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -185,20 +223,19 @@ mcp_init() {
     # A module this version does not have (a newer or older one's, or a
     # typo): left out, with a warning, like a module that cannot run.
     # What it runs (another version's sessions) stays.
-    if ! dir="$(mcp_find "$name")"; then
-      ab_warn "MCP module '$name' left out of this session: this agentbox has no such module" \
-              "(looked for $USER_MCP_DIR/$name/mcp.sh and mcp/$name/mcp.sh). Sidecars of it that run stay;" \
-              "take it out of AB_MCP to have them removed"
-      MCP_UNKNOWN+=("$name")
-      continue
-    fi
-    if ! mcp_parses "$name" "$dir"; then
-      ab_warn "MCP module '$name' left out of this session: its mcp.sh does not parse (bash -n $dir/mcp.sh)"
-      # Its settings are not read; they get no warning (MCP_QUIET_KEYS).
-      MCP_SKIPPED+=("$name")
-      continue
-    fi
-    mcp_load "$name"
+    rc=0; mcp_load "$name" --declared || rc=$?
+    case "$rc" in
+      0) ;;
+      4) ab_warn "MCP module '$name' left out of this session: $MCP_PROBLEM. Sidecars of it that run stay;" \
+                 "take it out of AB_MCP to have them removed"
+         MCP_UNKNOWN+=("$name")
+         continue ;;
+      3) exit 2 ;;  # for ticket 04: no Python 3.11 (not given by the old format)
+      *) ab_warn "MCP module '$name' left out of this session: $MCP_PROBLEM"
+         # Its settings are not read; they get no warning (MCP_QUIET_KEYS).
+         MCP_SKIPPED+=("$name")
+         continue ;;
+    esac
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done
@@ -208,16 +245,12 @@ mcp_init() {
   # it: a module of yours replaces the shared one of that name. A key that
   # no module has still warns.
   MCP_QUIET_KEYS=()
-  seen=" "
-  for d in "${MCP_DIRS[@]}"; do
-    for f in "$d"/*/mcp.sh; do
-      name="${f%/mcp.sh}"; name="${name##*/}"
-      [[ -f "$f" && "$name" =~ $AB_NAME_RE && "$seen" != *" $name "* ]] || continue
-      seen+="$name "
-      read -ra keys <<<"$(mcp_config_keys_text "$f")"
-      MCP_QUIET_KEYS+=(${keys[@]+"${keys[@]}"})
-    done
-  done
+  while IFS= read -r name; do
+    [[ "$name" =~ $AB_NAME_RE ]] || continue
+    d="$(mcp_find "$name")" || continue
+    read -ra keys <<<"$(mcp_config_keys_text "$d/mcp.sh")"
+    MCP_QUIET_KEYS+=(${keys[@]+"${keys[@]}"})
+  done < <(mcp_names)
 }
 
 # A module that cannot run is left out of this start, with a warning: the
@@ -254,7 +287,14 @@ mcp_skip() {  # <name> <why> [keep]
 mcp_check_secrets() {
   local name key s missing server why rc taken=" "
   for name in "${MCP_ENABLED[@]}"; do
-    mcp_load "$name"
+    rc=0; mcp_load "$name" || rc=$?
+    if (( rc == 1 )); then
+      mcp_skip "$name" "$MCP_PROBLEM"
+      continue
+    elif (( rc )); then
+      mcp_skip "$name" "$MCP_PROBLEM" keep
+      continue
+    fi
     for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
       if [[ -z "${!key:-}" ]]; then
         mcp_skip "$name" "it needs $key in $CONFIG_FILE (agentbox setup)"
@@ -291,7 +331,7 @@ mcp_check_secrets() {
       mcp_skip "$name" "$why" keep
       continue
     fi
-    while IFS='|' read -r server _; do taken+="$server=$name "; done < <(mcp_servers "$name")
+    while IFS='|' read -r server _; do taken+="$server=$name "; done < <(mcp_servers)
   done
   mcp_collect
 }
@@ -306,7 +346,8 @@ mcp_collect() {
   MCP_EGRESS_ALL=()
   MCP_MANAGED=""
   for name in "${MCP_ENABLED[@]}"; do
-    mcp_load "$name"
+    # Only modules that passed mcp_check_secrets: status 0.
+    mcp_load_again "$name"
     if [[ -n "$MCP_CALLER_SECRET" ]]; then
       ensure_caller_secret "$MCP_CALLER_SECRET"
       var="$(mcp_token_var "$name")"
@@ -321,7 +362,7 @@ mcp_collect() {
       host="${url#*://}"; host="${host%%[:/]*}"
       if [[ "$host" != *.* ]] && ! mcp_egress_has "$host"; then MCP_NO_PROXY+=("$host"); fi
       MCP_MANAGED+="$server $url"$'\n'
-    done < <(mcp_servers "$name")
+    done < <(mcp_servers)
   done
 }
 
@@ -340,7 +381,7 @@ mcp_write_configs() {
   local claude="" pi="" server url auth desc
   mkdir -p "$dir"
   for name in "${MCP_ENABLED[@]}"; do
-    mcp_load "$name"
+    mcp_load_again "$name"
     while IFS='|' read -r server url auth desc; do
       hdr=""
       # (mcp_servers_problem left out a caller server without the secret.)
@@ -350,7 +391,7 @@ mcp_write_configs() {
       claude+="$sep_c    $(json_str "$server"): { \"type\": \"http\", \"url\": $(json_str "$url")$hdr }"
       pi+="$sep_p    $(json_str "$server"): { \"url\": $(json_str "$url")$hdr, \"description\": $(json_str "$desc") }"
       sep_c=$',\n'; sep_p=$',\n'
-    done < <(mcp_servers "$name")
+    done < <(mcp_servers)
   done
   MCP_CLAUDE_JSON="$dir/mcp-claude.json"
   MCP_PI_JSON="$dir/mcp-pi.json"
@@ -375,7 +416,7 @@ mcp_start_all() {
   local errf="${AB_WARNINGS_FILE:+$AB_WARNINGS_FILE.err}"
   [[ -n "$errf" ]] || errf="$(mktemp)"
   for name in "${MCP_ENABLED[@]}"; do
-    mcp_load "$name"
+    mcp_load_again "$name"
     declare -F mcp_start >/dev/null || continue
     # The lists come back on the subshell's fd 3, its output goes to stderr:
     # no file, so starts at the same time cannot mix them up.
