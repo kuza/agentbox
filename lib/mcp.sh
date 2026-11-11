@@ -2,6 +2,10 @@
 # <AB_HOME>/mcp.local/<name>/mcp.sh (yours; wins over mcp/). AB_MCP in
 # config.toml lists the enabled ones; context7 is always enabled.
 #
+# A module with module.toml (a manifest) describes itself as data:
+# mcp_load_manifest reads it, and runs no code of the module. The text
+# below is about the old format, a module with only mcp.sh.
+#
 # A module is a bash file, sourced by run.sh on the host, so it is code with
 # the same trust as run.sh: read a module before you enable it. It sets:
 #
@@ -76,19 +80,19 @@ MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 mcp_find() {  # <name>: prints the module's directory; 1 if there is none
   local d
   for d in "${MCP_DIRS[@]}"; do
-    if [[ -f "$d/$1/mcp.sh" ]]; then printf '%s\n' "$d/$1"; return 0; fi
+    if [[ -f "$d/$1/module.toml" || -f "$d/$1/mcp.sh" ]]; then printf '%s\n' "$d/$1"; return 0; fi
   done
   return 1
 }
 
-# Each module once, yours first: a directory with an mcp.sh.
+# Each module once, yours first: a directory with a module.toml or an mcp.sh.
 mcp_names() {
   local d f name
   local -A found=()
   for d in "${MCP_DIRS[@]}"; do
-    for f in "$d"/*/mcp.sh; do
-      name="${f%/mcp.sh}"; name="${name##*/}"
-      [[ -f "$f" && -z "${found[$name]+x}" ]] || continue
+    for f in "$d"/*/; do
+      name="${f%/}"; name="${name##*/}"
+      [[ ( -f "$f/module.toml" || -f "$f/mcp.sh" ) && -z "${found[$name]+x}" ]] || continue
       found[$name]=1
       printf '%s\n' "$name"
     done
@@ -109,22 +113,31 @@ mcp_load_again() {  # <name>
 }
 
 # Reads module <name> into the MCP_* variables, reset first. It never
-# exits. Status: 0 usable, 1 a setting fails or is missing, 2 broken, 3 no
-# Python, 4 no such module. MCP_PROBLEM gives the reason.
-# A module with only mcp.sh gives 0, 2 or 4. mcp_load sources its mcp.sh,
-# also with --declared. MCP_SERVERS always has the servers.
-# MCP_SECRET_HELP_OF[<secret>] holds the text of each MCP_SECRET_HELP line.
+# exits. Status: 0 usable, 1 a setting fails or is missing (MCP_MISSING),
+# 2 broken, 3 no Python, 4 no such module. MCP_PROBLEM gives the reason.
+# With --declared, it checks no setting values (status 0, 2, 3 or 4).
+# A module with module.toml goes to mcp_load_manifest, which runs no module
+# code (MCP_FORMAT=manifest). A module with only mcp.sh (MCP_FORMAT=old)
+# gives 0, 1, 2 or 4: mcp_load sources its mcp.sh, also with --declared.
+# MCP_SERVERS has the servers: the old adapter fills it also with
+# --declared, the manifest adapter only without --declared (with
+# MCP_EGRESS). MCP_SECRET_HELP_OF[<secret>] holds the help of each secret.
 mcp_load() {  # <name> [--declared]
   local h
   unset -f mcp_start mcp_secret_value mcp_check
-  MCP_PROBLEM=""; MCP_ONE_SERVER=""
+  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=()
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
-  declare -gA MCP_SECRET_HELP_OF=()
+  declare -gA MCP_SECRET_HELP_OF=() MCP_SETTING_HELP=() MCP_IMAGE=() MCP_SECRET=() MCP_VALUE=() MCP_FIELD=() MCP_ITEMS=()
   if ! MCP_DIR="$(mcp_find "$1")"; then
-    MCP_PROBLEM="this agentbox has no such module (looked for $USER_MCP_DIR/$1/mcp.sh and mcp/$1/mcp.sh)"
+    MCP_PROBLEM="this agentbox has no such module (looked for module.toml or mcp.sh in $USER_MCP_DIR/$1 and mcp/$1)"
     return 4
   fi
+  if [[ -f "$MCP_DIR/module.toml" ]]; then
+    mcp_load_manifest "$1" "${2:-}"
+    return
+  fi
+  MCP_FORMAT=old
   if ! mcp_parses "$1" "$MCP_DIR"; then
     MCP_PROBLEM="its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
     return 2
@@ -144,13 +157,136 @@ mcp_load() {  # <name> [--declared]
     # The first line of a secret wins, as in setup_secret_help.
     [[ "$h" == ?*": "* && -z "${MCP_SECRET_HELP_OF[${h%%: *}]+x}" ]] && MCP_SECRET_HELP_OF[${h%%: *}]="${h#*: }"
   done
-  return 0
+  [[ "${2:-}" == --declared ]] || mcp_missing
+}
+
+# The required settings that are not set, into MCP_MISSING. 1 if there
+# are any, with the first one in MCP_PROBLEM. An empty value counts as not
+# set. A manifest module has its values (after the defaults) in MCP_VALUE.
+mcp_missing() {
+  local key
+  for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
+    [[ -n "${MCP_VALUE[$key]-${!key:-}}" ]] || MCP_MISSING+=("$key")
+  done
+  (( ${#MCP_MISSING[@]} )) || return 0
+  MCP_PROBLEM="it needs ${MCP_MISSING[0]} in $CONFIG_FILE (agentbox setup)"
+  return 1
+}
+
+# "<file>:<line>" of the key <path> for mcp_load_manifest (its f and l).
+# A key with no line (in an inline table, or a table with no keys) gives
+# "<file>" only; the message gives the path.
+mcp_manifest_at() {  # <path>
+  local at="${l[$1]:-0}"
+  at="${at%% *}"
+  if (( at )); then echo "$f:$at"; else echo "$f"; fi
+}
+
+# The manifest adapter of mcp_load: reads $MCP_DIR/module.toml and runs no
+# module code. A broken manifest gives status 2, and MCP_PROBLEM is
+# "<file>:<line>: <reason> (<code>)" (tests/manifest/README lists the
+# codes). Without --declared, also the resolved part: MCP_VALUE (the
+# setting values after the defaults), MCP_SERVERS and MCP_EGRESS.
+mcp_load_manifest() {  # <name> [--declared]
+  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" "
+  local -A v=() l=()
+  MCP_FORMAT=manifest
+  toml_load manifest "$f" v l 2>/dev/null || rc=$?
+  if (( rc == 3 )); then
+    MCP_PROBLEM="agentbox needs Python 3.11 or newer to read $f"
+    return 3
+  elif (( rc )); then
+    # Read again for the message, the first error only. A failed read is
+    # not in the cache, and $(...) loses the values (they are not needed).
+    MCP_PROBLEM="$(toml_load manifest "$f" v 2>&1 >/dev/null | head -1)" || true
+    return 2
+  fi
+  # The reader accepts 0 and lower; the first format is 1.
+  if (( v[format] < 1 )); then
+    MCP_PROBLEM="$(mcp_manifest_at format): format: ${v[format]} is not a format; the first format is 1 (bad-format)"
+    return 2
+  fi
+  # Its secrets would get the prefix git_ of the modules from git.
+  if [[ "$1" == git ]]; then
+    MCP_PROBLEM="$f: the name 'git' is for the modules from git: give the module another name (reserved-name)"
+    return 2
+  fi
+  MCP_DESCRIPTION="${v[description]:-}"
+  read -ra MCP_CONFIG <<<"${v[settings]:-}"
+  for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
+    [[ "${v[settings.$k.required]:-}" != 1 ]] || MCP_REQUIRED_CONFIG+=("$k")
+    [[ -z "${v[settings.$k.help]:-}" ]] || MCP_SETTING_HELP[$k]="${v[settings.$k.help]}"
+  done
+  for k in ${v[secrets]:-}; do
+    if [[ "$k" == mcp_caller ]]; then
+      # The line of its header: from a key in it, or from the name record
+      # (the line of the first table of secrets).
+      at=secrets.mcp_caller.help
+      [[ "${v[secrets]%% *}" != mcp_caller ]] || at=secrets
+      [[ -n "${l[$at]+x}" ]] || at=secrets.mcp_caller.for_each
+      MCP_PROBLEM="$(mcp_manifest_at "$at"): secrets.mcp_caller: agentbox makes this secret for a server with caller = true; remove it (reserved-secret)"
+      return 2
+    fi
+    # shortcut: a for_each secret is left out; ticket 06 adds its names.
+    [[ -z "${v[secrets.$k.for_each]+x}" ]] || continue
+    MCP_SECRET[$k]="$1_$k"
+    MCP_SECRETS+=("$1_$k")
+    [[ -z "${v[secrets.$k.help]:-}" ]] || MCP_SECRET_HELP_OF[$1_$k]="${v[secrets.$k.help]}"
+  done
+  for k in ${v[own_secrets]:-}; do
+    MCP_SECRET[$k]="$1_$k"
+    MCP_OWN_SECRETS+=("$1_$k")
+  done
+  for k in ${v[images]:-}; do
+    MCP_IMAGE[$k]="${v[images.$k]}"
+    MCP_IMAGES+=("${v[images.$k]}")
+  done
+  n="${v[servers.#]:-0}"
+  if (( ! n )); then
+    MCP_PROBLEM="$(mcp_manifest_at format): servers: a module needs at least one [[servers]] (no-server)"
+    return 2
+  fi
+  for (( i = 0; i < n; i++ )); do
+    [[ "${v[servers.$i.caller]:-}" != 1 ]] || MCP_CALLER_SECRET="$1_mcp_caller"
+  done
+  [[ -z "$MCP_CALLER_SECRET" ]] || MCP_SECRET[mcp_caller]="$MCP_CALLER_SECRET"
+  [[ "${2:-}" != --declared ]] || return 0
+  for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
+    MCP_VALUE[$k]="${!k:-}"
+    [[ -n "${MCP_VALUE[$k]}" ]] || MCP_VALUE[$k]="${v[settings.$k.default]:-}"
+  done
+  for (( i = 0; i < n; i++ )); do
+    name="${v[servers.$i.name]}"
+    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: '$name' is not a server name: use lowercase letters, digits and - (bad-server-name)"
+      return 2
+    fi
+    if [[ "$names" == *" $name "* ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: the server '$name' is in the manifest two times (duplicate-server)"
+      return 2
+    fi
+    names+="$name "
+    desc="servers.$i.description"
+    [[ -n "${v[$desc]+x}" ]] || desc=description
+    # The name check above refuses a | in a name.
+    for k in "servers.$i.url" "$desc"; do
+      [[ "${v[$k]:-}" == *"|"* ]] || continue
+      MCP_PROBLEM="$(mcp_manifest_at "$k"): $k: a server cannot have a | in its URL or description (pipe-in-server)"
+      return 2
+    done
+    auth=-
+    [[ "${v[servers.$i.caller]:-}" != 1 ]] || auth=caller
+    MCP_SERVERS+=("$name|${v[servers.$i.url]}|$auth|${v[$desc]:-}")
+  done
+  read -ra MCP_EGRESS <<<"${v[egress]:-}"
+  mcp_missing
 }
 
 # The servers of the module mcp_load loaded, "<name>|<url>|<caller or
 # ->|<description>" per line.
 mcp_servers() {
-  printf '%s\n' ${MCP_SERVERS[@]+"${MCP_SERVERS[@]}"}
+  (( ${#MCP_SERVERS[@]} )) || return 0
+  printf '%s\n' "${MCP_SERVERS[@]}"
 }
 
 # What is wrong with the servers of the module mcp_load loaded, on stdout;
@@ -230,7 +366,7 @@ mcp_init() {
                  "take it out of AB_MCP to have them removed"
          MCP_UNKNOWN+=("$name")
          continue ;;
-      3) exit 2 ;;  # for ticket 04: no Python 3.11 (not given by the old format)
+      3) toml_no_python "read $MCP_DIR/module.toml"; exit 2 ;;
       *) ab_warn "MCP module '$name' left out of this session: $MCP_PROBLEM"
          # Its settings are not read; they get no warning (MCP_QUIET_KEYS).
          MCP_SKIPPED+=("$name")
@@ -238,17 +374,29 @@ mcp_init() {
     esac
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
+    # A shared module does not warn: the shared modules change one by one.
+    if [[ "$MCP_FORMAT" == old && "$MCP_DIR" == "$USER_MCP_DIR/"* ]]; then
+      ab_warn "MCP module '$name' has the old format (only mcp.sh). v0.3.0 removes this format:" \
+              "convert the module to module.toml (README, \"Converting a module\")"
+    fi
   done
   # The settings of each module that this version has (bb4 configured,
   # then removed from AB_MCP): config.toml may keep them, and the second
   # pass ignores them without a warning. Each name once, as mcp_find finds
   # it: a module of yours replaces the shared one of that name. A key that
-  # no module has still warns.
+  # no module has still warns. The keys come from the [settings] of a
+  # manifest (none when it cannot be read), and from the mcp.sh of a module
+  # of the old format as text: it is not sourced.
   MCP_QUIET_KEYS=()
   while IFS= read -r name; do
     [[ "$name" =~ $AB_NAME_RE ]] || continue
     d="$(mcp_find "$name")" || continue
-    read -ra keys <<<"$(mcp_config_keys_text "$d/mcp.sh")"
+    if [[ -f "$d/module.toml" ]]; then
+      keys=()
+      if mcp_load "$name" --declared; then keys=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}); fi
+    else
+      read -ra keys <<<"$(mcp_config_keys_text "$d/mcp.sh")"
+    fi
     MCP_QUIET_KEYS+=(${keys[@]+"${keys[@]}"})
   done < <(mcp_names)
 }
@@ -285,7 +433,7 @@ mcp_skip() {  # <name> <why> [keep]
 # collects images, session arguments, NO_PROXY hosts, remote hosts and the
 # registrations to clean up.
 mcp_check_secrets() {
-  local name key s missing server why rc taken=" "
+  local name s missing server why rc taken=" "
   for name in "${MCP_ENABLED[@]}"; do
     rc=0; mcp_load "$name" || rc=$?
     if (( rc == 1 )); then
@@ -295,12 +443,6 @@ mcp_check_secrets() {
       mcp_skip "$name" "$MCP_PROBLEM" keep
       continue
     fi
-    for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
-      if [[ -z "${!key:-}" ]]; then
-        mcp_skip "$name" "it needs $key in $CONFIG_FILE (agentbox setup)"
-        continue 2
-      fi
-    done
     # Settings that do not check out: access goes, as for an emptied one.
     if declare -F mcp_check >/dev/null; then
       # Its status does not count, only what it prints.

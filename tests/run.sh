@@ -538,14 +538,21 @@ test_mcp_load_status() {
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
     rc=0; mcp_load grafana || rc=$?; echo "grafana $rc ${MCP_SERVERS[*]} ${#MCP_SECRET_HELP_OF[@]}"
     rc=0; mcp_load github || rc=$?; echo "github $rc ${MCP_SERVERS[0]%%|*}"
-    echo "names $(mcp_names | tr '\n' ' ')" )"
-  assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for $CFG/mcp.local/nope/mcp.sh and mcp/nope/mcp.sh)"
+    echo "names $(mcp_names | tr '\n' ' ')"
+    # The old adapter checks the required settings too, not with --declared.
+    printf '%s\n' 'MCP_URL=https://a.example/mcp' 'MCP_REQUIRED_CONFIG=(REQ_A REQ_B REQ_C)' > "$CFG/mcp.local/a/mcp.sh"
+    REQ_B=x
+    rc=0; mcp_load a --declared || rc=$?; echo "declared $rc"
+    rc=0; mcp_load a || rc=$?; echo "required $rc ${MCP_MISSING[*]}: $MCP_PROBLEM" )"
+  assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for module.toml or mcp.sh in $CFG/mcp.local/nope and mcp/nope)"
   assert_eq "$(sed -n 2p <<<"$out")" "broken 2 its mcp.sh does not parse (bash -n $CFG/mcp.local/broken/mcp.sh)"
   assert_eq "$(sed -n 3p <<<"$out")" "a 0 a|https://a.example/mcp|caller|A what to type: a token"
   assert_eq "$(sed -n 4p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|| 0" "yours wins"
   assert_eq "$(sed -n 5p <<<"$out")" "github 0 github"
   local names; names="$(sed -n 6p <<<"$out")"
   [[ "$names" == "names a broken grafana "* ]] || fail "yours not first: $names"
+  assert_eq "$(sed -n 7p <<<"$out")" "declared 0"
+  assert_eq "$(sed -n 8p <<<"$out")" "required 1 REQ_A REQ_C: it needs REQ_A in $CFG/config.toml (agentbox setup)"
   [[ "$names" == *" context7 "* ]] || fail "no shared module: $names"
   (( $(grep -o ' grafana ' <<<"$names" | wc -l) == 1 )) || fail "grafana not once: $names"
 }
@@ -597,30 +604,107 @@ test_mcp_local_module_and_override() {
   ab_run --
   assert_rc 0
   assert_no_out "unknown key 'TRACKER_SITE'"
+  # Enabled modules of yours of the old format warn, once each.
+  assert_eq "$(grep -c "MCP module 'tracker' has the old format .*README, \"Converting a module\"" "$T/out")" 1 "old-format warnings of tracker"
+  assert_out "MCP module 'context7' has the old format"
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain docs.internal.example$'
   assert_file_lacks "$(cache squid-allow.conf)" 'mcp.context7.com'
   assert_file_has "$(cache mcp-claude.json)" 'https://docs.internal.example/mcp'
 }
 
+# A test module of yours with only module.toml: a manifest module.
+manifest_module() {  # <name> <TOML lines...>
+  mkdir -p "$CFG/mcp.local/$1"
+  printf '%s\n' "${@:2}" > "$CFG/mcp.local/$1/module.toml"
+}
+
+test_mcp_manifest_module_starts() {
+  setup "${FUNCNAME[0]}"
+  manifest_module tracker 'format = 1' 'description = "Tracker"' 'egress = ["mcp.tracker.example"]' \
+    '[settings.TRACKER_SITE]' 'required = true' '[secrets.tok]' 'help = "The token"' \
+    '[[servers]]' 'name = "tracker"' 'url = "https://mcp.tracker.example/mcp"' \
+    '[[servers]]' 'name = "tracker-local"' 'url = "http://ab-mcp-tracker:8080/mcp"' 'caller = true' 'description = "Local"'
+  # With module.toml, no code of its mcp.sh runs (ticket 05 adds mcp_bind).
+  printf '%s\n' "touch '$T/sourced'" 'mcp_start() { start_sidecar ab-mcp-tracker docker.io/x/x:1; }' > "$CFG/mcp.local/tracker/mcp.sh"
+  config "AB_MCP=tracker" "TRACKER_SITE=acme"
+  secrets tracker_tok
+  ab_run --
+  assert_rc 0
+  assert_no_out "tracker' left out|unknown key 'TRACKER_SITE'|old format"
+  [[ ! -e "$T/sourced" ]] || fail "the mcp.sh of a manifest module was sourced"
+  run_line ab-mcp-tracker && fail "a sidecar of a manifest module started"
+  assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
+  assert_file_has "$(cache mcp-claude.json)" '"tracker": \{ "type": "http", "url": "https://mcp.tracker.example/mcp" \}'
+  assert_file_has "$(cache mcp-claude.json)" '"tracker-local": .*"Bearer \$\{AB_MCP_TOKEN_TRACKER\}"'
+  assert_file_has "$(cache mcp-pi.json)" '"tracker": \{ "url": "https://mcp.tracker.example/mcp", "description": "Tracker" \}'
+  assert_file_has "$(cache mcp-pi.json)" '"description": "Local"'
+  session_args | grep -qx 'tracker_mcp_caller,type=env,target=AB_MCP_TOKEN_TRACKER' || fail "caller token not passed"
+  session_args | grep -q 'NO_PROXY=.*ab-mcp-tracker' || fail "own sidecar sent through squid"
+  # Its secret, from the manifest, with the module name before it.
+  sed -i '/^tracker_tok$/d' "$STUB_DIR/secrets"
+  ab_run --
+  assert_skipped tracker
+  assert_out "tracker' left out of this session: missing podman secrets tracker_tok"
+}
+
+# A manifest module is left out with the reason: a missing required
+# setting (status 1: its access goes), and a broken manifest (status 2).
+test_mcp_manifest_module_left_out() {
+  setup "${FUNCNAME[0]}"
+  local srv=('[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"')
+  manifest_module a 'format = 1' '[settings.A_URL]' 'required = true' "${srv[@]}"
+  config "AB_MCP=a"
+  ab_run --
+  assert_skipped a
+  assert_out "MCP module 'a' left out of this session: it needs A_URL in $CFG/config.toml \(agentbox setup\)"
+  # A default applies to a setting that is not set.
+  manifest_module a 'format = 1' '[settings.A_URL]' 'required = true' 'default = "https://a.example"' "${srv[@]}"
+  ab_run --
+  assert_rc 0
+  assert_no_out "'a' left out"
+  manifest_module a 'format = 2' "${srv[@]}"
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:1: .*needs a newer agentbox \(newer-format\)"
+  manifest_module a 'format = 0' "${srv[@]}"
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:1: .*\(bad-format\)"
+  manifest_module a 'format = 1' 'colour = "red"' "${srv[@]}"
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:2: .*\(unknown-key\)"
+  manifest_module git 'format = 1' "${srv[@]}"
+  sed -i 's/^AB_MCP = .*/AB_MCP = ["git"]/' "$CFG/config.toml"
+  ab_run --
+  assert_skipped git
+  assert_out "'git' left out of this session: .*/git/module.toml: .*\(reserved-name\)"
+}
+
 test_mcp_config_keys_of_disabled_module_quiet() {
   setup "${FUNCNAME[0]}"
   # Settings of a module that is there but not enabled: kept, no warning.
-  # A key that no module has: a warning (a typo).
+  # A key that no module has: a warning (a typo). A module of the old
+  # format is read as text, not sourced; a manifest module gives the keys
+  # of its [settings].
   mkdir -p "$CFG/mcp.local/tracker"
-  printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(TRACKER_SITE)' > "$CFG/mcp.local/tracker/mcp.sh"
-  config "GRAFANA_URL=https://grafana.example" "BB4_URL=http://b.example:5101" "TRACKER_SITE=x" "NO_SUCH_KEY=1"
+  printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(TRACKER_SITE)' "touch '$T/sourced'" > "$CFG/mcp.local/tracker/mcp.sh"
+  manifest_module notes 'format = 1' '[settings.NOTES_DIR]' '[[servers]]' 'name = "notes"' 'url = "https://n.example/mcp"'
+  config "GRAFANA_URL=https://grafana.example" "BB4_URL=http://b.example:5101" "TRACKER_SITE=x" "NOTES_DIR=x" "NO_SUCH_KEY=1"
   ab_run --
   assert_rc 0
   assert_no_out "unknown key 'GRAFANA_URL'"
   assert_no_out "unknown key 'BB4_URL'"
   assert_no_out "unknown key 'TRACKER_SITE'"
+  assert_no_out "unknown key 'NOTES_DIR'"
   assert_out "unknown key 'NO_SUCH_KEY'"
+  [[ ! -e "$T/sourced" ]] || fail "the mcp.sh of a module that is not enabled was sourced"
   # A file that is not valid TOML stops the start, with the line.
   echo 'AB_MCP AB_EGRESS = "x"' >> "$CFG/config.toml"
   ab_run --
   assert_rc 2
-  assert_out "config.toml:5: not valid TOML"
+  assert_out "config.toml:6: not valid TOML"
   grep -q '^podman' "$STUB_DIR/calls" && fail "podman called despite the error"
   sed -i '/^AB_MCP AB_EGRESS/d' "$CFG/config.toml"
   # Only in config.toml: in a repo's .toml, a module key still warns.
@@ -635,9 +719,12 @@ test_mcp_config_keys_of_disabled_module_quiet() {
   mkdir -p "$CFG/mcp.local/grafana" "$CFG/mcp.local/tracker.bak"
   printf '%s\n' 'MCP_URL="https://g.example/mcp"' 'MCP_CONFIG=(MY_G)' > "$CFG/mcp.local/grafana/mcp.sh"
   printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(NO_SUCH_KEY)' > "$CFG/mcp.local/tracker.bak/mcp.sh"
+  # A manifest that cannot be read gives no keys.
+  manifest_module notes 'format = 1' 'colour = "red"' '[settings.NOTES_DIR]'
   ab_run --
   assert_out "unknown key 'GRAFANA_URL'"
   assert_out "unknown key 'NO_SUCH_KEY'"
+  assert_out "unknown key 'NOTES_DIR'"
 }
 
 test_mcp_egress_recreated_only_on_change() {
@@ -4313,6 +4400,82 @@ s = tomllib.load(open(sys.argv[1], "rb"))
 print(" ".join(sorted(s)))
 print(" ".join(sorted(k for k in s if s[k]["type"] == "list")))' "$ROOT/lib/toml-schema/config.toml")"
   assert_eq "$got" "$want" "CONFIG_KEYS and CONFIG_LIST_KEYS against the schema"
+}
+
+# One line of the dump of tests/manifest/README: <key>=<value>, with \, a
+# newline and = escaped. An empty value gives no line, except with "all".
+manifest_line() {  # <key> <value> [all]
+  local k="${1//\\/\\\\}" val="${2//\\/\\\\}"
+  [[ -n "$2" || -n "${3:-}" ]] || return 0
+  k="${k//$'\n'/\\n}"; val="${val//$'\n'/\\n}"
+  printf '%s=%s\n' "${k//=/\\=}" "${val//=/\\=}"
+}
+
+# The result of the case <dir> of tests/manifest, as tests/manifest/README
+# gives it: the dump of the resolution, or the status and the error.
+manifest_case() {  # <dir>
+  (
+    local name origin d k i server url auth desc rc
+    SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    for k in paths config toml mcp; do
+      # shellcheck source=/dev/null
+      source "$AB/lib/$k.sh"
+    done
+    name="$(sed -n 's/^name=//p' "$1/context")"
+    origin="$(sed -n 's/^origin=//p' "$1/context")"
+    d="$T/manifest/${1##*/}"
+    rm -rf -- "$d"
+    MCP_DIRS=("$d/local" "$d/shared")
+    mkdir -p "$d/$origin/$name"
+    cp "$1/module.toml" "$d/$origin/$name/"
+    mcp_load "$name" --declared || true
+    if [[ -f "$1/settings.toml" ]]; then settings_load "$1/settings.toml" 0 ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; fi
+    rc=0; mcp_load "$name" || rc=$?
+    if (( rc )); then
+      echo "status=$rc"
+      for k in ${MCP_MISSING[@]+"${MCP_MISSING[@]}"}; do echo "$k: missing-setting"; done
+      (( rc == 1 )) || sed -E 's/^(module\.toml(:[0-9]+)?): .*\(([a-z-]+)\)$/\1: \3/' <<<"${MCP_PROBLEM#"$MCP_DIR/"}"
+      exit 0
+    fi
+    {
+      manifest_line description "$MCP_DESCRIPTION"
+      for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do manifest_line "settings.$k" "${MCP_VALUE[$k]}" all; done
+      for k in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do manifest_line "settings.$k.required" 1; done
+      for k in "${!MCP_SETTING_HELP[@]}"; do manifest_line "settings.$k.help" "${MCP_SETTING_HELP[$k]}"; done
+      for k in "${!MCP_FIELD[@]}"; do manifest_line "field.$k" "${MCP_FIELD[$k]}"; done
+      for k in "${!MCP_ITEMS[@]}"; do manifest_line "items.$k" "${MCP_ITEMS[$k]}"; done
+      i=0
+      while IFS='|' read -r server url auth desc; do
+        manifest_line "servers.$i.name" "$server"
+        manifest_line "servers.$i.url" "$url"
+        [[ "$auth" != caller ]] || manifest_line "servers.$i.caller" 1
+        manifest_line "servers.$i.description" "$desc"
+        i=$((i + 1))
+      done < <(mcp_servers)
+      for i in "${!MCP_SECRETS[@]}"; do manifest_line "secrets.$i" "${MCP_SECRETS[i]}"; done
+      for k in "${!MCP_SECRET_HELP_OF[@]}"; do manifest_line "secret_help.$k" "${MCP_SECRET_HELP_OF[$k]}"; done
+      for k in "${!MCP_SECRET[@]}"; do manifest_line "secret.$k" "${MCP_SECRET[$k]}"; done
+      for i in "${!MCP_OWN_SECRETS[@]}"; do manifest_line "own_secrets.$i" "${MCP_OWN_SECRETS[i]}"; done
+      manifest_line caller_secret "$MCP_CALLER_SECRET"
+      for k in "${!MCP_IMAGE[@]}"; do manifest_line "image.$k" "${MCP_IMAGE[$k]}"; done
+      for i in "${!MCP_EGRESS[@]}"; do manifest_line "egress.$i" "${MCP_EGRESS[i]}"; done
+    } | LC_ALL=C sort
+  )
+}
+
+# The conformance set of the resolution (seam 3): each tests/manifest/<case>/
+# gives its result in "expected" or "expected.err" (tests/manifest/README).
+# A later Go core must give the same results.
+test_manifest_conformance() {
+  setup "${FUNCNAME[0]}"
+  local c want got
+  for c in "$ROOT"/tests/manifest/*/; do
+    c="${c%/}"
+    want="$(cat "$c/expected" "$c/expected.err" 2>/dev/null)"
+    got="$(manifest_case "$c" 2>&1)"
+    [[ "$got" == "$want" ]] || fail "${c#"$ROOT/"}: got"$'\n'"$got"$'\n'"expected"$'\n'"$want"
+  done
 }
 
 # --- main -------------------------------------------------------------------

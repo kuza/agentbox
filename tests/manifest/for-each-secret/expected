@@ -1,0 +1,6 @@
+secret.pat=github_pat
+secret_help.github_pat=A token
+secrets.0=github_pat
+servers.0.name=github
+servers.0.url=http://ab-mcp-github:8080/mcp
+settings.GH_OWNERS=

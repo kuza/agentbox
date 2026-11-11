@@ -1,0 +1,10 @@
+caller_secret=tracker_mcp_caller
+description=Issues \= tickets
+secret.mcp_caller=tracker_mcp_caller
+servers.0.description=Issues \= tickets
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp?a\=b
+servers.1.caller=1
+servers.1.description=The local server
+servers.1.name=tracker-local
+servers.1.url=http://ab-mcp-tracker:8080/mcp

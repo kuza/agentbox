@@ -1,0 +1,6 @@
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.TRACKER_SITE.required=1
+settings.TRACKER_SITE=acme
+settings.TRACKER_URL.required=1
+settings.TRACKER_URL=https://t.example

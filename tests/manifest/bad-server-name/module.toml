@@ -1,0 +1,9 @@
+format = 1
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"
+
+[[servers]]
+name = "Tracker_2"
+url = "https://mcp.tracker.example/mcp"

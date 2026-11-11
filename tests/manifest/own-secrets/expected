@@ -1,0 +1,6 @@
+own_secrets.0=tab_bridge_key
+own_secrets.1=tab_other
+secret.bridge_key=tab_bridge_key
+secret.other=tab_other
+servers.0.name=tab
+servers.0.url=http://ab-mcp-tab:8080/mcp

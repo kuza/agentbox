@@ -1,0 +1,5 @@
+format = 1
+
+[[servers]]
+name = "git"
+url = "https://git.example/mcp"

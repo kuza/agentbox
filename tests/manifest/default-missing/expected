@@ -1,0 +1,6 @@
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.TRACKER_OWNERS=a,b
+settings.TRACKER_PORT.help=The port\nof the server
+settings.TRACKER_PORT.required=1
+settings.TRACKER_PORT=8080

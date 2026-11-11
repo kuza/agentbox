@@ -1,0 +1,8 @@
+format = 1
+
+[secrets.mcp_caller]
+help = "A token"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

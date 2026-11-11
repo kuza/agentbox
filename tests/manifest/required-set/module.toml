@@ -1,0 +1,11 @@
+format = 1
+
+[settings.TRACKER_URL]
+required = true
+
+[settings.TRACKER_SITE]
+required = true
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

@@ -1,0 +1,11 @@
+format = 1
+
+[secrets.sa]
+help = "A token"
+
+[secrets.mcp_caller]
+for_each = "TRACKER_OWNERS"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

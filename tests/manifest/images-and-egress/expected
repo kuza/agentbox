@@ -1,0 +1,6 @@
+egress.0=docs.example
+egress.1=api.docs.example:8443
+image.docs=docker.io/x/docs:1.0
+image.nginx-extra=docker.io/x/nginx:2
+servers.0.name=docs
+servers.0.url=https://docs.example/mcp

@@ -1,0 +1,11 @@
+format = 1
+description = "Tracker"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"
+
+[[servers]]
+name = "tracker-2"
+url = "https://mcp.tracker.example/mcp2"
+description = "a | b"

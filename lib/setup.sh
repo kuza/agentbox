@@ -411,7 +411,7 @@ setup_show() {
     case "$kind" in
       mcp) in_list "$name" "$mcp" && mark="[x]" || mark="[ ]"
            if text="$(setup_module_line "$name" 1)" && setup_module_info "$name" >/dev/null; then
-             [[ -f "$USER_MCP_DIR/$name/mcp.sh" ]] && text="(yours) $text"
+             [[ "$(mcp_find "$name")" == "$USER_MCP_DIR/"* ]] && text="(yours) $text"
              setup_module_problem "$name"
              status="$(setup_module_status "$name" "$i")"
              read -ra more <<<"$(setup_module_line "$name" 2)"

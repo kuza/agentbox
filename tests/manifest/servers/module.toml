@@ -1,0 +1,12 @@
+format = 1
+description = "Issues = tickets"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp?a=b"
+
+[[servers]]
+name = "tracker-local"
+url = "http://ab-mcp-tracker:8080/mcp"
+caller = true
+description = "The local server"

@@ -1,0 +1,2 @@
+format = 1
+servers = [{ name = "tracker", url = "https://x.example/a|b" }]

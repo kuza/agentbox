@@ -1,0 +1,14 @@
+format = 1
+
+[settings.GH_OWNERS]
+
+[secrets.pat]
+help = "A token"
+
+[secrets."pat_{item}"]
+for_each = "GH_OWNERS"
+help = "A token for {item}"
+
+[[servers]]
+name = "github"
+url = "http://ab-mcp-github:8080/mcp"

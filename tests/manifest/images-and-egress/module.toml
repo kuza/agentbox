@@ -1,0 +1,10 @@
+format = 1
+egress = ["docs.example", "api.docs.example:8443"]
+
+[images]
+docs = "docker.io/x/docs:1.0"
+nginx-extra = "docker.io/x/nginx:2"
+
+[[servers]]
+name = "docs"
+url = "https://docs.example/mcp"

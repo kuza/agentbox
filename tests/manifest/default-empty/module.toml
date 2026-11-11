@@ -1,0 +1,13 @@
+format = 1
+
+[settings.TRACKER_PORT]
+required = true
+default = 8080
+help = "The port\nof the server"
+
+[settings.TRACKER_OWNERS]
+default = ["a", "b"]
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"
