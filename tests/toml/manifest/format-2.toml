@@ -1,0 +1,6 @@
+description = "A module of a later agentbox"
+format = 2
+unknown = 1
+
+[[sidecars]]
+image = "x"

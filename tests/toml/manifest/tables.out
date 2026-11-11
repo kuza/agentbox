@@ -1,0 +1,23 @@
+description 2 2 A test module
+egress 4 4 {X_URL.hostport} a.example
+format 1 1 1
+images 22 22 x
+images.x 22 22 docker.io/x/x:1.0
+own_secrets 3 3 bridge_key
+secrets 19 19 sa
+secrets.sa.help 19 19 The token
+servers.# 25 25 2
+servers.0.name 25 25 x
+servers.0.url 25 25 {X_URL.base}/mcp
+servers.1.caller 29 29 1
+servers.1.description 29 29 The local server
+servers.1.name 29 29 x-local
+servers.1.url 29 29 http://ab-mcp-x:8080/mcp
+settings 6 6 X_URL X_PORT X_OWNERS
+settings.X_OWNERS.default 14 14 a,b
+settings.X_OWNERS.list 14 14 1
+settings.X_OWNERS.lowercase 14 14 1
+settings.X_PORT.default 11 11 8080
+settings.X_URL.check 6 6 url
+settings.X_URL.help 6 6 The URL\nof the server
+settings.X_URL.required 6 6 1

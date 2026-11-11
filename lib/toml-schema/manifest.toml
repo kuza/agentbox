@@ -1,0 +1,62 @@
+# The schema of a module manifest (mcp/<name>/module.toml): for each key,
+# its type and whether it is required. lib/toml.sh reads the files of this
+# kind with it. The types of the flat kinds (string, int, bool, list), and:
+#
+#   any              a string, an integer, true or false, or a list (a
+#                    list joins with a comma, as a module setting in config)
+#   table            a table; "keys" gives the rules of its keys, and the
+#                    key "*" a rule for any name
+#   array-of-tables  [[name]]; "keys" gives the rules of the keys of each table
+#
+# "newest" on an int: a higher number stops the read with newer-format.
+# "newline" on a string: a newline is allowed in the value. Write it as
+# \n: a multi-line string is refused, as in each kind.
+# "names" on the rule "*": the pattern (a Python and Go regular
+# expression) that each name of the table must match, else bad-name.
+#
+# A newer format can use TOML syntax that this reader does not know. Then
+# the error is syntax, not newer-format.
+format = { type = "int", required = true, newest = 1 }
+description = { type = "string" }
+own_secrets = { type = "list" }
+egress = { type = "list" }
+
+[settings]
+type = "table"
+
+[settings.keys."*"]
+type = "table"
+names = '^[A-Z][A-Z0-9_]*$'  # a variable name in upper case, as in config.toml
+
+[settings.keys."*".keys]
+required = { type = "bool" }
+default = { type = "any" }
+check = { type = "string" }
+lowercase = { type = "bool" }
+list = { type = "bool" }
+help = { type = "string", newline = true }
+
+[secrets]
+type = "table"
+
+[secrets.keys."*"]
+type = "table"
+names = '^[a-z0-9_]+(\{item\}[a-z0-9_]*)?$'  # sa, bridge_key, pat_{item}
+
+[secrets.keys."*".keys]
+help = { type = "string", newline = true }
+for_each = { type = "string" }
+
+[servers]
+type = "array-of-tables"
+
+[servers.keys]
+name = { type = "string", required = true }
+url = { type = "string", required = true }
+description = { type = "string" }
+caller = { type = "bool" }
+for_each = { type = "string" }
+
+[images]
+type = "table"
+keys."*" = { type = "string", names = '^[a-z0-9][a-z0-9_-]*$' }

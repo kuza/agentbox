@@ -1,0 +1,33 @@
+format = 1
+description = "A test module"
+own_secrets = ["bridge_key"]
+egress = ["{X_URL.hostport}", "a.example"]
+
+[settings.X_URL]
+required = true
+check = "url"
+help = "The URL\nof the server"
+
+[settings.X_PORT]
+default = 8080
+
+[settings.X_OWNERS]
+list = true
+lowercase = true
+default = ["a", "b"]
+
+[secrets.sa]
+help = "The token"
+
+[images]
+x = "docker.io/x/x:1.0"
+
+[[servers]]
+name = "x"
+url = "{X_URL.base}/mcp"
+
+[[servers]]
+name = "x-local"
+url = "http://ab-mcp-x:8080/mcp"
+caller = true
+description = "The local server"

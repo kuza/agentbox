@@ -4242,8 +4242,15 @@ toml_case() {
         settings_load "$(basename "$2")" 1 "${CONFIG_KEYS[@]}" GH_TOOLSETS GH_OWNERS TABULARIS_CMD TABULARIS_PORT -- GRAFANA_URL
       ) 2>> "$T/err"
     fi
-    for k in "${!values[@]}"; do echo "$k ${lines[$k]} ${values[$k]}"; done | LC_ALL=C sort
-    sed -E 's/^(agentbox: warning: )?([^:]+:[0-9]+): .*\(([a-z-]+)\)$/\2: \3/' "$T/err"
+    # A backslash as \\, then a newline (allowed in the help of a manifest) as \n,
+    # so that each record is one line and the two do not look the same.
+    for k in "${!values[@]}"; do
+      esc="${values[$k]//\\/\\\\}"
+      echo "$k ${lines[$k]} ${esc//$'\n'/\\n}"
+    done | LC_ALL=C sort
+    # An error with no line (an inline table of a manifest) gives the path of the key in its place.
+    sed -E -e 's/^(agentbox: warning: )?([^:]+:[0-9]+): .*\(([a-z-]+)\)$/\2: \3/' \
+      -e "s/^(agentbox: warning: )?([^:]+): [^']*'([^']+)'.*\(([a-z-]+)\)\$/\2: \3: \4/" "$T/err"
     exit "$rc"
   )
 }

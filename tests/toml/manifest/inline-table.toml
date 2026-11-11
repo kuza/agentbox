@@ -1,0 +1,2 @@
+format = 1
+servers = [{ name = "a", url = "http://a" }, { name = "b", url = 1 }, { name = "c", x = 1 }]

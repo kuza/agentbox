@@ -1,0 +1,12 @@
+format = 1
+
+[settings.A-B]
+
+[settings."{X}"]
+
+[images]
+"a b" = "x"
+
+[secrets."{item}"]
+
+[secrets.Sa]

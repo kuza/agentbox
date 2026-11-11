@@ -1,0 +1,6 @@
+format = 1
+description = "a\tb"
+
+[[servers]]
+name = "x\ny"
+url = "http://x"

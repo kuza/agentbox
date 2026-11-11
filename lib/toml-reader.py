@@ -40,6 +40,16 @@ def finish():
     sys.exit(4 if bad else 0)
 
 
+def split_lines(t):
+    """The lines as TOML counts them: split at "\n" only (a "\r" before it
+    goes). str.splitlines also splits at U+2028 and U+0085, which TOML
+    allows in a comment or a string."""
+    out = [x.removesuffix("\r") for x in t.split("\n")]
+    if out and out[-1] == "":
+        out.pop()
+    return out
+
+
 with open(path, "rb") as f:
     raw = f.read()
 try:
@@ -51,7 +61,7 @@ except UnicodeDecodeError as e:
 except tomllib.TOMLDecodeError as e:
     message = str(e)
     m = SYNTAX_LINE.search(message)
-    last = max(len(text.splitlines()), 1)
+    last = max(len(split_lines(text)), 1)
     line = getattr(e, "lineno", None) or (int(m.group(1)) if m and m.group(1) else last)
     # Python 3.14 gives "lineno": at the end of the document, the line after
     # the last newline. Earlier versions name no line there. Both give the
@@ -60,8 +70,43 @@ except tomllib.TOMLDecodeError as e:
     error("syntax", line, "not valid TOML: " + (message[: m.start()] if m else message))
     finish()
 
-lines = text.splitlines()
+lines = split_lines(text)
 
+
+def find_line(pattern, default=1):
+    for n, s in enumerate(lines, 1):
+        if re.match(pattern, s):
+            return n
+    return default
+
+
+def starts_statement(n):
+    """True when line n starts a key or a header. The text before such a
+    line is complete TOML; a line in a multi-line array is not."""
+    try:
+        tomllib.loads("\n".join(lines[: n - 1]))
+        return True
+    except tomllib.TOMLDecodeError:
+        return False
+
+
+def key_line(key, before):
+    """The line of a top-level key (key =, "key" =, key.x =) before line
+    'before', else 0."""
+    k = re.escape(key)
+    for n, s in enumerate(lines[: before - 1], 1):
+        if re.match(rf"""\s*(?:{k}|"{k}"|'{k}')\s*[.=]""", s) and starts_statement(n):
+            return n
+    return 0
+
+
+# A key with "newest" (the format of a manifest) is read first: a newer
+# file can have keys that this schema does not know.
+for key, rules in schema.items():
+    value = data.get(key)
+    if "newest" in rules and type(value) is int and value > rules["newest"]:
+        error("newer-format", key_line(key, len(lines) + 1) or 1, f"'{key}' is {value}: this file needs a newer agentbox")
+        finish()
 
 
 def opens_multi_line(s):
@@ -104,13 +149,6 @@ if bad:
     finish()
 
 
-def find_line(pattern, default=1):
-    for n, s in enumerate(lines, 1):
-        if re.match(pattern, s):
-            return n
-    return default
-
-
 # The line of each key: a scan for a bare key at the start of a line,
 # checked against the keys that tomllib gives. A value ends before the
 # next key, without the empty lines and comments in between.
@@ -127,15 +165,16 @@ for key, start in starts.items():
     ends[key] = end
 
 
-def form_error(key, value):
-    """The code and message for a value in a form that is refused, else None."""
+def form_error(key, value, newline=False):
+    """The code and message for a value in a form that is refused, else None.
+    newline: a newline in a string is allowed."""
     if isinstance(value, float):
         return "float", f"'{key}': a float is not allowed; use quotes"
     if isinstance(value, (datetime.date, datetime.time)):
         return "date", f"'{key}': a date or time is not allowed; use quotes"
     if isinstance(value, dict):
         return "table", f"'{key}': a table is not allowed"
-    if isinstance(value, str) and any(ord(c) < 32 or ord(c) == 127 for c in value):
+    if isinstance(value, str) and any((ord(c) < 32 and not (newline and c == "\n")) or ord(c) == 127 for c in value):
         return "control-character", f"'{key}': a control character in a value is not allowed"
     if isinstance(value, list):
         for item in value:
@@ -148,6 +187,9 @@ def form_error(key, value):
 def for_bash(key, value, want, join=" "):
     """The value as bash gets it, or an error message for a wrong type."""
     is_int = isinstance(value, int) and not isinstance(value, bool)
+    if want == "any":
+        want = {bool: "bool", int: "int", str: "string", list: "list"}[type(value)]
+        join = ","
     if want == "string" and isinstance(value, str):
         return value, None
     if want == "int" and is_int:
@@ -169,6 +211,88 @@ def for_bash(key, value, want, join=" "):
     names = {"string": "a string", "int": "an integer", "bool": "true or false", "list": "a list"}
     return None, f"'{key}' must be {names[want]}"
 
+
+# The manifest has nested tables. The flat path of a value is its keys
+# with a dot between them. An array of tables counts from 0
+# (servers.0.name). A table has the line of its header ([settings.X],
+# [[servers]]), else the line of its key. A value in a table has the line
+# of its table. An inline table in an array can be on any line of the
+# array: it has line 0, and the message gives the path only.
+headers = {}  # the flat path of a table and a dot ("servers.0.") -> the line of its header
+arrays = {}  # the flat path of an array of tables -> its last index
+
+
+def header_line(path, default):
+    return min((n for p, n in headers.items() if p.startswith(path + ".")), default=default)
+
+
+def walk(table, rules, prefix, line):
+    """Checks a table of a manifest against its rules, and writes a record
+    for each value. line: the line for a value in this table."""
+    for key, value in table.items():
+        path = prefix + key
+        rule = rules.get(key, rules.get("*"))
+        want = rule and rule["type"]
+        at = key_line(key, first_header) if not prefix else line
+        if isinstance(value, (dict, list)):
+            at = header_line(path, at)
+        if "." in key:
+            error("dot-in-key", at, f"'{path}': a key with a dot is not allowed")
+        elif not rule:
+            error("unknown-key", at, f"unknown key '{path}'")
+        elif rule is rules.get("*") and not re.fullmatch(rule["names"], key):
+            error("bad-name", at, f"'{path}': the name must match {rule['names']}")
+        elif want == "table":
+            if not isinstance(value, dict):
+                error("type", at, f"'{path}' must be a table")
+                continue
+            if "*" in rule["keys"]:
+                record("value", path, at, at, " ".join(value))
+            walk(value, rule["keys"], path + ".", at)
+        elif want == "array-of-tables":
+            if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+                error("type", at, f"'{path}' must be an array of tables")
+                continue
+            record("value", path + ".#", at, at, str(len(value)))
+            for i, item in enumerate(value):
+                walk(item, rule["keys"], f"{path}.{i}.", header_line(f"{path}.{i}", line))
+        else:
+            found = form_error(path, value, rule.get("newline"))
+            if found:
+                error(found[0], at, found[1])
+                continue
+            converted, message = for_bash(path, value, want)
+            if message:
+                error("type", at, message)
+                continue
+            record("value", path, at, at, converted)
+    for key, rule in rules.items():
+        if rule.get("required") and key not in table:
+            error("missing-key", line if prefix else 1, f"the key '{prefix + key}' is missing")
+
+
+if kind == "manifest":
+    for n, s in enumerate(lines, 1):
+        if not s.lstrip().startswith("[") or not starts_statement(n):
+            continue
+        try:
+            node = tomllib.loads(s)
+        except tomllib.TOMLDecodeError:
+            continue
+        path = ""
+        while isinstance(node, dict) and len(node) == 1:
+            key, node = next(iter(node.items()))
+            path += key
+            if isinstance(node, list):
+                arrays[path] = arrays.get(path, -1) + 1
+                node = node[0]
+            if path in arrays:
+                path += f".{arrays[path]}"
+            path += "."
+        headers[path] = n
+    first_header = min(headers.values(), default=len(lines) + 1)
+    walk(data, schema, "", 0)
+    finish()
 
 for key, value in data.items():
     line = starts.get(key)
@@ -194,12 +318,11 @@ for key, value in data.items():
     if key in schema:
         converted, message = for_bash(key, value, schema[key]["type"])
     elif kind == "config":
-        # A setting of a module: each type is good, and an array joins with
-        # a comma. settings_load (lib/config.sh) warns about a key that no
-        # module has. shortcut: no schema for a module setting in v0.2.0;
-        # use the schema of the module manifest in step 2.
-        want = {bool: "bool", int: "int", str: "string", list: "list"}[type(value)]
-        converted, message = for_bash(key, value, want, ",")
+        # A setting of a module has no type: each type is good, and an
+        # array joins with a comma. The checks in module.toml validate the
+        # value. settings_load (lib/config.sh) warns about a key that no
+        # module has.
+        converted, message = for_bash(key, value, "any")
     else:
         error("unknown-key", line, f"unknown key '{key}'")
         continue

@@ -1,0 +1,5 @@
+format = 1
+own_secrets = [
+  "egress.x",
+]
+egress = ["a"]

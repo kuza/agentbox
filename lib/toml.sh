@@ -7,12 +7,17 @@
 # "<line> <end line>"). Values for bash: an integer as its digits, true as
 # 1, false as 0, a list as its items joined with a space. In the kind
 # config, a key outside the schema is a setting of a module: each type is
-# good, and an array joins with a comma. Returns 0; 2 for a
-# bad file, with "file:line: reason (code)" on stderr; 3 when there is no
+# good, and an array joins with a comma. In the kind manifest, the key is
+# a flat path (settings.X_URL.check, servers.0.name). servers.# is the
+# number of servers. A table of names (settings) gives its names. A value
+# in a table has the line of the table header. A value in an inline table
+# in an array has line 0. A manifest value has the same start and end
+# line. Returns 0; 2 for a bad file, with "file:line: reason (code)" on
+# stderr; 3 when there is no
 # Python 3.11 or newer. It never exits and never reads the settings from
 # the environment: each caller decides what to do.
 #
-#   lib/toml-schema/<kind>.toml   the keys of a kind: type and required
+#   lib/toml-schema/<kind>.toml   the keys of a kind: type and required; nested tables for manifest
 #   lib/toml-reader.py            the parser (Python, tomllib)
 #
 # Good results go into a cache in <cache>/agentbox/toml/, keyed by the
@@ -60,7 +65,7 @@ toml_version() {
 }
 
 toml_load() {  # <kind> <file> <values> [<lines>]
-  local _tl_kind="$1" _tl_file="$2" _tl_lib="$SCRIPT_DIR/lib" _tl_hash _tl_cache _tl_out _tl_rc=0 _tl_f _tl_rec=()
+  local _tl_kind="$1" _tl_file="$2" _tl_lib="$SCRIPT_DIR/lib" _tl_hash _tl_cache _tl_out _tl_rc=0 _tl_f _tl_at _tl_rec=()
   local -n _tl_values="$3"
   local -A _tl_none=()
   if [[ -n "${4:-}" ]]; then local -n _tl_lines="$4"; else local -n _tl_lines=_tl_none; fi
@@ -104,7 +109,11 @@ toml_load() {  # <kind> <file> <values> [<lines>]
     (( ${#_tl_rec[@]} == 5 )) || continue
     case "${_tl_rec[0]}" in
       value) _tl_values[${_tl_rec[1]}]="${_tl_rec[4]}"; _tl_lines[${_tl_rec[1]}]="${_tl_rec[2]} ${_tl_rec[3]}" ;;
-      error) echo "$_tl_file:${_tl_rec[2]}: ${_tl_rec[4]} (${_tl_rec[1]})" >&2 ;;
+      error)
+        # Line 0: a value in an inline table has no line. The message gives its path.
+        _tl_at="$_tl_file:${_tl_rec[2]}"
+        [[ "${_tl_rec[2]}" != 0 ]] || _tl_at="$_tl_file"
+        echo "$_tl_at: ${_tl_rec[4]} (${_tl_rec[1]})" >&2 ;;
     esac
     _tl_rec=()
   done < "$_tl_out"

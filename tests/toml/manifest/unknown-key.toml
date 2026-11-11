@@ -1,0 +1,16 @@
+format = 1
+extra = 1
+
+[settings.X]
+type = "string"
+
+[secrets.sa]
+helpp = "x"
+
+[[servers]]
+name = "x"
+url = "http://x"
+port = 1
+
+[other]
+x = 1

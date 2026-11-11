@@ -1,0 +1,7 @@
+format = 1
+# a note with a line separator
+description = "x"
+
+[[servers]]
+name = "s"
+url = "http://s"

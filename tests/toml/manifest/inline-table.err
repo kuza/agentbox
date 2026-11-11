@@ -1,0 +1,3 @@
+inline-table.toml: servers.1.url: type
+inline-table.toml: servers.2.x: unknown-key
+inline-table.toml: servers.2.url: missing-key
