@@ -209,6 +209,7 @@ setup_secret_value() {  # <module> <secret> <typed>
   (
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
     (( rc <= 1 )) || exit 1
+    [[ "$MCP_FORMAT" != manifest ]] || mcp_bind "$1" >/dev/null 2>&1 || exit 1
     if declare -F mcp_secret_value >/dev/null; then mcp_secret_value "$2" "$3"; else printf '%s' "$3"; fi
   )
 }
@@ -317,7 +318,7 @@ setup_module_problem() {  # <name>
 
 setup_module_problem_now() {  # <name>
   (
-    local k v rc
+    local k v="" rc
     setup_module_info "$1" >/dev/null || exit 0
     # shellcheck disable=SC2046  # the keys are words
     setup_apply_settings $(setup_module_line "$1" 2)
@@ -325,10 +326,13 @@ setup_module_problem_now() {  # <name>
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
     (( rc == 1 )) && { echo "$MCP_PROBLEM"; exit 0; }
     (( rc == 0 )) || exit 0
-    if declare -F mcp_check >/dev/null; then
-      v="$(mcp_check 2>/dev/null || true)"; v="${v%%$'\n'*}"
-      [[ -z "$v" ]] || { echo "$v"; exit 0; }
+    if [[ "$MCP_FORMAT" == manifest ]]; then
+      v="$(mcp_bind_check "$1" 2>/dev/null)" || true
+    elif declare -F mcp_check >/dev/null; then
+      v="$(mcp_check 2>/dev/null || true)"
     fi
+    v="${v%%$'\n'*}"
+    [[ -z "$v" ]] || { echo "$v"; exit 0; }
     mcp_servers_problem "$1" " " 2>/dev/null || true
   ) 2>/dev/null | head -1
 }

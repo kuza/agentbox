@@ -622,18 +622,36 @@ manifest_module() {  # <name> <TOML lines...>
 test_mcp_manifest_module_starts() {
   setup "${FUNCNAME[0]}"
   manifest_module tracker 'format = 1' 'description = "Tracker"' 'egress = ["mcp.tracker.example"]' \
-    '[settings.TRACKER_SITE]' 'required = true' '[secrets.tok]' 'help = "The token"' \
+    'own_secrets = ["db"]' '[settings.TRACKER_SITE]' 'required = true' '[settings.TRACKER_MODE]' 'default = "fast"' \
+    '[secrets.tok]' 'help = "The token"' '[images]' 'app = "docker.io/x/app:1"' \
     '[[servers]]' 'name = "tracker"' 'url = "https://mcp.tracker.example/mcp"' \
     '[[servers]]' 'name = "tracker-local"' 'url = "http://ab-mcp-tracker:8080/mcp"' 'caller = true' 'description = "Local"'
-  # With module.toml, no code of its mcp.sh runs (ticket 05 adds mcp_bind).
-  printf '%s\n' "touch '$T/sourced'" 'mcp_start() { start_sidecar ab-mcp-tracker docker.io/x/x:1; }' > "$CFG/mcp.local/tracker/mcp.sh"
-  config "AB_MCP=tracker" "TRACKER_SITE=acme"
+  # Its code runs through mcp_bind only: one time for the check, one time
+  # for the start. mcp_load runs no code of it. It gets the variables
+  # that mcp_bind sets.
+  printf '%s\n' "echo sourced >> '$T/sourced'" \
+    "mcp_check() { echo checked >> '$T/checked'; }" \
+    'mcp_start() {' \
+    "  { echo \"site=\$TRACKER_SITE mode=\$TRACKER_MODE dir=\$MCP_DIR app=\${MCP_IMAGE[app]}\"" \
+    '    for k in $(printf "%s\n" "${!MCP_SECRET[@]}" | sort); do echo "$k=${MCP_SECRET[$k]}"; done' \
+    "  } > '$T/vars'" \
+    '  start_sidecar ab-mcp-tracker "${MCP_IMAGE[app]}"' \
+    '}' > "$CFG/mcp.local/tracker/mcp.sh"
+  # An old module after it sees none of its functions.
+  mkdir -p "$CFG/mcp.local/legacy"
+  printf '%s\n' 'MCP_URL=http://ab-mcp-legacy:8080/mcp' "mcp_check() { echo legacy >> '$T/checked-legacy'; }" \
+    "mcp_start() { echo legacy >> '$T/started-legacy'; }" > "$CFG/mcp.local/legacy/mcp.sh"
+  config "AB_MCP=tracker legacy" "TRACKER_SITE=acme"
   secrets tracker_tok
   ab_run --
   assert_rc 0
-  assert_no_out "tracker' left out|unknown key 'TRACKER_SITE'|old format"
-  [[ ! -e "$T/sourced" ]] || fail "the mcp.sh of a manifest module was sourced"
-  run_line ab-mcp-tracker && fail "a sidecar of a manifest module started"
+  assert_no_out "tracker' left out|unknown key 'TRACKER_SITE'|tracker' has the old format"
+  assert_eq "$(cat "$T/sourced" 2>/dev/null)" $'sourced\nsourced' "the sources of its mcp.sh"
+  assert_eq "$(cat "$T/checked" 2>/dev/null)" checked "the runs of its mcp_check"
+  assert_eq "$(cat "$T/checked-legacy" "$T/started-legacy" 2>/dev/null)" $'legacy\nlegacy' "the runs of the old module"
+  assert_eq "$(cat "$T/vars" 2>/dev/null)" "site=acme mode=fast dir=$CFG/mcp.local/tracker app=docker.io/x/app:1"$'\n'\
+"db=tracker_db"$'\n'"mcp_caller=tracker_mcp_caller"$'\n'"tok=tracker_tok" "the variables of its code"
+  run_line ab-mcp-tracker | grep -q 'docker.io/x/app:1' || fail "the sidecar of a manifest module did not start"
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
   assert_file_has "$(cache mcp-claude.json)" '"tracker": \{ "type": "http", "url": "https://mcp.tracker.example/mcp" \}'
   assert_file_has "$(cache mcp-claude.json)" '"tracker-local": .*"Bearer \$\{AB_MCP_TOKEN_TRACKER\}"'
@@ -646,6 +664,55 @@ test_mcp_manifest_module_starts() {
   ab_run --
   assert_skipped tracker
   assert_out "tracker' left out of this session: missing podman secrets tracker_tok"
+}
+
+# The code of a manifest module can leave it out, with a reason. The output
+# of its mcp_check removes its access. An old MCP_* variable in its mcp.sh
+# keeps its sidecars. What its mcp.sh prints goes to stderr, not into the
+# reason.
+test_mcp_manifest_module_code_left_out() {
+  setup "${FUNCNAME[0]}"
+  manifest_module a 'format = 1' '[[servers]]' 'name = "a"' 'url = "http://ab-mcp-a:8080/mcp"'
+  printf '%s\n' 'echo "a is sourced"' 'mcp_check() { echo "A is bad"; }' \
+    'mcp_start() { start_sidecar ab-mcp-a docker.io/x/a:1; }' > "$CFG/mcp.local/a/mcp.sh"
+  printf 'ab-mcp-a x\n' >> "$STUB_DIR/running"
+  config "AB_MCP=a"
+  ab_run --
+  assert_skipped a
+  assert_out "a' left out of this session: A is bad$"
+  assert_out "^a is sourced$"
+  grep -qx 'podman rm -f -v ab-mcp-a' "$STUB_DIR/calls" || fail "sidecar kept after a failed mcp_check"
+  # On its own: only the reason is on stdout.
+  local out
+  out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"
+    mcp_load a; mcp_bind a --check 2>"$T/err" )" || true
+  assert_eq "$out" "A is bad" "the stdout of mcp_bind"
+  assert_eq "$(cat "$T/err")" "a is sourced" "the stderr of mcp_bind"
+  printf '%s\n' 'MCP_CONFIG=()' 'mcp_start() { start_sidecar ab-mcp-a docker.io/x/a:1; }' > "$CFG/mcp.local/a/mcp.sh"
+  printf 'ab-mcp-a x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped a
+  assert_out "a' left out of this session: .*/a/mcp.sh sets MCP_CONFIG of the old format.*keep one"
+  grep -qx 'podman rm -f -v ab-mcp-a' "$STUB_DIR/calls" && fail "sidecar removed for an old MCP_* variable"
+  run_line ab-mcp-a && fail "a sidecar of a module with an old MCP_* variable started"
+  # "declare -g" goes past the locals of mcp_bind: it is refused too.
+  printf '%s\n' 'declare -g MCP_URL=x' > "$CFG/mcp.local/a/mcp.sh"
+  ab_run --
+  assert_out "a' left out of this session: .*/a/mcp.sh sets a variable of the old format with declare -g"
+  # An exit or an unset variable at the top level of its mcp.sh leaves it
+  # out, also with status 0 or 1. The sidecar stays.
+  local stop
+  for stop in 'exit 0' 'exit 1' 'echo "$NOT_SET"'; do
+    printf '%s\n' "$stop" > "$CFG/mcp.local/a/mcp.sh"
+    printf 'ab-mcp-a x\n' >> "$STUB_DIR/running"
+    ab_run --
+    assert_skipped a
+    assert_out "a' left out of this session: .*/a/mcp.sh stops at its top level with status [01]"
+    grep -qx 'podman rm -f -v ab-mcp-a' "$STUB_DIR/calls" && fail "sidecar removed for '$stop' in its mcp.sh"
+  done
+  return 0
 }
 
 # A manifest module is left out with the reason: a missing required
@@ -3168,6 +3235,13 @@ test_setup_secrets() {
   setup_run "e $anthropic\ns\n"
   assert_out "e is for MCP modules"
   assert_out "nothing to save"
+  # The mcp_secret_value of a manifest module runs through mcp_bind.
+  manifest_module sv 'format = 1' '[secrets.tok]' 'help = "The token"' \
+    '[[servers]]' 'name = "sv"' 'url = "https://sv.example/mcp"'
+  printf '%s\n' 'echo "sv is sourced"' 'mcp_secret_value() { printf "made:%s" "$2"; }' > "$CFG/mcp.local/sv/mcp.sh"
+  local sv; sv="$(setup_entry sv)"
+  setup_run "$sv\nabc\ns\n"
+  assert_eq "$(cat "$STUB_DIR/secret-sv_tok" 2>/dev/null)" "made:abc" "secret of a manifest module"
   return 0
 }
 
@@ -3236,6 +3310,12 @@ test_setup_values_names_input() {
   setup_run "q\n"
   assert_out "NOT USABLE: its server 'a' is marked caller"
   rm -r "$CFG/mcp.local/odd"
+  # The mcp_check of a manifest module runs through mcp_bind.
+  manifest_module chk 'format = 1' '[[servers]]' 'name = "chk"' 'url = "https://chk.example/mcp"'
+  printf '%s\n' 'echo "chk is sourced"' 'mcp_check() { echo "CHK is bad"; }' > "$CFG/mcp.local/chk/mcp.sh"
+  setup_run "q\n"
+  assert_out "NOT USABLE: CHK is bad"
+  rm -r "$CFG/mcp.local/chk"
   # No config.toml and the directory not writable: nothing left behind.
   cp "$ROOT/config.toml.example" "$AB/"
   rm "$CFG/config.toml"*

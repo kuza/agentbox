@@ -3,8 +3,9 @@
 # config.toml lists the enabled ones; context7 is always enabled.
 #
 # A module with module.toml (a manifest) describes itself as data:
-# mcp_load_manifest reads it, and runs no code of the module. The text
-# below is about the old format, a module with only mcp.sh.
+# mcp_load_manifest reads it, and runs no code of the module. mcp_bind
+# runs its mcp.sh, if it has one. The text below is about the old format,
+# a module with only mcp.sh.
 #
 # A module is a bash file, sourced by run.sh on the host, so it is code with
 # the same trust as run.sh: read a module before you enable it. It sets:
@@ -158,6 +159,75 @@ mcp_load() {  # <name> [--declared]
     [[ "$h" == ?*": "* && -z "${MCP_SECRET_HELP_OF[${h%%: *}]+x}" ]] && MCP_SECRET_HELP_OF[${h%%: *}]="${h#*: }"
   done
   [[ "${2:-}" == --declared ]] || mcp_missing
+}
+
+# The variables of the old format. mcp_load resets them. mcp_bind refuses
+# them in the mcp.sh of a manifest module: one file holds the data.
+MCP_OLD_VARS=(MCP_URL MCP_DESCRIPTION MCP_CALLER_SECRET MCP_SERVERS MCP_SECRETS_BY_SETTING MCP_CONFIG
+  MCP_REQUIRED_CONFIG MCP_SECRETS MCP_SECRET_HELP MCP_OWN_SECRETS MCP_EGRESS MCP_IMAGES)
+
+# Runs the code of the manifest module that mcp_load loaded with status 0
+# or 1. It sets the settings as variables and sources the mcp.sh. With
+# --check, it also runs mcp_check: give --check only after status 0.
+# Status 0: usable, also for a module with no mcp.sh. Status 1: mcp_check
+# found a problem. Status 2: the mcp.sh is broken, stops at its top level
+# (exit, or an unset variable), or sets an old MCP_* variable. For 1 and 2,
+# the reason goes to stdout. Other output of the module code goes to
+# stderr. Run it in a subshell: what it sets stays there.
+mcp_bind() {  # <name> [--check]
+  # Names that the top level of mcp.sh does not use: it sees these locals.
+  local _mcp_k _mcp_why _mcp_old
+  [[ -f "$MCP_DIR/mcp.sh" ]] || return 0
+  if ! mcp_parses "$1" "$MCP_DIR"; then
+    echo "its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
+    return 2
+  fi
+  for _mcp_k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do printf -v "$_mcp_k" '%s' "${MCP_VALUE[$_mcp_k]-}"; done
+  # A "declare -g" in mcp.sh goes past the locals of mcp_bind_source.
+  _mcp_old="$(declare -p "${MCP_OLD_VARS[@]}" 2>/dev/null)" || true
+  mcp_bind_source || return 2
+  if [[ "$(declare -p "${MCP_OLD_VARS[@]}" 2>/dev/null)" != "$_mcp_old" ]]; then
+    echo "$MCP_DIR/mcp.sh sets a variable of the old format with declare -g. The module has a module.toml: keep one of the two"
+    return 2
+  fi
+  [[ "${2:-}" == --check ]] && declare -F mcp_check >/dev/null || return 0
+  # Its status does not count, only what it prints.
+  _mcp_why="$(mcp_check || true)"
+  [[ -z "$_mcp_why" ]] || { printf '%s\n' "$_mcp_why"; return 1; }
+}
+
+# Sources the mcp.sh for mcp_bind. Locals hide the old MCP_* variables of
+# mcp_load, so the check sees only what mcp.sh sets. The return of this
+# function makes the normalized variables of mcp_load visible again.
+mcp_bind_source() {
+  local "${MCP_OLD_VARS[@]}" _mcp_var _mcp_out
+  # An exit at the top level of mcp.sh, also "exit 0", is a broken module.
+  # The trap writes the reason to the stdout of mcp_bind: an exit keeps the
+  # redirection of the source to stderr.
+  exec {_mcp_out}>&1
+  trap 'echo "$MCP_DIR/mcp.sh stops at its top level with status $?: keep exit in its functions" >&'"$_mcp_out"'; trap - EXIT; exit 2' EXIT
+  # Code outside the functions runs without set -e, as in mcp_load.
+  # shellcheck source=/dev/null
+  source "$MCP_DIR/mcp.sh" >&2 || true
+  trap - EXIT
+  exec {_mcp_out}>&-
+  [[ "$(declare -p "${MCP_OLD_VARS[@]}" 2>/dev/null)" == *=* ]] || return 0
+  for _mcp_var in "${MCP_OLD_VARS[@]}"; do
+    if [[ "$(declare -p "$_mcp_var" 2>/dev/null)" == *=* ]]; then
+      echo "$MCP_DIR/mcp.sh sets $_mcp_var of the old format. The module has a module.toml: keep one of the two"
+      return 2
+    fi
+  done
+}
+
+# Runs mcp_bind --check in a subshell. The reason goes to stdout, the status
+# is 0, 1 or 2 as for mcp_bind. Without a reason, a stop is status 2.
+mcp_bind_check() {  # <name>
+  local why rc=0
+  why="$(mcp_bind "$1" --check)" || rc=$?
+  (( ! rc )) || [[ -n "$why" ]] || { why="its mcp.sh stopped with status $rc"; rc=2; }
+  [[ -z "$why" ]] || printf '%s\n' "$why"
+  return $(( rc > 2 ? 2 : rc ))
 }
 
 # The required settings that are not set, into MCP_MISSING. 1 if there
@@ -444,14 +514,19 @@ mcp_check_secrets() {
       continue
     fi
     # Settings that do not check out: access goes, as for an emptied one.
-    if declare -F mcp_check >/dev/null; then
+    # The code of a manifest module runs here, in a subshell. For a broken
+    # module (status 2), its sidecars stay (mcp_skip keep).
+    rc=0; why=""
+    if [[ "$MCP_FORMAT" == manifest ]]; then
+      why="$(mcp_bind_check "$name")" || rc=$?
+    elif declare -F mcp_check >/dev/null; then
       # Its status does not count, only what it prints.
       why="$(mcp_check || true)"
+    fi
+    if [[ -n "$why" ]]; then
       why="$(printf '%s\n' "$why" | head -3 | paste -sd ';' -)"
-      if [[ -n "$why" ]]; then
-        mcp_skip "$name" "$why"
-        continue
-      fi
+      if (( rc == 2 )); then mcp_skip "$name" "$why" keep; else mcp_skip "$name" "$why"; fi
+      continue
     fi
     missing=()
     for s in ${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"}; do
@@ -559,7 +634,7 @@ mcp_start_all() {
   [[ -n "$errf" ]] || errf="$(mktemp)"
   for name in "${MCP_ENABLED[@]}"; do
     mcp_load_again "$name"
-    declare -F mcp_start >/dev/null || continue
+    [[ "$MCP_FORMAT" == manifest && -f "$MCP_DIR/mcp.sh" ]] || declare -F mcp_start >/dev/null || continue
     # The lists come back on the subshell's fd 3, its output goes to stderr:
     # no file, so starts at the same time cannot mix them up.
     : > "$errf"
@@ -570,6 +645,11 @@ mcp_start_all() {
         SIDECARS_WANTED=(); HOST_UNITS_WANTED=()
         AB_MODULE_ERRORS="$errf"
         AB_CURRENT_MODULE="$name"
+        # The code of a manifest module; its check ran in mcp_check_secrets.
+        # Its reason, if any, goes where ab_error writes. Without fd 3, as
+        # for mcp_start below: its top level can start a program.
+        [[ "$MCP_FORMAT" != manifest ]] || mcp_bind "$name" >> "$errf" 3>&-
+        declare -F mcp_start >/dev/null || exit 0
         # Without fd 3: a program it starts that stays (conmon, podman's
         # pause process) would hold the capture open and the start with it.
         mcp_start 3>&-
