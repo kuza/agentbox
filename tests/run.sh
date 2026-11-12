@@ -3392,6 +3392,53 @@ test_setup_values_names_input() {
   return 0
 }
 
+# A manifest module in the menu: the help of its settings and secrets,
+# NEEDED from a missing setting, the for_each secrets of the items that you
+# type, its mcp_secret_value before the URL is saved, a list setting written
+# as an array, and NOT USABLE with the place of the value.
+test_setup_manifest_module() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module tr 'format = 1' 'description = "Tracker"' \
+    '[settings.TR_URL]' 'check = "url"' 'help = "The URL of the tracker"' \
+    '[settings.TR_TEAMS]' 'list = true' 'check = "name"' 'help = "Your teams"' \
+    '[secrets.tok]' 'help = "A tracker token"' \
+    '[secrets."team_{item}"]' 'for_each = "TR_TEAMS"' 'help = "The token of team {item}"' \
+    '[[servers]]' 'name = "tr"' 'url = "{TR_URL.base}/mcp"'
+  printf '%s\n' 'mcp_secret_value() { printf "made:%s:%s" "$2" "$TR_TEAMS"; }' > "$CFG/mcp.local/tr/mcp.sh"
+  local tr; tr="$(setup_entry tr)"
+  setup_run "q\n"
+  assert_out "TR_URL NEEDED · TR_TEAMS \\(default\\) · secret tr_tok: MISSING · e $tr"
+  assert_no_out "NOT USABLE"
+  # On, with no URL: the token is made at status 1, before the URL is saved.
+  # Its mcp_secret_value sees the teams that you type, not saved yet.
+  setup_run "$tr\n\nred blue\nabc\nt1\nt2\ns\n"
+  assert_rc 0
+  assert_out "TR_URL \\(setting of tr, needed: The URL of the tracker\\)"
+  assert_out "TR_TEAMS \\(setting of tr, optional: Your teams\\)"
+  assert_out "secret tr_tok for tr \\(A tracker token;"
+  assert_out "secret tr_team_red for tr \\(The token of team red;"
+  assert_out "secret tr_team_blue for tr \\(The token of team blue;"
+  grep -qx 'TR_TEAMS = \["red", "blue"\]' "$CFG/config.toml" || fail "list setting: $(grep TR_TEAMS "$CFG/config.toml")"
+  grep -q TR_URL "$CFG/config.toml" && fail "an empty URL saved"
+  assert_eq "$(cat "$STUB_DIR/secret-tr_tok" "$STUB_DIR/secret-tr_team_red" "$STUB_DIR/secret-tr_team_blue" 2>/dev/null)" \
+    "made:abc:red,bluemade:t1:red,bluemade:t2:red,blue" "the secrets of the manifest module, with the typed teams"
+  # The same teams in another form are no change.
+  setup_run "e $tr\n\nblue, red\n\n\n\ns\n"
+  assert_out "nothing to save"
+  # A value that fails its check: NOT USABLE, with its line in config.toml,
+  # or with "setup" for a value that is not saved.
+  echo 'TR_URL = "ftp://x"' >> "$CFG/config.toml"
+  local at; at="$(grep -n '^TR_URL' "$CFG/config.toml" | cut -d: -f1)"
+  setup_run "e $tr\nnope\n\n\n\n\nq\ny\n"
+  assert_out "NOT USABLE: $CFG/config.toml:$at: TR_URL: not an http:// or https:// URL"
+  assert_out "note: agentbox leaves tr out of the start until this is fixed: setup \\(not saved\\): TR_URL: not an http"
+  # Teams that fail their check do not hide the URL that the server needs.
+  sed -i -e '/^TR_URL/d' -e 's/^TR_TEAMS = .*/TR_TEAMS = ["Bad!"]/' "$CFG/config.toml"
+  setup_run "q\n"
+  assert_out "TR_URL NEEDED · TR_TEAMS=Bad!"
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {

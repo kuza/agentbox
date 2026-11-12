@@ -120,8 +120,10 @@ settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
 # the words of <value>, split at spaces and commas. An int is digits. A bool
 # is true for 1. For 0, a bool that is on by default (AB_CHECK_UPDATES,
 # AB_WARNINGS_ASK) is false; another bool is unset. A key outside the schema
-# is a setting of a module. It keeps the form of its line in the file or in
-# the example: an array, a number, or a string.
+# is a setting of a module. A key in CONFIG_SET_LISTS (setup_apply: the list
+# settings of the modules) is an array. Another key of a module keeps the
+# form of its line in the file or in the example: an array, a number, or a
+# string.
 #
 # It refuses a value on more than one line, or a line that it does not
 # understand, and says why. It writes a temp file, and moves it over <file>
@@ -152,7 +154,7 @@ config_set() {  # <file> <key> [<value>]
   # A setting of a module keeps the form of that line.
   if [[ -z "$type" ]]; then
     form="${form#"${form%%[![:space:]]*}"}"
-    if [[ "$form" == "["* ]]; then type=list
+    if [[ "$form" == "["* || " ${CONFIG_SET_LISTS:-} " == *" $key "* ]]; then type=list
     elif [[ "$form" =~ ^[0-9]+([[:space:]]|$) && "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then type=int
     fi
   fi

@@ -391,7 +391,7 @@ mcp_manifest_items() {  # <path>
 # "<place>: <KEY>: <reason> (<check>)". The place is SETTING_AT
 # (lib/config.sh), "environment", or the line of the manifest for a default.
 mcp_load_manifest() {  # <name> [--declared]
-  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" "
+  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" " nfailed
   local -a items=() all=() each=()
   local -A v=() l=() fld=()
   MCP_FORMAT=manifest
@@ -544,10 +544,14 @@ mcp_load_manifest() {  # <name> [--declared]
       MCP_SECRET_HELP_OF[$1_$name]="$sub"
     done
   done
-  (( ! ${#MCP_FAILED[@]} )) || return 1
+  # After a failed check, the servers only add their missing settings: the
+  # menu then shows all of them as NEEDED.
+  nfailed=${#MCP_FAILED[@]}
   for (( i = 0; i < n; i++ )); do
     fe=""; items=("")
     if [[ -n "${v[servers.$i.for_each]+x}" ]]; then
+      # A list that failed its check gives no servers.
+      [[ "$failed" != *" ${v[servers.$i.for_each]} "* ]] || continue
       fe=1
       mcp_manifest_items "servers.$i.for_each" || return 2
     fi
@@ -558,9 +562,11 @@ mcp_load_manifest() {  # <name> [--declared]
       url="$sub"; unset+="$sub_unset"
       # A setting with no value in a name or URL is missing (status 1).
       if [[ -n "$unset" ]]; then
-        for k in $unset; do mcp_manifest_missing "$k"; done
+        # A setting that failed its check is not missing.
+        for k in $unset; do [[ "$failed" == *" $k "* ]] || mcp_manifest_missing "$k"; done
         continue
       fi
+      (( ! nfailed )) || continue
       if [[ ! "$name" =~ $AB_NAME_RE ]]; then
         MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: '$name' is not a server name: use lowercase letters, digits and - (bad-server-name)"
         return 2

@@ -12,8 +12,9 @@
 # and the order of the lines stay. For a key that is not set, setup uses
 # its "#KEY =" line from the example. Setup keeps the old file as config.toml.bak, and stores
 # the secrets. Setup does not change config.env of v0.1.x. Tokens never go into
-# config.toml. A module may say what to type for a secret
-# (MCP_SECRET_HELP) and how that becomes the secret (mcp_secret_value).
+# config.toml. A module may say what to type for a setting and a secret
+# (MCP_SETTING_HELP, MCP_SECRET_HELP_OF) and how that becomes the secret
+# (mcp_secret_value).
 #
 # Reads its input from stdin: piped input works too, for scripts and tests.
 # Needs SCRIPT_DIR and lib/paths.sh, config.sh, sidecars.sh (secret_store),
@@ -34,11 +35,12 @@ SETUP_OTHER=(
 )
 
 # Pending changes: SETUP_NEW[key]="set <value>" or "unset"; secrets to store
-# in SETUP_SECRETS[name]=value. Caches for one run of the menu, emptied when
-# saved: what config.toml holds, module info, which secrets exist; the
-# error of config.toml.
-declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_INFO=() SETUP_HAS=() SETUP_PROBLEM=()
-SETUP_ERROR=""
+# in SETUP_SECRETS[name]=value. The other variables are caches. A save
+# empties them, and setup_prime fills them again: the values and places of
+# config.toml (SETUP_FILE, SETUP_AT), the module info, the secrets, the list
+# settings of the modules and the error of config.toml.
+declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_AT=() SETUP_INFO=() SETUP_HAS=() SETUP_PROBLEM=()
+SETUP_ERROR="" SETUP_LISTS=" "
 
 # The value of <key> in config.toml, as run.sh reads it: "set <value>" or
 # "unset". The environment does not count here. From setup_prime.
@@ -59,17 +61,21 @@ setup_prime() {
     SETUP_INFO[$n]="$info"
     read -ra more <<<"$(sed -n 2p <<<"$info")"
     keys+=(${more[@]+"${more[@]}"})
+    SETUP_LISTS+="$(sed -n 8p <<<"$info") "
   done < <(mcp_names | sort)
   # A file with an error gives no values; the menu shows the error and continues.
   err="$(mktemp)" || return 1
   while IFS= read -r line; do
-    SETUP_FILE[${line%%$'\t'*}]="${line#*$'\t'}"
+    k="${line%%$'\t'*}"
+    if [[ "$k" == @* ]]; then SETUP_AT[${k#@}]="${line#*$'\t'}"; else SETUP_FILE[$k]="${line#*$'\t'}"; fi
   done < <(
     for k in "${keys[@]}"; do unset "$k"; done
+    SETTING_AT=()
     [[ -f "$CONFIG_FILE" ]] && settings_load "$CONFIG_FILE" 0 "${keys[@]}" 2> "$err"
     for k in "${keys[@]}"; do
       if [[ -n "${!k+x}" ]]; then printf '%s\tset %s\n' "$k" "${!k}"; else printf '%s\tunset\n' "$k"; fi
     done
+    for k in "${!SETTING_AT[@]}"; do printf '@%s\t%s\n' "$k" "${SETTING_AT[$k]}"; done
   )
   SETUP_ERROR="$(cat -- "$err")"
   rm -f -- "$err"
@@ -100,12 +106,18 @@ setup_has_secret() {  # <secret>: 0 if it exists or one is pending
 }
 
 # Records a change of <key>; one that brings back the file's value is no
-# change.
+# change. For a list setting of a module, the order and the commas do not
+# count.
 setup_record() {  # <key> <"set <value>" | unset>
+  local f; f="$(setup_file_value "$1")"
   # A setting changed: the module info (its secrets can follow a setting)
   # and setup_module_problem are made again.
   SETUP_PROBLEM=(); SETUP_INFO=()
-  if [[ "$2" == "$(setup_file_value "$1")" ]]; then unset "SETUP_NEW[$1]"; else SETUP_NEW[$1]="$2"; fi
+  if [[ "$2" == "$f" ]] || { in_list "$1" "$SETUP_LISTS" && [[ "$2" == set* && "$f" == set* ]] && same_set "${2#set }" "${f#set }"; }; then
+    unset "SETUP_NEW[$1]"
+  else
+    SETUP_NEW[$1]="$2"
+  fi
 }
 
 # The same names, whatever the order or the commas.
@@ -165,11 +177,18 @@ setup_names() {  # <extension> <dirs: yours, then shared>
 }
 
 
-# A module's description, settings, required settings, secrets and secret
-# help (entries split by a tab), read in a subshell, so that a broken module
-# of yours does not end the menu. 1 if it cannot be read (mcp_load status 2
-# or more).
-setup_module_info() {  # <name>: five lines
+# The info of a module, in eight lines:
+#   1. the description
+#   2. the settings (MCP_CONFIG)
+#   3. the required settings
+#   4. the secrets
+#   5. the help of the secrets: "<secret>: <help>" entries, split by a tab
+#   6. the help of the settings: "<KEY>: <help>" entries, split by a tab
+#   7. the settings with no value that the module needs (MCP_MISSING)
+#   8. the list settings (MCP_LIST_CONFIG)
+# A subshell reads the module, so a broken module of yours does not stop
+# the menu. Status 1 if mcp_load gives status 2 or more.
+setup_module_info() {  # <name>
   if [[ -z "${SETUP_INFO[$1]+x}" ]]; then
     SETUP_INFO[$1]="$(
       rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
@@ -183,30 +202,44 @@ setup_module_info() {  # <name>: five lines
       echo "${MCP_CONFIG[*]-}"
       echo "${MCP_REQUIRED_CONFIG[*]-}"
       echo "${MCP_SECRETS[*]-}"
-      (IFS=$'\t'; echo "${MCP_SECRET_HELP[*]-}")
+      # A tab or a new line in a help text would break the lines.
+      breaks=$'\t\n'
+      for k in "${!MCP_SECRET_HELP_OF[@]}"; do printf '%s: %s\t' "$k" "${MCP_SECRET_HELP_OF[$k]//[$breaks]/ }"; done; echo
+      for k in "${!MCP_SETTING_HELP[@]}"; do printf '%s: %s\t' "$k" "${MCP_SETTING_HELP[$k]//[$breaks]/ }"; done; echo
+      echo "${MCP_MISSING[*]-}"
+      echo "${MCP_LIST_CONFIG[*]-}"
     )" 2>/dev/null || SETUP_INFO[$1]="!"
   fi
   [[ "${SETUP_INFO[$1]}" != "!" ]] && echo "${SETUP_INFO[$1]}"
 }
 
-# The module's line <n> (2 settings, 3 required, 4 secrets, 5 help).
+# Line <n> of the module info (setup_module_info gives the lines).
 setup_module_line() {  # <name> <n>
   setup_module_info "$1" | sed -n "${2}p"
 }
 
-setup_secret_help() {  # <module> <secret>: what to type, from MCP_SECRET_HELP
+# The help of <name> from line <n> of the module info; empty if none.
+setup_help() {  # <module> <n> <name>
   local h
   while IFS= read -r h; do
-    [[ "$h" == "$2: "* ]] && { echo "${h#"$2: "}"; return; }
-  done < <(setup_module_line "$1" 5 | tr '\t' '\n')
-  echo "see the module's README section"
+    [[ "$h" == "$3: "* ]] && { echo "${h#"$3: "}"; return; }
+  done < <(setup_module_line "$1" "$2" | tr '\t' '\n')
+}
+
+setup_secret_help() {  # <module> <secret>: what to type, from MCP_SECRET_HELP_OF
+  local h; h="$(setup_help "$1" 5 "$2")"
+  [[ -n "$h" ]] || h="see the module's README section"
+  echo "$h"
 }
 
 # The value of secret <secret> for what was typed: the module's
 # mcp_secret_value, or as typed. Also at mcp_load status 1: you can type
-# the token before the setting is saved.
+# the token before the setting is saved. The module code gets the settings
+# as they are now in the menu.
 setup_secret_value() {  # <module> <secret> <typed>
   (
+    # shellcheck disable=SC2046  # the keys are words
+    setup_apply_settings $(setup_module_line "$1" 2)
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
     (( rc <= 1 )) || exit 1
     [[ "$MCP_FORMAT" != manifest ]] || mcp_bind "$1" >/dev/null 2>&1 || exit 1
@@ -284,24 +317,35 @@ setup_ask_secret() {  # <secret> <module> [replace]
 
 # Settings and secrets of module <name>; with "all", existing secrets too.
 setup_module_settings() {  # <name> [all]
-  local keys req k s
+  local keys req missing k s h
   if ! setup_module_info "$1" >/dev/null; then echo "  module $1 cannot be read"; return; fi
   keys="$(setup_module_line "$1" 2)"; req="$(setup_module_line "$1" 3)"
   for k in $keys; do
-    if in_list "$k" "$req"; then setup_ask_value "$k" "setting of $1" required
-    else setup_ask_value "$k" "setting of $1, optional"; fi
+    # In this shell: a changed setting empties the cache, and $(...) would
+    # make the info again for each call.
+    setup_module_info "$1" >/dev/null
+    h="$(setup_help "$1" 6 "$k")"; missing="$(setup_module_line "$1" 7)"
+    # A setting that the module needs but that is not required (a server
+    # URL uses it) can stay empty for now.
+    if in_list "$k" "$req"; then setup_ask_value "$k" "setting of $1${h:+: $h}" required
+    elif in_list "$k" "$missing"; then setup_ask_value "$k" "setting of $1, needed${h:+: $h}"
+    else setup_ask_value "$k" "setting of $1, optional${h:+: $h}"; fi
   done
+  setup_module_info "$1" >/dev/null
   for s in $(setup_module_line "$1" 4); do setup_ask_secret "$s" "$1" ${2:+replace}; done
 }
 
 # Sets <keys> as they are now in the menu, saved or not; the environment
-# wins, as for run.sh. For a subshell that loads a module.
+# wins, as for run.sh. SETTING_AT gets the place of each value: its line in
+# config.toml, or "setup (not saved)". For a subshell that loads a module.
 setup_apply_settings() {  # <keys...>
   local k v
   for k in "$@"; do
     [[ -n "${!k+x}" ]] && continue
     v="$(setup_get "$k")"
-    [[ -n "$v" ]] && printf -v "$k" '%s' "$v"
+    [[ -n "$v" ]] || continue
+    printf -v "$k" '%s' "$v"
+    if [[ -n "${SETUP_NEW[$k]+x}" ]]; then SETTING_AT[$k]="setup (not saved)"; else SETTING_AT[$k]="${SETUP_AT[$k]:-}"; fi
   done
   return 0
 }
@@ -309,7 +353,7 @@ setup_apply_settings() {  # <keys...>
 # What run.sh would leave module <name> out for, with the settings as they
 # are now in the menu (saved or not; the environment wins, as for run.sh):
 # its mcp_check and its server lines (lib/mcp.sh), the first problem only.
-# Nothing while a required setting is missing: the status says NEEDED.
+# Nothing while a setting is missing (MCP_MISSING): the status says NEEDED.
 # Kept in SETUP_PROBLEM[<name>] until a setting changes: call it in the
 # menu's own shell, not in $(...), and read the array.
 setup_module_problem() {  # <name>
@@ -318,12 +362,12 @@ setup_module_problem() {  # <name>
 
 setup_module_problem_now() {  # <name>
   (
-    local k v="" rc
+    local v="" rc
     setup_module_info "$1" >/dev/null || exit 0
     # shellcheck disable=SC2046  # the keys are words
     setup_apply_settings $(setup_module_line "$1" 2)
-    for k in $(setup_module_line "$1" 3); do [[ -n "${!k:-}" ]] || exit 0; done
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
+    (( rc == 1 && ${#MCP_MISSING[@]} )) && exit 0
     (( rc == 1 )) && { echo "$MCP_PROBLEM"; exit 0; }
     (( rc == 0 )) || exit 0
     if [[ "$MCP_FORMAT" == manifest ]]; then
@@ -356,15 +400,15 @@ setup_module_forget() {  # <name>
 # The status line under module <name>, number <n>: its settings, whether
 # its secrets are there. Empty for a module with neither.
 setup_module_status() {  # <name> <n>
-  local keys req secrets k v out="" problem
-  keys="$(setup_module_line "$1" 2)"; req="$(setup_module_line "$1" 3)"; secrets="$(setup_module_line "$1" 4)"
+  local keys missing secrets k v out="" problem
+  keys="$(setup_module_line "$1" 2)"; missing="$(setup_module_line "$1" 7)"; secrets="$(setup_module_line "$1" 4)"
   problem="${SETUP_PROBLEM[$1]:-}"   # setup_show fills it
   [[ -n "$keys$secrets$problem" ]] || return 0
   for k in $keys; do
     v="$(setup_get "$k")"
     if [[ -n "${!k+x}" ]]; then out+=" · $k=${!k} (environment)"
     elif [[ -n "$v" ]]; then out+=" · $k=$v"
-    elif in_list "$k" "$req"; then out+=" · $k NEEDED"
+    elif in_list "$k" "$missing"; then out+=" · $k NEEDED"
     else out+=" · $k (default)"; fi
   done
   for k in $secrets; do
@@ -501,9 +545,10 @@ setup_act() {  # <number> [e]
 }
 
 # Applies SETUP_NEW to <file> with config_set, one key at a time; stops at
-# the first key that config_set refuses (it says why). 1 then.
+# the first key that config_set refuses (it says why). 1 then. A list
+# setting of a module (MCP_LIST_CONFIG) becomes an array.
 setup_apply() {  # <file: a work copy of CONFIG_FILE>
-  local key c CONFIG_SET_NAME="$CONFIG_FILE"
+  local key c CONFIG_SET_NAME="$CONFIG_FILE" CONFIG_SET_LISTS="$SETUP_LISTS"
   local -A check=()
   # Read the real file first: an error then names it, not the work copy.
   [[ ! -f "$CONFIG_FILE" ]] || toml_load config "$CONFIG_FILE" check || return 1
@@ -581,7 +626,7 @@ setup_save() {
       failed=1
     fi
   done
-  SETUP_NEW=(); SETUP_FILE=(); SETUP_HAS=()
+  SETUP_NEW=(); SETUP_FILE=(); SETUP_AT=(); SETUP_HAS=(); SETUP_LISTS=" "
   setup_prime
   [[ -n "$failed" ]] && return 1
   echo "agentbox: the next agentbox start applies it; open sessions keep what they started with"
