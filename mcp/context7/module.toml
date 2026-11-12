@@ -1,0 +1,11 @@
+# Context7 (https://github.com/upstash/context7): current library documentation
+# and code examples. A remote server that the agent reaches through squid. It
+# has no sidecar, no setting and no secret. It is always enabled. Queries
+# (library names, questions) go to Upstash.
+format = 1
+description = "Current library documentation and code examples, by library and version"
+egress = ["mcp.context7.com"]
+
+[[servers]]
+name = "context7"
+url = "https://mcp.context7.com/mcp"

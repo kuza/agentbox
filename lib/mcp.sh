@@ -1,5 +1,5 @@
-# MCP servers as modules: mcp/<name>/mcp.sh (shared, in git) or
-# <AB_HOME>/mcp.local/<name>/mcp.sh (yours; wins over mcp/). AB_MCP in
+# MCP servers as modules: mcp/<name>/ (shared, in git) or
+# <AB_HOME>/mcp.local/<name>/ (yours; wins over mcp/). AB_MCP in
 # config.toml lists the enabled ones; context7 is always enabled.
 #
 # A module with module.toml (a manifest) describes itself as data:
@@ -7,8 +7,9 @@
 # runs its mcp.sh, if it has one. The text below is about the old format,
 # a module with only mcp.sh.
 #
-# A module is a bash file, sourced by run.sh on the host, so it is code with
-# the same trust as run.sh: read a module before you enable it. It sets:
+# A module of the old format is a bash file, sourced by run.sh on the host,
+# so it is code with the same trust as run.sh: read a module before you
+# enable it. It sets:
 #
 #   MCP_URL              URL the agents connect to (required)
 #   MCP_DESCRIPTION      one line, shown by pi

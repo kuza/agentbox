@@ -3439,6 +3439,23 @@ test_setup_manifest_module() {
   assert_out "TR_URL NEEDED · TR_TEAMS=Bad!"
 }
 
+# A module with only module.toml in the menu: context7. The menu does not
+# list context7 (it is always on), so a copy of its manifest as a module of
+# yours shows the line that it gets.
+test_setup_manifest_only_module() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  [[ -e "$AB/mcp/context7/mcp.sh" ]] && fail "context7 has an mcp.sh"
+  mkdir -p "$CFG/mcp.local/docs"
+  # The copy keeps the server name context7: it is not enabled, so the name does not matter.
+  cp "$AB/mcp/context7/module.toml" "$CFG/mcp.local/docs/"
+  setup_run "q\n"
+  assert_rc 0
+  assert_out '^MCP servers \(AB_MCP; context7 is always on\)$'
+  assert_out '\[ \] docs +\(yours\) Current library documentation and code examples, by library and version$'
+  assert_no_out 'cannot be read|NOT USABLE|error'
+}
+
 # --- run.sh: other parts ---
 
 test_sidecar_recreated_when_its_setup_changes() {

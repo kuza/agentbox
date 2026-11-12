@@ -59,7 +59,7 @@
 #                     <repo dir name>.env (default: <AB_HOME>/env)
 #
 #
-# The steps live in lib/*.sh, MCP servers in mcp/*/mcp.sh (README, MCP servers),
+# The steps live in lib/*.sh, MCP servers in mcp/<name>/ (README, MCP servers),
 # egress host groups in egress.d/ (README, Egress).
 # See README.md for first-time setup (networks, secrets).
 set -euo pipefail
