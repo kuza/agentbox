@@ -429,16 +429,19 @@ test_mcp_bb4() {
   grep -q '^podman build' "$STUB_DIR/calls" && fail "built again without a change"
   run_line ab-mcp-bb4-devtools | grep -q -- '--wsEndpoint=wss://browser.example.internal:6100/u/octo-cat/' || fail "wss: $(run_line ab-mcp-bb4-devtools)"
   # The server's URL with a path, an odd host or port, a user name that is
-  # not one, a port that is not: left out, nothing added to squid.
-  local bad
+  # not one (a - at the end: the name check), a port that is not: left
+  # out with the message of the check, nothing added to squid.
+  local bad check
   for bad in "BB4_URL=http://browser.example.internal:5101/u/x" "BB4_URL=http://a..b:5101" "BB4_URL=http://browser.example.internal:05101" \
-             "BB4_URL=http://browser.example.internal:99999" "BB4_USER=a/b" "BB4_DEVTOOLS_PORT=x"; do
+             "BB4_URL=http://browser.example.internal:99999" "BB4_USER=a/b" "BB4_USER=a-" "BB4_DEVTOOLS_PORT=x"; do
     : > "$CFG/config.toml"
     config "AB_MCP=bb4" "BB4_URL=http://browser.example.internal:5101" "BB4_USER=octo-cat" "$bad"
     [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] || sed -i "0,/^${bad%%=*} =/{/^${bad%%=*} =/d}" "$CFG/config.toml"
     printf 'ab-mcp-bb4-devtools x\n' >> "$STUB_DIR/running"
     ab_run --
     assert_skipped bb4
+    case "$bad" in BB4_URL=*) check=url-base ;; BB4_USER=*) check=name ;; *) check=port ;; esac
+    assert_out "config.toml:[0-9]+: ${bad%%=*}: .*\\($check\\)"
     # Settings that do not check out take the old browser connection away.
     grep -qx 'podman rm -f -v ab-mcp-bb4-devtools' "$STUB_DIR/calls" || fail "$bad: old devtools sidecar kept"
     [[ "$bad" == BB4_DEVTOOLS_PORT=* ]] && continue
@@ -2996,8 +2999,10 @@ test_first_start_offers_login() {
   command -v script >/dev/null || return 0
   setup "${FUNCNAME[0]}"
   : > "$STUB_DIR/secrets"
-  # The last Enter: the warnings of the start, then "start the session?".
-  tty_run 'y\nsk-ant-oat01-first\n\p\n' --
+  # No question before the session (AB_WARNINGS_ASK=0): a line within 0.5 s
+  # of the token is part of the token (lib/agent.sh), so a later Enter for
+  # that question would depend on the speed of the start.
+  tty_run 'y\nsk-ant-oat01-first\n' AB_WARNINGS_ASK=0 --
   assert_rc 0
   assert_out "no Claude Code token yet"
   assert_eq "$(cat "$STUB_DIR/secret-claude_oauth" 2>/dev/null)" sk-ant-oat01-first "stored token"
