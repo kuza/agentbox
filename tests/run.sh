@@ -566,6 +566,30 @@ test_mcp_missing_setting() {
   assert_out "grafana' left out of this session: it needs GRAFANA_URL"
 }
 
+# The url check of the manifest (v0.2.1): a bad URL leaves the module out
+# and names the place of the value.
+test_mcp_grafana_bad_url() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example/?orgId=1"
+  secrets grafana_sa
+  ab_run --
+  assert_skipped grafana
+  assert_out "grafana' left out of this session: $CFG/config.toml:[0-9]+: GRAFANA_URL: .* \(url\)$"
+  run_line ab-mcp-grafana && fail "grafana's sidecar started with a bad URL"
+  return 0
+}
+
+test_mcp_graylog_bad_url() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog"
+  secrets graylog_basic
+  ab_run GRAYLOG_URL=graylog.example --
+  assert_skipped graylog
+  assert_out "graylog' left out of this session: environment: GRAYLOG_URL: .* \(url\)$"
+  run_line ab-mcp-graylog && fail "graylog's sidecar started with a bad URL"
+  return 0
+}
+
 test_mcp_unknown_module() {
   setup "${FUNCNAME[0]}"
   # A module of another version, or a typo: left out, the rest starts.
@@ -2311,7 +2335,10 @@ test_config_trailing_comments() {
   ab_run --
   assert_rc 0
   assert_no_out "invalid"
-  run_line ab-mcp-grafana | grep -q 'GRAFANA_URL=https://g.example/#frag ' || fail "value with # inside lost: $(run_line ab-mcp-grafana)"
+  # The url check (v0.2.1) refuses the fragment. A value with no # passes the
+  # check. test_setup_edits_config checks that the quoted # stays in the value.
+  assert_skipped grafana
+  assert_out "grafana' left out of this session: $CFG/config.toml:2: GRAFANA_URL: .* \\(url\\)$"
   assert_file_lacks "$(cache squid-allow.conf)" 'golang'
 }
 
@@ -3135,7 +3162,8 @@ test_setup_edits_config() {
   assert_out '\[x\] pypi +pypi.org files.pythonhosted.org$'
   assert_out '\[ \] corp +\(yours\) corp.example$'
   assert_out "\\[ \\] typo +\\(yours\\) \\(typo.toml:1: unknown key 'hostz'"
-  assert_out "GRAYLOG_URL=https://g.example/#x · secret graylog_basic: MISSING · e [0-9]"
+  # The url check (v0.2.1) refuses the fragment, and names the line.
+  assert_out "GRAYLOG_URL=https://g.example/#x · secret graylog_basic: MISSING · NOT USABLE: .*config.toml:3: GRAYLOG_URL: .* \\(url\\) · e [0-9]"
   assert_out "GRAFANA_URL NEEDED · secret grafana_sa: MISSING · e [0-9]"
   assert_out "TABULARIS_CMD \\(default\\) · TABULARIS_PORT \\(default\\) · e [0-9]"
   secrets graylog_basic

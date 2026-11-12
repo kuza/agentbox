@@ -1,0 +1,19 @@
+# Graylog: log search through the built-in MCP endpoint of Graylog (Graylog
+# 7.0+). An nginx sidecar checks the caller token and replaces it with the
+# Authorization header of Graylog (nginx.conf.template), so the API token
+# never reaches the agent. The nginx image of agentbox is not in a manifest.
+format = 1
+description = "Search and analyse logs in Graylog (read-only)"
+
+# The base URL. mcp_start removes a / at the end, and /api or /api/mcp.
+[settings.GRAYLOG_URL]
+required = true
+check = "url"
+
+[secrets.basic]
+help = "a Graylog API token of a read-only user (README, step 2)"
+
+[[servers]]
+name = "graylog"
+url = "http://ab-mcp-graylog:8080/mcp"
+caller = true

@@ -1,0 +1,21 @@
+# Grafana: dashboards, alerts, Prometheus and Loki queries through the
+# official grafana/mcp-grafana server. The service account token is only in
+# the sidecar. Agents authenticate to the sidecar with the caller token.
+format = 1
+description = "Grafana dashboards, alerts and Prometheus/Loki queries (read-only)"
+
+# The base URL, without /api.
+[settings.GRAFANA_URL]
+required = true
+check = "url"
+
+[secrets.sa]
+help = "a Grafana service account token, Viewer role (README, step 2)"
+
+[images]
+server = "docker.io/grafana/mcp-grafana:latest"
+
+[[servers]]
+name = "grafana"
+url = "http://ab-mcp-grafana:8000/mcp"
+caller = true
