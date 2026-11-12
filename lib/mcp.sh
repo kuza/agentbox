@@ -128,7 +128,7 @@ mcp_load_again() {  # <name>
 mcp_load() {  # <name> [--declared]
   local h
   unset -f mcp_start mcp_secret_value mcp_check
-  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=(); MCP_FAILED=(); MCP_LIST_CONFIG=()
+  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=(); MCP_FAILED=(); MCP_LIST_CONFIG=(); MCP_FOR_EACH_SECRETS=()
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   declare -gA MCP_SECRET_HELP_OF=() MCP_SETTING_HELP=() MCP_IMAGE=() MCP_SECRET=() MCP_VALUE=() MCP_FIELD=() MCP_ITEMS=()
@@ -382,12 +382,13 @@ mcp_manifest_items() {  # <path>
 # module code. A broken manifest gives status 2, and MCP_PROBLEM is
 # "<file>:<line>: <reason> (<code>)" (tests/manifest/README lists the
 # codes). MCP_LIST_CONFIG has the keys with list = true. Without
-# --declared, also the resolved part: MCP_VALUE (the
-# setting values after the defaults, lowercase and the split of the
-# lists), MCP_FIELD, MCP_ITEMS, the for_each secrets, MCP_SERVERS and
-# MCP_EGRESS. A setting that fails its check or is missing gives status 1,
-# with the for_each secrets of each list setting that passed its check:
-# MCP_FAILED has "<KEY>: <code>" for each, and MCP_PROBLEM the first reason,
+# --declared, also the resolved part: MCP_VALUE (the setting values after
+# the defaults, lowercase and the split of the lists), MCP_FIELD,
+# MCP_ITEMS, the for_each secrets (also in MCP_FOR_EACH_SECRETS),
+# MCP_SERVERS and MCP_EGRESS. A setting that fails its check or is missing
+# gives status 1. The for_each secrets of each list setting that passed
+# its check are still set. MCP_FAILED has "<KEY>: <code>" for each failed
+# setting, and MCP_PROBLEM the first reason,
 # "<place>: <KEY>: <reason> (<check>)". The place is SETTING_AT
 # (lib/config.sh), "environment", or the line of the manifest for a default.
 mcp_load_manifest() {  # <name> [--declared]
@@ -539,6 +540,7 @@ mcp_load_manifest() {  # <name> [--declared]
       fi
       MCP_SECRET[$name]="$1_$name"
       MCP_SECRETS+=("$1_$name")
+      MCP_FOR_EACH_SECRETS+=("$1_$name")
       [[ -n "${v[secrets.$k.help]:-}" ]] || continue
       mcp_manifest_subst "secrets.$k.help" "${v[secrets.$k.help]}" "$it" || return 2
       MCP_SECRET_HELP_OF[$1_$name]="$sub"
@@ -707,7 +709,8 @@ mcp_init() {
   done
   # The settings of each module that this version has (bb4 configured,
   # then removed from AB_MCP): config.toml may keep them, and the second
-  # pass ignores them without a warning. Each name once, as mcp_find finds
+  # pass ignores them without a warning. Each manifest module that loads
+  # also gets its cache index. Each name once, as mcp_find finds
   # it: a module of yours replaces the shared one of that name. A key that
   # no module has still warns. The keys come from the [settings] of a
   # manifest (none when it cannot be read), and from the mcp.sh of a module
@@ -718,12 +721,126 @@ mcp_init() {
     d="$(mcp_find "$name")" || continue
     if [[ -f "$d/module.toml" ]]; then
       keys=()
-      if mcp_load "$name" --declared; then keys=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}); fi
+      if mcp_load "$name" --declared; then
+        keys=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
+        mcp_index_save "$name" || ab_warn "cannot write the index of MCP module '$name': agentbox uninstall can leave its secrets"
+      fi
     else
       read -ra keys <<<"$(mcp_config_keys_text "$d/mcp.sh")"
     fi
     MCP_QUIET_KEYS+=(${keys[@]+"${keys[@]}"})
   done < <(mcp_names)
+}
+
+# The index of a manifest module: a snapshot of its declared part, so that
+# agentbox uninstall finds its images and secrets without Python. It is a
+# data contract (also for a later Go core). Format 1: pairs of fields, each
+# field ends with a NUL ("<key>\0<value>\0"), the keys in this order:
+#   index.format      1
+#   manifest.sha      the sha256 of module.toml, in hex
+#   images            the images, split by a space
+#   secrets           the Podman names of the secrets without for_each
+#   own_secrets       the Podman names of the own secrets
+#   caller_secret     the Podman name of the caller token, or empty
+#   secrets.for_each  the Podman names that agentbox made through for_each,
+#                     sorted, each once. agentbox adds names. Only
+#                     uninstall removes them.
+# A list is empty when the module has none. A reader ignores a key that it
+# does not know. A file that agentbox setup made before the first start
+# has index.format and secrets.for_each only. The places:
+#   <cache>/agentbox/modules/<name>   mcp_init, mcp_check_secrets and
+#                                     agentbox setup write it
+#   mcp/<name>/module.index           in git, for each shared manifest;
+#                                     release.sh --index writes it, with
+#                                     no for_each names
+# The index of the module that mcp_load --declared loaded, with the given
+# for_each names, on stdout.
+mcp_index() {  # [<for_each name>...]
+  local sha
+  sha="$(sha256sum < "$MCP_DIR/module.toml")"
+  printf '%s\0' index.format 1 manifest.sha "${sha%% *}" images "${MCP_IMAGES[*]-}" secrets "${MCP_SECRETS[*]-}" \
+    own_secrets "${MCP_OWN_SECRETS[*]-}" caller_secret "$MCP_CALLER_SECRET" secrets.for_each "$(mcp_index_names "$@")"
+}
+
+mcp_index_names() {  # [<for_each name>...]: sorted, each once, on one line
+  printf '%s\n' "$@" | sed '/^$/d' | LC_ALL=C sort -u | paste -sd' ' -
+}
+
+# Writes the cache index of module <name>. It keeps the for_each names of
+# the earlier file. Without --add, the other pairs come from the module
+# that mcp_load --declared loaded. With --add, it adds the given for_each
+# names and copies each other pair of the earlier file, also a pair that
+# this version does not know. The lock stops two starts at the same time
+# from losing names. Status 1 when it cannot write the file: the caller
+# warns and continues, because only uninstall needs the index.
+mcp_index_save() {  # <name> [--add <for_each name>...]
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules" f k v lock tmp rc=0
+  local -a names=() order=()
+  local -A old=()
+  f="$dir/$1"
+  { mkdir -p "$dir" && exec {lock}>> "$dir.lock"; } 2>/dev/null || return 1
+  if ! flock "$lock" || ! tmp="$(mktemp "$f.XXXXXX" 2>/dev/null)"; then
+    exec {lock}>&-
+    return 1
+  fi
+  if [[ -f "$f" ]]; then
+    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+      [[ -n "${old[$k]+x}" ]] || order+=("$k")
+      old[$k]="$v"
+    done < "$f" || rc=1
+  fi
+  read -ra names <<<"${old[secrets.for_each]-}"
+  if (( rc )); then
+    :
+  elif [[ "${2:-}" == --add ]]; then
+    [[ -n "${old[index.format]+x}" ]] || order=(index.format ${order[@]+"${order[@]}"})
+    [[ -n "${old[secrets.for_each]+x}" ]] || order+=(secrets.for_each)
+    old[index.format]="${old[index.format]:-1}"
+    old[secrets.for_each]="$(mcp_index_names ${names[@]+"${names[@]}"} "${@:3}")"
+    for k in "${order[@]}"; do printf '%s\0' "$k" "${old[$k]}"; done > "$tmp" || rc=1
+  else
+    mcp_index ${names[@]+"${names[@]}"} > "$tmp" || rc=1
+  fi
+  (( rc )) || mv -f -- "$tmp" "$f" 2>/dev/null || rc=1
+  (( ! rc )) || rm -f -- "$tmp"
+  exec {lock}>&-
+  return "$rc"
+}
+
+# The index files of the shared modules in <tree>: mcp/<name>/module.index
+# for each module with module.toml (release.sh --index). It removes a
+# module.index with no module.toml next to it. With --check (the drift
+# check), it writes nothing. Then it returns 1 when a file is missing, is
+# not the index of its manifest, or has no manifest.
+mcp_index_tree() {  # <tree> [--check]
+  local d name rc=0
+  local -a MCP_DIRS=("$1/mcp")
+  for d in "$1"/mcp/*/module.index; do
+    [[ -f "$d" && ! -f "${d%/*}/module.toml" ]] || continue
+    name="${d%/module.index}"; name="${name##*/}"
+    if [[ "${2:-}" != --check ]]; then
+      rm -f -- "$d"
+      echo "removed mcp/$name/module.index"
+    else
+      echo "error: mcp/$name/module.index has no module.toml: run release.sh --index" >&2
+      rc=1
+    fi
+  done
+  for d in "$1"/mcp/*/module.toml; do
+    [[ -f "$d" ]] || continue
+    d="${d%/module.toml}"; name="${d##*/}"
+    if ! mcp_load "$name" --declared; then
+      echo "error: MCP module '$name': $MCP_PROBLEM" >&2
+      rc=1
+    elif [[ "${2:-}" != --check ]]; then
+      mcp_index > "$d/module.index"
+      echo "wrote mcp/$name/module.index"
+    elif ! cmp -s <(mcp_index) "$d/module.index"; then
+      echo "error: mcp/$name/module.index is missing or is not the index of its module.toml: run release.sh --index" >&2
+      rc=1
+    fi
+  done
+  return "$rc"
 }
 
 # A module that cannot run is left out of this start, with a warning: the
@@ -767,6 +884,10 @@ mcp_check_secrets() {
     elif (( rc )); then
       mcp_skip "$name" "$MCP_PROBLEM" keep
       continue
+    fi
+    # Also before the secrets exist: uninstall removes the names that exist.
+    if (( ${#MCP_FOR_EACH_SECRETS[@]} )) && ! mcp_index_save "$name" --add "${MCP_FOR_EACH_SECRETS[@]}"; then
+      ab_warn "cannot write the index of MCP module '$name': agentbox uninstall can leave its secrets"
     fi
     # Settings that do not check out: access goes, as for an emptied one.
     # The code of a manifest module runs here, in a subshell. For a broken

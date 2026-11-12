@@ -2,6 +2,11 @@
 # release.sh: publish a release, on the maintainer's HOST (README, Releases).
 #
 #   ./release.sh vX.Y.Z
+#   ./release.sh --index
+#
+# --index writes mcp/<name>/module.index for each shared module with
+# module.toml (lib/mcp.sh, mcp_index_tree), and does no release. Commit the
+# files: the tests fail when one is missing or stale.
 #
 # Checks first, and stops at the first problem:
 #   - the version is vX.Y.Z, new, and has a "## vX.Y.Z" section in CHANGELOG.md;
@@ -29,6 +34,19 @@ source "$SCRIPT_DIR/lib/release.sh"
 cd "$SCRIPT_DIR"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+if [[ "${1:-}" == --index ]]; then
+  # shellcheck source=lib/paths.sh
+  source "$SCRIPT_DIR/lib/paths.sh"
+  # shellcheck source=lib/config.sh
+  source "$SCRIPT_DIR/lib/config.sh"
+  # shellcheck source=lib/toml.sh
+  source "$SCRIPT_DIR/lib/toml.sh"
+  # shellcheck source=lib/mcp.sh
+  source "$SCRIPT_DIR/lib/mcp.sh"
+  mcp_index_tree "$SCRIPT_DIR"
+  exit
+fi
 
 v="${1:-}"
 [[ "$v" =~ $VERSION_RE ]] || die "usage: $0 vX.Y.Z"

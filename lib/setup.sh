@@ -177,7 +177,7 @@ setup_names() {  # <extension> <dirs: yours, then shared>
 }
 
 
-# The info of a module, in eight lines:
+# The info of a module, in nine lines:
 #   1. the description
 #   2. the settings (MCP_CONFIG)
 #   3. the required settings
@@ -186,6 +186,7 @@ setup_names() {  # <extension> <dirs: yours, then shared>
 #   6. the help of the settings: "<KEY>: <help>" entries, split by a tab
 #   7. the settings with no value that the module needs (MCP_MISSING)
 #   8. the list settings (MCP_LIST_CONFIG)
+#   9. the for_each secrets (MCP_FOR_EACH_SECRETS)
 # A subshell reads the module, so a broken module of yours does not stop
 # the menu. Status 1 if mcp_load gives status 2 or more.
 setup_module_info() {  # <name>
@@ -208,6 +209,7 @@ setup_module_info() {  # <name>
       for k in "${!MCP_SETTING_HELP[@]}"; do printf '%s: %s\t' "$k" "${MCP_SETTING_HELP[$k]//[$breaks]/ }"; done; echo
       echo "${MCP_MISSING[*]-}"
       echo "${MCP_LIST_CONFIG[*]-}"
+      echo "${MCP_FOR_EACH_SECRETS[*]-}"
     )" 2>/dev/null || SETUP_INFO[$1]="!"
   fi
   [[ "${SETUP_INFO[$1]}" != "!" ]] && echo "${SETUP_INFO[$1]}"
@@ -610,8 +612,14 @@ setup_save() {
   # Only the secrets that a module lists now, enabled or not: one typed
   # for an owner that was then taken out of GH_OWNERS is not stored, and
   # the save says so.
-  local wanted=" " m
-  while IFS= read -r m; do wanted+="$(setup_module_line "$m" 4) "; done < <(mcp_names | sort)
+  local wanted=" " m s
+  local -a fe=()
+  local -A for_each=()
+  while IFS= read -r m; do
+    wanted+="$(setup_module_line "$m" 4) "
+    read -ra fe <<<"$(setup_module_line "$m" 9)"
+    for s in ${fe[@]+"${fe[@]}"}; do for_each[$s]="$m"; done
+  done < <(mcp_names | sort)
   for name in "${!SETUP_SECRETS[@]}"; do
     if [[ "$wanted" != *" $name "* ]]; then
       echo "agentbox: not storing the Podman secret $name: no module uses it now"
@@ -620,6 +628,10 @@ setup_save() {
     fi
     if printf '%s' "${SETUP_SECRETS[$name]}" | secret_store "$name"; then
       echo "agentbox: stored the Podman secret $name"
+      # The index of the module keeps the name for agentbox uninstall.
+      if [[ -n "${for_each[$name]+x}" ]] && ! mcp_index_save "${for_each[$name]}" --add "$name"; then
+        ab_warn "cannot write the index of MCP module '${for_each[$name]}': agentbox uninstall can leave $name"
+      fi
       unset "SETUP_SECRETS[$name]"
     else
       echo "error: could not store the Podman secret $name" >&2

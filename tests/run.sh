@@ -4672,6 +4672,141 @@ test_manifest_conformance() {
   done
 }
 
+# The cache index of a module, its fields split by a |.
+index_of() { tr '\0' '|' < "$(cache "modules/$1")" 2>/dev/null; }
+
+# The cache index of a manifest module: its declared part at status 0, and
+# the for_each names of the starts and of setup, which accumulate. A broken
+# manifest keeps the earlier file. A module of the old format gets none.
+test_mcp_index_cache() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module ix 'format = 1' 'own_secrets = ["db"]' '[settings.IX_TEAMS]' 'list = true' 'check = "name"' \
+    '[secrets.tok]' '[secrets."team_{item}"]' 'for_each = "IX_TEAMS"' '[images]' 'app = "docker.io/x/app:1"' \
+    '[[servers]]' 'name = "ix"' 'url = "http://ab-mcp-ix:8080/mcp"' 'caller = true'
+  mkdir -p "$CFG/mcp.local/old"
+  echo 'MCP_URL=http://ab-mcp-old:8080/mcp' > "$CFG/mcp.local/old/mcp.sh"
+  config "AB_MCP=ix old" "IX_TEAMS=a,b"
+  local sha head
+  sha="$(sha256sum < "$CFG/mcp.local/ix/module.toml" | cut -d' ' -f1)"
+  head="index.format|1|manifest.sha|$sha|images|docker.io/x/app:1|secrets|ix_tok|own_secrets|ix_db|caller_secret|ix_mcp_caller"
+  # The names go in also before their secrets exist.
+  ab_run --
+  assert_skipped ix
+  assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_a ix_team_b|" "the index after the first start"
+  [[ -e "$(cache modules/old)" ]] && fail "an index for a module of the old format"
+  sed -i 's/^IX_TEAMS = .*/IX_TEAMS = "c,b"/' "$CFG/config.toml"
+  ab_run --
+  assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_a ix_team_b ix_team_c|" "the index after other teams"
+  # A broken manifest (status 2): the earlier file stays.
+  echo 'nope = 1' >> "$CFG/mcp.local/ix/module.toml"
+  ab_run --
+  assert_skipped ix
+  assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_a ix_team_b ix_team_c|" "the index of a broken manifest"
+  sed -i '$d' "$CFG/mcp.local/ix/module.toml"
+  # Setup before the first start: only the name of the secret that it stores.
+  rm -f -- "$(cache modules/ix)"
+  setup_run "e $(setup_entry ix)\nd\n\nt\ns\n"
+  assert_rc 0
+  assert_out "stored the Podman secret ix_team_d"
+  assert_eq "$(index_of ix)" "index.format|1|secrets.for_each|ix_team_d|" "the index that setup made"
+  ab_run --
+  assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_d|" "the index after the start"
+  # A cache directory that is not writable: the start and setup warn and go on.
+  chmod a-w "$(cache modules)"
+  ab_run --
+  assert_rc 0
+  assert_out "warning: cannot write the index of MCP module 'ix'"
+  setup_run "e $(setup_entry ix)\nd\n\nt\ns\n"
+  assert_rc 0
+  assert_out "stored the Podman secret ix_team_d"
+  assert_out "warning: cannot write the index of MCP module 'ix': agentbox uninstall can leave ix_team_d"
+  chmod u+w "$(cache modules)"
+  assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_d|" "the index after the failed writes"
+  [[ -z "$(find "$(cache modules)" -name 'ix.*')" ]] || fail "a temporary index file left behind"
+}
+
+# index_check <tree>: the drift check of <tree>; output in $T/out.
+index_check() {
+  (
+    SCRIPT_DIR="$ROOT" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    for k in paths config toml mcp; do
+      # shellcheck source=/dev/null
+      source "$ROOT/lib/$k.sh"
+    done
+    mcp_index_tree "$1" --check
+  ) > "$T/out" 2>&1
+  RC=$?
+}
+# release_index: release.sh --index of $T/tree; output in $T/out.
+release_index() {
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" bash "$T/tree/release.sh" --index > "$T/out" 2>&1
+  RC=$?
+}
+# index_tree: a copy of the repository tree in $T/tree, with the manifest
+# module ix in its mcp/, after release.sh --index of the copy without ix.
+index_tree() {
+  mkdir -p "$T/tree"
+  (cd "$ROOT" && git ls-files -co --exclude-standard -z | xargs -0 cp --parents -t "$T/tree")
+  # No git repository and no signing key: --index runs before those checks.
+  release_index
+  assert_rc 0
+  assert_eq "$(cd "$T/tree" && find mcp -name module.index | sort)" "$(cd "$ROOT" && find mcp -name module.index | sort)" \
+    "the index files of the tree after release.sh --index"
+  mkdir -p "$T/tree/mcp/ix"
+  printf '%s\n' 'format = 1' '[secrets.tok]' '[[servers]]' 'name = "ix"' 'url = "https://ix.example/mcp"' > "$T/tree/mcp/ix/module.toml"
+}
+
+# The drift test: each module.index in git is the index of its manifest.
+test_mcp_index_drift() {
+  setup "${FUNCNAME[0]}"
+  index_check "$ROOT"
+  assert_rc 0
+}
+
+test_mcp_index_drift_missing() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  index_check "$T/tree"
+  assert_rc 1
+  assert_out "mcp/ix/module.index .*run release.sh --index$"
+}
+
+# A module.index with no module.toml next to it: the drift check fails, and
+# release.sh --index removes the file.
+test_mcp_index_drift_orphan() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  release_index
+  assert_rc 0
+  rm "$T/tree/mcp/ix/module.toml"
+  index_check "$T/tree"
+  assert_rc 1
+  assert_out "mcp/ix/module.index has no module.toml: run release.sh --index$"
+  release_index
+  assert_rc 0
+  [[ -e "$T/tree/mcp/ix/module.index" ]] && fail "release.sh --index kept the module.index with no module.toml"
+  index_check "$T/tree"
+  assert_rc 0
+}
+
+test_mcp_index_drift_stale() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  release_index
+  assert_rc 0
+  local sha; sha="$(sha256sum < "$T/tree/mcp/ix/module.toml" | cut -d' ' -f1)"
+  assert_eq "$(tr '\0' '|' < "$T/tree/mcp/ix/module.index")" \
+    "index.format|1|manifest.sha|$sha|images||secrets|ix_tok|own_secrets||caller_secret||secrets.for_each||" "the index in the tree"
+  index_check "$T/tree"
+  assert_rc 0
+  sed -i '1a description = "changed"' "$T/tree/mcp/ix/module.toml"
+  index_check "$T/tree"
+  assert_rc 1
+  assert_out "mcp/ix/module.index .*run release.sh --index$"
+}
+
 # --- main -------------------------------------------------------------------
 
 echo "agentbox tests ($WORK)"
