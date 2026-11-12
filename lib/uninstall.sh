@@ -85,8 +85,8 @@ uninstall_config() {  # <values>
 
 # The Podman secrets whose names come from a setting of a module of the old
 # format: MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For
-# github, ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner in
-# <values> (uninstall_config), in lowercase. Only those: a secret of the
+# ("MY_TEAMS my_team_"): my_team_<team> for each team in <values>
+# (uninstall_config), in lowercase. Only those: a secret of the
 # same prefix that agentbox does not use stays. Without <values>, it keeps
 # those secrets and says so on stderr.
 uninstall_secrets_by_setting() {  # [<values>]

@@ -26,7 +26,7 @@
 #                        value, when it is not stored as typed (graylog)
 #   MCP_SECRETS_BY_SETTING=()  optional, one line, one entry: "<KEY> <prefix>" for
 #                        secrets named <prefix><value> for each value of
-#                        setting KEY (github: "GH_OWNERS github_pat_");
+#                        setting KEY ("MY_TEAMS my_team_");
 #                        agentbox uninstall --all removes those, read from
 #                        config.toml
 #   MCP_OWN_SECRETS=()   podman secrets mcp_start creates itself; agentbox
@@ -854,6 +854,8 @@ mcp_index_tree() {  # <tree> [--check]
 # its mcp.sh as text). Needs lib/egress.sh (egress_host_ok).
 mcp_uninstall_names() {  # images|secrets [<values>]
   local fields=images d f k v name cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules"
+  # <the reason>, <the module>: for_each secrets that can stay.
+  local keep="agentbox: %s, so it removes only the secrets of the list settings of MCP module '%s' that its index has. If you have other such secrets, remove them yourself (podman secret ls).\n"
   local -a dirs=("${MCP_DIRS[@]}") MCP_DIRS=() names=() w=()
   [[ "$1" == images ]] || fields="secrets own_secrets caller_secret secrets.for_each"
   for f in "$SCRIPT_DIR"/mcp/*/module.index "$cache"/*; do
@@ -873,8 +875,14 @@ mcp_uninstall_names() {  # images|secrets [<values>]
       [[ -f "$f" && "$name" =~ $AB_NAME_RE ]] || continue
       if ! mcp_load "$name" --declared; then
         # The release index is of the shared module, not of yours.
-        [[ -f "$cache/$name" || ( "$d" != "$USER_MCP_DIR" && -f "$SCRIPT_DIR/mcp/$name/module.index" ) ]] ||
+        if [[ -f "$cache/$name" || ( "$d" != "$USER_MCP_DIR" && -f "$SCRIPT_DIR/mcp/$name/module.index" ) ]]; then
+          # The index has only the for_each names of the starts and of
+          # setup, not those of a token from before v0.2.1.
+          [[ "$1" != secrets ]] || ! grep -qE '^[[:space:]]*for_each[[:space:]]*=' "$f" ||
+            printf "$keep" "$MCP_PROBLEM" "$name" >&2
+        else
           echo "agentbox: $MCP_PROBLEM. There is no index of MCP module '$name' (in $SCRIPT_DIR/mcp or $cache) either, so agentbox keeps its $1. If they are on this host, remove them yourself (podman ${1/secrets/secret ls})." >&2
+        fi
         continue
       fi
       if [[ "$1" == images ]]; then
@@ -884,7 +892,7 @@ mcp_uninstall_names() {  # images|secrets [<values>]
       names+=(${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"} ${MCP_OWN_SECRETS[@]+"${MCP_OWN_SECRETS[@]}"} "$MCP_CALLER_SECRET")
       (( ${#MCP_LIST_CONFIG[@]} )) || continue
       if [[ -z "${2:-}" ]]; then
-        echo "agentbox: agentbox cannot read ${UNINSTALL_CONFIG:-config.toml}, so it removes only the secrets of the list settings of MCP module '$name' that its index has. If you have other such secrets, remove them yourself (podman secret ls)." >&2
+        printf "$keep" "agentbox cannot read ${UNINSTALL_CONFIG:-config.toml}" "$name" >&2
         continue
       fi
       # The for_each secrets from the values in config.toml, not from the
@@ -896,6 +904,10 @@ mcp_uninstall_names() {  # images|secrets [<values>]
           [[ -z "${values[$k]+x}" ]] || printf -v "$k" '%s' "${values[$k]}"
         done
         mcp_load "$name" || true
+        # A list setting that fails its check gives no names.
+        for k in ${MCP_FAILED[@]+"${MCP_FAILED[@]}"}; do
+          [[ " ${MCP_LIST_CONFIG[*]} " != *" ${k%%:*} "* ]] || { printf "$keep" "$MCP_PROBLEM" "$name" >&2; break; }
+        done
         printf '%s\n' ${MCP_FOR_EACH_SECRETS[@]+"${MCP_FOR_EACH_SECRETS[@]}"}
       )
     done

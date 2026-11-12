@@ -536,7 +536,7 @@ test_mcp_load_status() {
   local out
   out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
     set -euo pipefail
-    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
     rc=0; mcp_load nope || rc=$?; echo "nope $rc $MCP_PROBLEM"
     rc=0; mcp_load broken --declared || rc=$?; echo "broken $rc $MCP_PROBLEM"
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
@@ -1667,6 +1667,8 @@ test_github_nginx_follows_its_server() {
   config "AB_MCP=github"
   secrets github_pat
   ab_run --
+  # No GH_TOOLSETS: the default of module.toml.
+  run_line ab-mcp-github | grep -q -- ' -e GH_TOOLSETS=context,repos,issues,pull_requests,actions ' || fail "GH_TOOLSETS: $(run_line ab-mcp-github)"
   ab_run --
   run_line ab-mcp-github && fail "nginx recreated without a change"
   # check-updates.sh removes the server for a new image; nginx must follow.
@@ -1705,11 +1707,32 @@ test_github_more_owners() {
   assert_eq "$(grep -c 'Bearer \${GH_PAT_1}' "$t")" 1 "GH_PAT_1 uses"
   assert_eq "$(grep -c 'Bearer \${GH_PAT}"' "$t")" 1 "GH_PAT uses"
   assert_eq "$(grep -c 'location / { return 404; }' "$t")" 1 "catch-all"
-  # A name that is not a GitHub name: left out, with the reason.
+  # A name that is not a GitHub name: left out, with the message of the check.
   sed -i 's/^GH_OWNERS =.*/GH_OWNERS = "bad_name"/' "$CFG/config.toml"
   ab_run --
   assert_skipped github
-  assert_out "GH_OWNERS must hold GitHub user or organization names, got: bad_name"
+  assert_out "config.toml:[0-9]+: GH_OWNERS: .*\\(name\\)"
+}
+
+# GH_TOOLSETS goes into a header of nginx: a toolset with a character other
+# than a-z and _ is refused (mcp_check). A string from the environment is a
+# list: nginx gets its toolsets joined with a comma.
+test_github_toolsets() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github" 'GH_TOOLSETS = ["repos", "Issues"]'
+  secrets github_pat
+  printf 'ab-mcp-github x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped github
+  assert_out "GH_TOOLSETS must hold toolset names of a-z and _ only, got 'repos,Issues'"
+  grep -qx 'podman rm -f -v ab-mcp-github' "$STUB_DIR/calls" || fail "nginx of the refused toolsets kept"
+  ab_run "GH_TOOLSETS=repos issues" --
+  assert_rc 0
+  run_line ab-mcp-github | grep -q -- ' -e GH_TOOLSETS=repos,issues ' || fail "GH_TOOLSETS: $(run_line ab-mcp-github)"
+  # Only separators: no toolset is not the default.
+  ab_run "GH_TOOLSETS= , " --
+  assert_skipped github
+  assert_out "GH_TOOLSETS has no toolset names"
 }
 
 # tab_setup <test name>: the tabularis module enabled, with stand-ins for
@@ -2860,7 +2883,8 @@ test_uninstall() {
 }
 
 # Without Python 3.11: install.sh warns, update and rollback work, setup
-# stops, and uninstall --all removes all but the secrets of GH_OWNERS.
+# stops, and uninstall --all removes all but an owner token that is not in
+# the index.
 test_without_python_311() {
   rel_setup "${FUNCNAME[0]}"
   no_python_stub "$T/sysbin"
@@ -2888,7 +2912,9 @@ test_without_python_311() {
   ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
   assert_rc 0
   assert_out "warning: agentbox needs Python 3.11 or newer"
-  assert_out "cannot read GH_OWNERS in .*keeps any secrets github_pat_<name>"
+  # No start put github_pat_myorg into the index of github: it stays, and
+  # uninstall says so.
+  assert_out "needs Python 3.11 or newer to read .*mcp/github/module.toml, so it removes only the secrets of the list settings of MCP module 'github' that its index has"
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg" "secrets after --all"
   [[ -e "$CFG" || -e "$T/home/.local/share/agentbox" ]] && fail "files left after --all"
   return 0
@@ -2921,7 +2947,7 @@ test_uninstall_broken_unconverted_config_env() {
   ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
   assert_rc 0
   assert_out "config.env:2: not valid UTF-8"
-  assert_out "keeps any secrets github_pat_<name>"
+  assert_out "cannot read .*config.env, so it removes only the secrets of the list settings of MCP module 'github' that its index has"
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg" "secrets after --all"
 }
 
@@ -3324,7 +3350,8 @@ test_setup_secrets() {
   local github; github="$(setup_entry github)"
   setup_run "$github\n\nacme\nghp_main\nghp_acme\ns\n"
   assert_out "secret github_pat_acme for github \(a fine-grained personal access token with resource owner acme"
-  grep -qx 'GH_OWNERS = "acme"' "$CFG/config.toml" || fail "GH_OWNERS not saved"
+  # A list setting: setup writes an array.
+  grep -qxF 'GH_OWNERS = ["acme"]' "$CFG/config.toml" || fail "GH_OWNERS not saved: $(grep GH_OWNERS "$CFG/config.toml")"
   assert_eq "$(cat "$STUB_DIR/secret-github_pat_acme")" "ghp_acme" "owner secret"
   # The token of an owner in config.toml shows as MISSING at once, before
   # any change in the menu.
@@ -4977,6 +5004,48 @@ test_uninstall_manifest_after_rollback() {
   ab_cmd env PATH="$T/nopy:$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
   assert_rc 0
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "ix_two" "secrets after --all"
+}
+
+# The owner tokens of github: the index keeps the names of each start and of
+# setup. Uninstall with Python and without it removes the token of each
+# owner that GH_OWNERS had, also of an owner that setup stored and that left
+# GH_OWNERS before a start, and no other github_pat_ secret.
+test_uninstall_github_owner_tokens() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  AB="$T/tree"
+  config "AB_MCP=github" 'GH_OWNERS = ["a", "b"]'
+  ab_run --
+  sed -i 's/^GH_OWNERS = .*/GH_OWNERS = ["b", "c"]/' "$CFG/config.toml"
+  ab_run --
+  setup_run "e $(setup_entry github)\n\nd\n\nghp_d\ns\n"
+  assert_rc 0
+  assert_out "stored the Podman secret github_pat_d"
+  sed -i 's/^GH_OWNERS = .*/GH_OWNERS = ["b", "c"]/' "$CFG/config.toml"
+  cp -r -- "$(cache modules)" "$T/modules"
+  local all="github_pat github_pat_a github_pat_b github_pat_c github_pat_d github_mcp_caller github_pat_ci"
+  printf '%s\n' $all > "$STUB_DIR/secrets"
+  uninstall_all
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci" "secrets after --all with Python"
+  # Without Python: the index files only. No config.toml is left.
+  mkdir -p "$(cache "")"
+  cp -r -- "$T/modules" "$(cache modules)"
+  printf '%s\n' $all > "$STUB_DIR/secrets"
+  no_python_stub "$T/nopy"
+  rm -rf -- "$(cache toml)"
+  uninstall_all "PATH=$T/nopy:$T/bin:$T/sysbin:$PATH"
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci" "secrets after --all without Python"
+  # With Python, one bad owner in config.toml: no names from config.toml,
+  # and uninstall says so.
+  mkdir -p "$CFG"
+  config 'GH_OWNERS = ["e", "b_x"]'
+  printf '%s\n' github_pat_e > "$STUB_DIR/secrets"
+  uninstall_all
+  assert_rc 0
+  assert_out "GH_OWNERS: .*\\(name\\), so it removes only the secrets of the list settings of MCP module 'github' that its index has"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_e" "secrets after --all with a bad owner"
 }
 
 # --- main -------------------------------------------------------------------

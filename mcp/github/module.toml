@@ -1,0 +1,46 @@
+# GitHub: pull requests, issues, CI runs and repository contents through
+# the official github-mcp-server, with a fine-grained PAT (README, GitHub
+# (MCP)). The PATs stay in an nginx sidecar (mcp.sh). The nginx image of
+# agentbox is not in a manifest.
+# A fine-grained PAT has one resource owner (your account or one
+# organization). For the repositories of more owners, GH_OWNERS lists them.
+# Each owner gets its own PAT (the secret github_pat_<owner>) and its own
+# server github-<owner>, at the path /o/<owner>/mcp of the same nginx.
+format = 1
+description = "GitHub pull requests, issues, CI runs and repository contents"
+
+# The toolsets that nginx pins. mcp_check accepts only a-z and _ in each
+# toolset, because the value goes into a header of nginx.
+[settings.GH_TOOLSETS]
+list = true
+default = "context,repos,issues,pull_requests,actions"
+
+# More resource owners, each with its own PAT. GitHub names do not depend
+# on case, so agentbox makes them lowercase.
+[settings.GH_OWNERS]
+list = true
+check = "name"
+lowercase = true
+
+[secrets.pat]
+help = "a fine-grained personal access token, read-only (README, GitHub (MCP))"
+
+[secrets."pat_{item}"]
+for_each = "GH_OWNERS"
+help = "a fine-grained personal access token with resource owner {item}, read-only (README, GitHub (MCP))"
+
+[images]
+server = "ghcr.io/github/github-mcp-server:latest"
+
+[[servers]]
+name = "github"
+url = "http://ab-mcp-github:8080/mcp"
+caller = true
+description = "GitHub: pull requests, issues, CI runs and contents of the repositories of the github_pat token"
+
+[[servers]]
+for_each = "GH_OWNERS"
+name = "github-{item}"
+url = "http://ab-mcp-github:8080/o/{item}/mcp"
+caller = true
+description = "GitHub: pull requests, issues, CI runs and contents of the repositories of {item}"
