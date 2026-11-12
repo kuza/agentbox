@@ -1,0 +1,5 @@
+N_DASH_START = "-a"
+N_DASH_END = "a-"
+N_TWO_DASHES = "a--b"
+N_LONG = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+N_UNDERSCORE = "a_b"

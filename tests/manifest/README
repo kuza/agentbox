@@ -18,7 +18,8 @@ context        Lines "<key>=<value>":
                "shared" puts the module into mcp/, "local" into mcp.local/.
 settings.toml  Optional. The setting values, as config.toml holds them.
                The runner reads the keys of the [settings] of the manifest
-               from this file.
+               from this file. It runs in the directory of the case, so a
+               relative path names a file of the case (the check file).
 expected       The dump, when the status is 0.
 expected.err   The status and the error, when the status is not 0.
 
@@ -43,15 +44,17 @@ The dump (expected)
 The keys:
 
 description                  The description of the module.
-settings.<KEY>               The value after the default. An empty value
-                             counts as not set, and gets the default.
+settings.<KEY>               The value after the default and lowercase. An
+                             empty value counts as not set, and gets the
+                             default. A list setting is its items joined
+                             with a comma.
 settings.<KEY>.required      1 for a required setting.
 settings.<KEY>.help          The help of the setting.
-field.<KEY>.<field>          A field of a check (MCP_FIELD). Ticket 06
-                             fills it; empty until then.
-items.<KEY>                  The checked items of a list setting
-                             (MCP_ITEMS). Ticket 06 fills it; empty until
-                             then.
+field.<KEY>.<field>          A field of the check url or url-base
+                             (MCP_FIELD): scheme, host, port, hostport,
+                             base. A list setting has no fields.
+items.<KEY>                  The items of a list setting (MCP_ITEMS), each
+                             once, joined with a space.
 servers.<n>.name             The name of a server.
 servers.<n>.url              Its URL.
 servers.<n>.caller           1 when the server gets the caller token.
@@ -59,8 +62,9 @@ servers.<n>.description      Its description: the description of the
                              module when the server has none.
 secrets.<n>                  The Podman name of a secret that must exist
                              before the start: "<module>_<local name>".
-                             A secret with for_each has no line; ticket 06
-                             adds its names.
+                             A secret with for_each gives one line for
+                             each item. These lines come after the lines
+                             of the other secrets.
 secret_help.<Podman name>    The help of that secret.
 secret.<local name>          The Podman name for each local name: the
                              secrets, the own secrets and mcp_caller
@@ -74,6 +78,47 @@ image.<local name>           The image reference.
 egress.<n>                   A host that the agent can reach.
 
 
+Lists and substitutions
+-----------------------
+
+The value of a setting goes through these steps, in this order:
+
+1. The value from config.toml or the environment. An empty value counts
+   as not set, and the default applies.
+2. With lowercase = true, the value becomes lowercase.
+3. A list setting (list = true) splits into items. The reader gives an
+   array of config.toml as its items joined with a comma. The unit
+   replaces each comma with a space, and splits at spaces and tabs.
+   Empty items go away. When an item is there two times, the first one
+   stays, in its place. So "Red, blue  red,,green" with lowercase gives
+   the items red, blue, green.
+4. The check, for each item of a list. The first item that fails gives
+   the error of the setting.
+5. The fields of the check (url and url-base only, not for a list).
+
+The value of a list setting is its items joined with a comma.
+
+A template is text with these substitutions:
+
+- {SETTING}: the value of the setting. The setting must have a check.
+- {SETTING.field}: a field of its check (see "The built-in checks").
+- {item}: the item, in a table with for_each only.
+- {{ and }}: a literal { and }.
+
+Any other { or } is an error. The unit does not expand a substituted
+value again. An empty field of a setting with a value (port, for a URL
+with no port) gives empty text. A setting with no value has these
+results:
+
+- in the name or the URL of a server: missing-setting (status 1);
+- in an egress host: the unit leaves out that host;
+- in a description or a help: empty text.
+
+At status 1, the help of a secret with for_each can use a setting that
+failed its check. That setting gives empty text there, as a setting with
+no value does.
+
+
 The error (expected.err)
 ------------------------
 
@@ -85,8 +130,8 @@ The first line is "status=<n>", the status of mcp_load:
 
 Then one line for each problem:
 
-- Status 1: "<KEY>: <code>", one line for each setting, in the order of
-  the manifest.
+- Status 1: "<KEY>: <code>", one line for each setting that is missing
+  or fails its check, in the order of the manifest.
 - Status 2: "module.toml:<line>: <code>" for the first error only. The
   line is the line of the key, or of its table header. A key with no
   line gives "module.toml: <code>": a key in an inline table, a table
@@ -95,9 +140,30 @@ Then one line for each problem:
 
 The first error: the errors of the reader come first, in the order of
 the reader. Then the manifest unit checks in this order, and stops at the
-first error: bad-format, reserved-name, reserved-secret, no-server, then
-each server in its order (bad-server-name, duplicate-server,
-pipe-in-server). A missing setting (status 1) comes last.
+first error:
+
+1. bad-format, reserved-name.
+2. Each setting in its order: unknown-check.
+3. Each secret in its order: reserved-secret, and bad-substitution for
+   {item} in a secret with no for_each.
+4. no-server.
+5. The templates, before the values: each secret with for_each
+   (bad-secret-name for a name with no {item}), each server, then egress
+   (bad-substitution, unchecked-setting). The declared part checks them
+   too.
+6. The settings, in their order: a missing setting or a failed check.
+7. Each secret with for_each whose list setting passed step 6, in its
+   order: bad-value, bad-secret-name.
+8. If step 6 found a problem, the unit stops with status 1.
+9. Each server in its order: the substitutions of the name and the URL
+   (bad-value). A setting with no value in the name or the URL is a
+   missing setting, and the unit goes to the next server. Then
+   bad-server-name, duplicate-server, the substitutions of the
+   description, pipe-in-server.
+10. If step 9 found a missing setting, the unit stops with status 1. The
+    "<KEY>: missing-setting" lines of step 9 come after the lines of
+    step 6, in the order of the servers.
+11. The substitutions of egress (bad-value), then bad-egress-host.
 
 
 The error codes
@@ -105,7 +171,30 @@ The error codes
 
 Status 1:
 
-missing-setting     A required setting has no value and no default.
+missing-setting     A required setting has no value and no default, or
+                    the name or the URL of a server uses a setting with
+                    no value.
+url, url-base,      The value fails the built-in check of this name
+port, name, file    (the check of the setting). For a list setting,
+                    one item fails. A default can fail too.
+
+The built-in checks:
+
+url        http:// or https://, a host, an optional port, and an optional
+           path of the characters A-Z a-z 0-9 . _ ~ : / % + = , ! * -.
+           No user@, no query, no fragment. The host is one or more
+           labels with a "." between them. A label is A-Z a-z 0-9 and
+           "-", with no "-" at the start or the end. A port is 1 to 65535,
+           with no 0 at the start. The fields: scheme, host, port (empty
+           with no port), hostport (the host, and ":port" when there is
+           a port), base ("scheme://hostport" and the path, with no "/" at
+           the end).
+url-base   The same as url, with no path. The value can have one "/" at the end.
+           base is "scheme://hostport".
+port       A port, as above.
+name       A-Z a-z 0-9 and "-", with no "-" at the start or the end, no
+           "--", and at most 39 characters. The value does not change.
+file       A file that exists and that agentbox can read.
 
 Status 2, from the manifest unit (lib/mcp.sh):
 
@@ -123,6 +212,26 @@ bad-server-name     A server name is not lowercase letters, digits and
                     server name gives this code.
 duplicate-server    Two servers of the manifest have the same name. The
                     line of the second [[servers]].
+unknown-check       The check of a setting is not a built-in check.
+                    The line of its [settings.<KEY>] header.
+bad-substitution    A substitution is not {SETTING}, {SETTING.field} or
+                    {item}: a setting that the manifest does not have, a
+                    field that its check does not give (a list setting
+                    has no fields), {item} in a table with no for_each,
+                    or a { or } with no pair (write {{ and }}). Also a
+                    for_each that names a setting with no list = true.
+unchecked-setting   A substitution or a for_each uses a setting with no
+                    check.
+bad-value           A substituted value has a "|", a control character
+                    or a space.
+bad-secret-name     The name of a secret with for_each has no {item}.
+                    Or a name from for_each has a character other than
+                    A-Z a-z 0-9 _ . -, or another secret of the module
+                    (also mcp_caller) has this name. The line of the
+                    table header.
+bad-egress-host     An egress host after the substitutions is not a host
+                    name, .domain or host:port (the rule of the egress
+                    hosts of agentbox). The line of "egress".
 pipe-in-server      The URL or the description of a server has a "|".
                     The description can come from the description of the
                     module, for a server with no description; then the

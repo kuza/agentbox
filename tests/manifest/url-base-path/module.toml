@@ -1,0 +1,8 @@
+format = 1
+
+[settings.TRACKER_URL]
+check = "url-base"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

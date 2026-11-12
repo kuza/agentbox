@@ -1,0 +1,13 @@
+field.TRACKER_BARE.base=http://t.example
+field.TRACKER_BARE.host=t.example
+field.TRACKER_BARE.hostport=t.example
+field.TRACKER_BARE.scheme=http
+field.TRACKER_URL.base=https://t.example:65535
+field.TRACKER_URL.host=t.example
+field.TRACKER_URL.hostport=t.example:65535
+field.TRACKER_URL.port=65535
+field.TRACKER_URL.scheme=https
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.TRACKER_BARE=http://t.example
+settings.TRACKER_URL=https://t.example:65535/

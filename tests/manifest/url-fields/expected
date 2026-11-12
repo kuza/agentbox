@@ -1,0 +1,16 @@
+egress.0=Mcp-1.Tracker.example:8443
+egress.1=10.0.0.1
+field.TRACKER_HOME.base=http://10.0.0.1
+field.TRACKER_HOME.host=10.0.0.1
+field.TRACKER_HOME.hostport=10.0.0.1
+field.TRACKER_HOME.scheme=http
+field.TRACKER_URL.base=https://Mcp-1.Tracker.example:8443/api/v1_x~.:%2B\=,!*-
+field.TRACKER_URL.host=Mcp-1.Tracker.example
+field.TRACKER_URL.hostport=Mcp-1.Tracker.example:8443
+field.TRACKER_URL.port=8443
+field.TRACKER_URL.scheme=https
+servers.0.description=https 8443 http://10.0.0.1
+servers.0.name=tracker
+servers.0.url=https://Mcp-1.Tracker.example:8443/api/v1_x~.:%2B\=,!*-/mcp
+settings.TRACKER_HOME=http://10.0.0.1
+settings.TRACKER_URL=https://Mcp-1.Tracker.example:8443/api/v1_x~.:%2B\=,!*-/

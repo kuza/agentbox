@@ -74,7 +74,8 @@
 # mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,
 # MCP_SESSION_ARGS, MCP_NO_PROXY, MCP_CLAUDE_JSON, MCP_PI_JSON, MCP_EGRESS_ALL
 # ("host module" per entry, for lib/egress.sh), MCP_MANAGED (name and URL per
-# line, for cleaning up old registrations).
+# line, for cleaning up old registrations). Needs lib/egress.sh
+# (egress_host_ok) for mcp_load without --declared.
 
 MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 
@@ -114,7 +115,8 @@ mcp_load_again() {  # <name>
 }
 
 # Reads module <name> into the MCP_* variables, reset first. It never
-# exits. Status: 0 usable, 1 a setting fails or is missing (MCP_MISSING),
+# exits. Status: 0 usable, 1 a setting fails or is missing (MCP_MISSING;
+# for a manifest, MCP_FAILED too),
 # 2 broken, 3 no Python, 4 no such module. MCP_PROBLEM gives the reason.
 # With --declared, it checks no setting values (status 0, 2, 3 or 4).
 # A module with module.toml goes to mcp_load_manifest, which runs no module
@@ -126,7 +128,7 @@ mcp_load_again() {  # <name>
 mcp_load() {  # <name> [--declared]
   local h
   unset -f mcp_start mcp_secret_value mcp_check
-  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=()
+  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=(); MCP_FAILED=(); MCP_LIST_CONFIG=()
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   declare -gA MCP_SECRET_HELP_OF=() MCP_SETTING_HELP=() MCP_IMAGE=() MCP_SECRET=() MCP_VALUE=() MCP_FIELD=() MCP_ITEMS=()
@@ -230,13 +232,13 @@ mcp_bind_check() {  # <name>
   return $(( rc > 2 ? 2 : rc ))
 }
 
-# The required settings that are not set, into MCP_MISSING. 1 if there
-# are any, with the first one in MCP_PROBLEM. An empty value counts as not
-# set. A manifest module has its values (after the defaults) in MCP_VALUE.
+# The required settings that are not set, into MCP_MISSING, for the old
+# format. 1 if there are any, with the first one in MCP_PROBLEM. An empty
+# value counts as not set.
 mcp_missing() {
   local key
   for key in ${MCP_REQUIRED_CONFIG[@]+"${MCP_REQUIRED_CONFIG[@]}"}; do
-    [[ -n "${MCP_VALUE[$key]-${!key:-}}" ]] || MCP_MISSING+=("$key")
+    [[ -n "${!key:-}" ]] || MCP_MISSING+=("$key")
   done
   (( ${#MCP_MISSING[@]} )) || return 0
   MCP_PROBLEM="it needs ${MCP_MISSING[0]} in $CONFIG_FILE (agentbox setup)"
@@ -252,14 +254,146 @@ mcp_manifest_at() {  # <path>
   if (( at )); then echo "$f:$at"; else echo "$f"; fi
 }
 
+# The built-in checks of a setting (check = "<name>"), each with the fields
+# that it gives to MCP_FIELD and to the substitutions.
+declare -gA MCP_CHECKS=([url]="scheme host port hostport base" [url-base]="scheme host port hostport base"
+  [port]="" [name]="" [file]="")
+
+# One function for each check: mcp_valid_<check>, with "_" in place of
+# "-". It checks one value. If the value fails, it sets why to the reason
+# and returns 1. The url checks put their fields into fld. The caller
+# declares why and fld as locals.
+# shortcut: no IPv6 address and no IDN host in a URL, add them when a module needs one.
+mcp_valid_url() {  # <value> [base: no path]
+  local label='[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?' path re
+  re='^(https?)://('"$label(\\.$label)*"')(:([1-9][0-9]{0,4}))?(/[A-Za-z0-9._~:/%+=,!*-]*)?$'
+  if [[ ! "$1" =~ $re ]] || (( 10#${BASH_REMATCH[7]:-1} > 65535 )); then
+    why="not an http:// or https:// URL: a host, an optional port from 1 to 65535 and an optional path, with no user@, query or fragment"
+    return 1
+  fi
+  path="${BASH_REMATCH[8]}"
+  if [[ -n "${2:-}" && -n "$path" && "$path" != / ]]; then
+    why="not an http:// or https:// URL with no path"
+    return 1
+  fi
+  fld=([scheme]="${BASH_REMATCH[1]}" [host]="${BASH_REMATCH[2]}" [port]="${BASH_REMATCH[7]}"
+       [hostport]="${BASH_REMATCH[2]}${BASH_REMATCH[6]}")
+  while [[ "$path" == */ ]]; do path="${path%/}"; done
+  fld[base]="${fld[scheme]}://${fld[hostport]}$path"
+}
+
+mcp_valid_url_base() {  # <value>
+  mcp_valid_url "$1" base
+}
+
+mcp_valid_port() {  # <value>
+  [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )) && return
+  why="not a port: a number from 1 to 65535, with no 0 at the start"
+  return 1
+}
+
+mcp_valid_name() {  # <value>: the rule of a GitHub name
+  [[ ${#1} -le 39 && "$1" =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]] && return
+  why="not a name: letters, digits and -, with no - at the start or the end, no --, and at most 39 characters"
+  return 1
+}
+
+mcp_valid_file() {  # <value>
+  [[ -f "$1" && -r "$1" ]] && return
+  why="not a file that agentbox can read"
+  return 1
+}
+
+# Expands the substitutions of <template> into sub, for mcp_load_manifest
+# (its v, l and f): {SETTING}, {SETTING.field}, {item} with <item>, and
+# {{ and }} for { and }. A setting goes in only when it has a check. A value
+# with a |, a control character or a space gives an error. Status 2, with
+# MCP_PROBLEM, for a bad template or value. <path> names the key.
+# sub_unset lists the settings with no value that the template uses, and
+# the settings in failed (of mcp_load_manifest), which give empty text.
+mcp_manifest_subst() {  # <path> <template> [<item>]
+  local t="$2" tok name key val why code=bad-substitution
+  local re='^([^{}]*)(\{\{|\}\}|\{[^{}]*\}|\{|\})(.*)$' bad='[[:cntrl:]| ]'
+  sub=""; sub_unset=""
+  while [[ "$t" =~ $re ]]; do
+    sub+="${BASH_REMATCH[1]}"; tok="${BASH_REMATCH[2]}"; t="${BASH_REMATCH[3]}"
+    case "$tok" in
+      '{{') sub+='{'; continue ;;
+      '}}') sub+='}'; continue ;;
+    esac
+    name="${tok:1:${#tok}-1}"; name="${name%\}}"; key="${name%%.*}"; val=""
+    if (( ${#tok} <= 2 )); then why="'$tok' is not a substitution: write {{ and }} for { and }"
+    elif [[ "$name" == item ]]; then
+      (( $# > 2 )) || why="{item} needs for_each in its table"
+      val="${3:-}"
+    elif [[ " ${MCP_CONFIG[*]-} " != *" $key "* ]]; then why="{$name}: $key is not a setting of the manifest"
+    elif [[ -z "${v[settings.$key.check]:-}" ]]; then why="{$name}: the setting $key has no check"; code="unchecked-setting"
+    elif [[ "${failed-}" == *" $key "* ]]; then sub_unset+="$key "  # it failed its check: empty text
+    elif [[ "$name" == "$key" ]]; then val="${MCP_VALUE[$key]-}"
+    elif [[ " ${MCP_LIST_CONFIG[*]-} " == *" $key "* || " ${MCP_CHECKS[${v[settings.$key.check]}]} " != *" ${name#*.} "* ]]; then
+      why="{$name}: the check of $key gives no field ${name#*.}"
+    else val="${MCP_FIELD[$name]-}"
+    fi
+    if [[ -z "${why:-}" && "$val" =~ $bad ]]; then why="{$name}: the value has a |, a control character or a space"; code="bad-value"; fi
+    if [[ -n "${why:-}" ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "$1"): $1: $why ($code)"
+      return 2
+    fi
+    [[ "$name" == item || -n "${MCP_VALUE[$key]-}" ]] || sub_unset+="$key "
+    sub+="$val"
+  done
+  sub+="$t"
+}
+
+# Adds <key> to MCP_MISSING and MCP_FAILED, one time, for mcp_load_manifest.
+mcp_manifest_missing() {  # <key>
+  [[ " ${MCP_MISSING[*]-} " != *" $1 "* ]] || return 0
+  MCP_MISSING+=("$1")
+  MCP_FAILED+=("$1: missing-setting")
+  [[ -n "$MCP_PROBLEM" ]] || MCP_PROBLEM="it needs $1 in $CONFIG_FILE (agentbox setup)"
+}
+
+# The path that has the line of the header of [secrets.<name>], for
+# mcp_manifest_at: a key in the table, or the name record (the line of
+# the first table of secrets).
+mcp_manifest_secret_at() {  # <name>
+  local at="secrets.$1.help"
+  [[ -n "${l[$at]+x}" ]] || at="secrets.$1.for_each"
+  [[ -n "${l[$at]+x}" || "${v[secrets]%% *}" != "$1" ]] || at=secrets
+  echo "$at"
+}
+
+# The items of the setting that the for_each at <path> names, into items,
+# for mcp_load_manifest. The setting needs list = true and a check.
+mcp_manifest_items() {  # <path>
+  local key="${v[$1]}"
+  items=()
+  if [[ " ${MCP_LIST_CONFIG[*]-} " != *" $key "* ]]; then
+    MCP_PROBLEM="$(mcp_manifest_at "$1"): $1: '$key' is not a setting with list = true (bad-substitution)"
+    return 2
+  elif [[ -z "${v[settings.$key.check]:-}" ]]; then
+    MCP_PROBLEM="$(mcp_manifest_at "$1"): $1: the setting $key has no check (unchecked-setting)"
+    return 2
+  fi
+  read -ra items <<<"${MCP_ITEMS[$key]-}"
+}
+
 # The manifest adapter of mcp_load: reads $MCP_DIR/module.toml and runs no
 # module code. A broken manifest gives status 2, and MCP_PROBLEM is
 # "<file>:<line>: <reason> (<code>)" (tests/manifest/README lists the
-# codes). Without --declared, also the resolved part: MCP_VALUE (the
-# setting values after the defaults), MCP_SERVERS and MCP_EGRESS.
+# codes). MCP_LIST_CONFIG has the keys with list = true. Without
+# --declared, also the resolved part: MCP_VALUE (the
+# setting values after the defaults, lowercase and the split of the
+# lists), MCP_FIELD, MCP_ITEMS, the for_each secrets, MCP_SERVERS and
+# MCP_EGRESS. A setting that fails its check or is missing gives status 1,
+# with the for_each secrets of each list setting that passed its check:
+# MCP_FAILED has "<KEY>: <code>" for each, and MCP_PROBLEM the first reason,
+# "<place>: <KEY>: <reason> (<check>)". The place is SETTING_AT
+# (lib/config.sh), "environment", or the line of the manifest for a default.
 mcp_load_manifest() {  # <name> [--declared]
-  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" "
-  local -A v=() l=()
+  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" "
+  local -a items=() all=() each=()
+  local -A v=() l=() fld=()
   MCP_FORMAT=manifest
   toml_load manifest "$f" v l 2>/dev/null || rc=$?
   if (( rc == 3 )); then
@@ -285,20 +419,26 @@ mcp_load_manifest() {  # <name> [--declared]
   read -ra MCP_CONFIG <<<"${v[settings]:-}"
   for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
     [[ "${v[settings.$k.required]:-}" != 1 ]] || MCP_REQUIRED_CONFIG+=("$k")
+    [[ "${v[settings.$k.list]:-}" != 1 ]] || MCP_LIST_CONFIG+=("$k")
     [[ -z "${v[settings.$k.help]:-}" ]] || MCP_SETTING_HELP[$k]="${v[settings.$k.help]}"
+    c="${v[settings.$k.check]:-}"
+    if [[ -n "$c" && -z "${MCP_CHECKS[$c]+x}" ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "settings.$k.check"): settings.$k.check: '$c' is not a check: use url, url-base, port, name or file (unknown-check)"
+      return 2
+    fi
   done
   for k in ${v[secrets]:-}; do
     if [[ "$k" == mcp_caller ]]; then
-      # The line of its header: from a key in it, or from the name record
-      # (the line of the first table of secrets).
-      at=secrets.mcp_caller.help
-      [[ "${v[secrets]%% *}" != mcp_caller ]] || at=secrets
-      [[ -n "${l[$at]+x}" ]] || at=secrets.mcp_caller.for_each
+      at="$(mcp_manifest_secret_at mcp_caller)"
       MCP_PROBLEM="$(mcp_manifest_at "$at"): secrets.mcp_caller: agentbox makes this secret for a server with caller = true; remove it (reserved-secret)"
       return 2
     fi
-    # shortcut: a for_each secret is left out; ticket 06 adds its names.
+    # The resolved part adds the secrets with for_each.
     [[ -z "${v[secrets.$k.for_each]+x}" ]] || continue
+    if [[ "$k" == *"{"* ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "$(mcp_manifest_secret_at "$k")"): secrets.$k: {item} needs for_each in its table (bad-substitution)"
+      return 2
+    fi
     MCP_SECRET[$k]="$1_$k"
     MCP_SECRETS+=("$1_$k")
     [[ -z "${v[secrets.$k.help]:-}" ]] || MCP_SECRET_HELP_OF[$1_$k]="${v[secrets.$k.help]}"
@@ -320,36 +460,145 @@ mcp_load_manifest() {  # <name> [--declared]
     [[ "${v[servers.$i.caller]:-}" != 1 ]] || MCP_CALLER_SECRET="$1_mcp_caller"
   done
   [[ -z "$MCP_CALLER_SECRET" ]] || MCP_SECRET[mcp_caller]="$MCP_CALLER_SECRET"
-  [[ "${2:-}" != --declared ]] || return 0
-  for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
-    MCP_VALUE[$k]="${!k:-}"
-    [[ -n "${MCP_VALUE[$k]}" ]] || MCP_VALUE[$k]="${v[settings.$k.default]:-}"
+  # The templates, with no values yet: a bad one is an error of the
+  # manifest, also with --declared and before a setting fails.
+  for k in ${v[secrets]:-}; do
+    [[ -n "${v[secrets.$k.for_each]+x}" ]] || continue
+    if [[ "$k" != *"{item}"* ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "secrets.$k.for_each"): secrets.$k: a secret with for_each needs {item} in its name (bad-secret-name)"
+      return 2
+    fi
+    mcp_manifest_items "secrets.$k.for_each" || return 2
+    mcp_manifest_subst "secrets.$k.help" "${v[secrets.$k.help]:-}" x || return 2
   done
   for (( i = 0; i < n; i++ )); do
-    name="${v[servers.$i.name]}"
-    if [[ ! "$name" =~ $AB_NAME_RE ]]; then
-      MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: '$name' is not a server name: use lowercase letters, digits and - (bad-server-name)"
-      return 2
+    each=()
+    if [[ -n "${v[servers.$i.for_each]+x}" ]]; then
+      mcp_manifest_items "servers.$i.for_each" || return 2
+      each=(x)
     fi
-    if [[ "$names" == *" $name "* ]]; then
-      MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: the server '$name' is in the manifest two times (duplicate-server)"
-      return 2
-    fi
-    names+="$name "
-    desc="servers.$i.description"
-    [[ -n "${v[$desc]+x}" ]] || desc=description
-    # The name check above refuses a | in a name.
-    for k in "servers.$i.url" "$desc"; do
-      [[ "${v[$k]:-}" == *"|"* ]] || continue
-      MCP_PROBLEM="$(mcp_manifest_at "$k"): $k: a server cannot have a | in its URL or description (pipe-in-server)"
-      return 2
+    for k in name url description; do
+      mcp_manifest_subst "servers.$i.$k" "${v[servers.$i.$k]:-}" ${each[@]+"${each[@]}"} || return 2
     done
-    auth=-
-    [[ "${v[servers.$i.caller]:-}" != 1 ]] || auth=caller
-    MCP_SERVERS+=("$name|${v[servers.$i.url]}|$auth|${v[$desc]:-}")
   done
-  read -ra MCP_EGRESS <<<"${v[egress]:-}"
-  mcp_missing
+  read -ra all <<<"${v[egress]:-}"
+  for k in ${all[@]+"${all[@]}"}; do mcp_manifest_subst egress "$k" || return 2; done
+  [[ "${2:-}" != --declared ]] || return 0
+  for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
+    val="${!k:-}"
+    at="${SETTING_AT[$k]:-environment}"
+    if [[ -z "$val" ]]; then
+      val="${v[settings.$k.default]:-}"
+      at="$(mcp_manifest_at "settings.$k.default")"
+    fi
+    [[ "${v[settings.$k.lowercase]:-}" != 1 ]] || val="${val,,}"
+    items=("$val")
+    if [[ " ${MCP_LIST_CONFIG[*]-} " == *" $k "* ]]; then
+      # A list: an array (its items joined with a comma) or a string with
+      # spaces or commas. Each item once.
+      read -ra all <<<"${val//,/ }"
+      items=(); seen=" "
+      for it in ${all[@]+"${all[@]}"}; do
+        [[ "$seen" == *" $it "* ]] || { items+=("$it"); seen+="$it "; }
+      done
+      MCP_ITEMS[$k]="${items[*]-}"
+      val="${MCP_ITEMS[$k]// /,}"
+    fi
+    MCP_VALUE[$k]="$val"
+    if [[ -z "$val" ]]; then
+      [[ " ${MCP_REQUIRED_CONFIG[*]-} " != *" $k "* ]] || { mcp_manifest_missing "$k"; failed+="$k "; }
+      continue
+    fi
+    c="${v[settings.$k.check]:-}"
+    [[ -n "$c" ]] || continue
+    for it in "${items[@]}"; do
+      fld=()
+      "mcp_valid_${c//-/_}" "$it" && continue
+      MCP_FAILED+=("$k: $c")
+      failed+="$k "
+      [[ -n "$MCP_PROBLEM" ]] || MCP_PROBLEM="$at: $k: $why ($c)"
+      continue 2
+    done
+    # The fields of a list would be the fields of one item only.
+    [[ -z "${MCP_ITEMS[$k]+x}" ]] || continue
+    for it in "${!fld[@]}"; do MCP_FIELD[$k.$it]="${fld[$it]}"; done
+  done
+  # The secrets with for_each of a list that passed its check, also at
+  # status 1: setup shows them (the github owner tokens).
+  for k in ${v[secrets]:-}; do
+    [[ -n "${v[secrets.$k.for_each]+x}" && "$failed" != *" ${v[secrets.$k.for_each]} "* ]] || continue
+    mcp_manifest_items "secrets.$k.for_each" || return 2
+    for it in ${items[@]+"${items[@]}"}; do
+      mcp_manifest_subst "secrets.$k.for_each" "$k" "$it" || return 2
+      name="$sub"
+      # A check such as url lets characters through that a Podman name
+      # cannot have. A name must not be the name of another secret.
+      if [[ ! "$name" =~ ^[A-Za-z0-9_.-]+$ || -n "${MCP_SECRET[$name]+x}" ]]; then
+        MCP_PROBLEM="$(mcp_manifest_at "secrets.$k.for_each"): secrets.$k: '$name' is not a secret name, or another secret has it (bad-secret-name)"
+        return 2
+      fi
+      MCP_SECRET[$name]="$1_$name"
+      MCP_SECRETS+=("$1_$name")
+      [[ -n "${v[secrets.$k.help]:-}" ]] || continue
+      mcp_manifest_subst "secrets.$k.help" "${v[secrets.$k.help]}" "$it" || return 2
+      MCP_SECRET_HELP_OF[$1_$name]="$sub"
+    done
+  done
+  (( ! ${#MCP_FAILED[@]} )) || return 1
+  for (( i = 0; i < n; i++ )); do
+    fe=""; items=("")
+    if [[ -n "${v[servers.$i.for_each]+x}" ]]; then
+      fe=1
+      mcp_manifest_items "servers.$i.for_each" || return 2
+    fi
+    for it in ${items[@]+"${items[@]}"}; do
+      mcp_manifest_subst "servers.$i.name" "${v[servers.$i.name]}" ${fe:+"$it"} || return 2
+      name="$sub"; unset="$sub_unset"
+      mcp_manifest_subst "servers.$i.url" "${v[servers.$i.url]}" ${fe:+"$it"} || return 2
+      url="$sub"; unset+="$sub_unset"
+      # A setting with no value in a name or URL is missing (status 1).
+      if [[ -n "$unset" ]]; then
+        for k in $unset; do mcp_manifest_missing "$k"; done
+        continue
+      fi
+      if [[ ! "$name" =~ $AB_NAME_RE ]]; then
+        MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: '$name' is not a server name: use lowercase letters, digits and - (bad-server-name)"
+        return 2
+      fi
+      if [[ "$names" == *" $name "* ]]; then
+        MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: the server '$name' is in the manifest two times (duplicate-server)"
+        return 2
+      fi
+      names+="$name "
+      desc="$MCP_DESCRIPTION"; at=description
+      if [[ -n "${v[servers.$i.description]+x}" ]]; then
+        mcp_manifest_subst "servers.$i.description" "${v[servers.$i.description]}" ${fe:+"$it"} || return 2
+        desc="$sub"; at="servers.$i.description"
+      fi
+      # The name check above refuses a | in a name.
+      if [[ "$url" == *"|"* || "$desc" == *"|"* ]]; then
+        [[ "$url" != *"|"* ]] || at="servers.$i.url"
+        MCP_PROBLEM="$(mcp_manifest_at "$at"): $at: a server cannot have a | in its URL or description (pipe-in-server)"
+        return 2
+      fi
+      auth=-
+      [[ "${v[servers.$i.caller]:-}" != 1 ]] || auth=caller
+      MCP_SERVERS+=("$name|$url|$auth|$desc")
+    done
+  done
+  (( ! ${#MCP_FAILED[@]} )) || return 1
+  read -ra all <<<"${v[egress]:-}"
+  for k in ${all[@]+"${all[@]}"}; do
+    mcp_manifest_subst egress "$k" || return 2
+    # A setting that is not set gives no host.
+    [[ -z "$sub_unset" ]] || continue
+    # lib/egress.sh would stop the start for all modules.
+    if ! egress_host_ok "$sub"; then
+      MCP_PROBLEM="$(mcp_manifest_at egress): egress: '$sub' is not a host name, .domain or host:port (bad-egress-host)"
+      return 2
+    fi
+    MCP_EGRESS+=("$sub")
+  done
 }
 
 # The servers of the module mcp_load loaded, "<name>|<url>|<caller or

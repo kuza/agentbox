@@ -1,0 +1,50 @@
+format = 1
+
+[settings.U_DASH_START]
+check = "url"
+
+[settings.U_DASH_END]
+check = "url"
+
+[settings.U_EMPTY_LABEL]
+check = "url"
+
+[settings.U_DOT_START]
+check = "url"
+
+[settings.U_DOT_END]
+check = "url"
+
+[settings.U_UNDERSCORE]
+check = "url"
+
+[settings.U_PORT_0]
+check = "url"
+
+[settings.U_PORT_65536]
+check = "url"
+
+[settings.U_PORT_ZERO_FIRST]
+check = "url"
+
+[settings.U_USER]
+check = "url"
+
+[settings.U_QUERY]
+check = "url"
+
+[settings.U_FRAGMENT]
+check = "url"
+
+[settings.U_SCHEME]
+check = "url"
+
+[settings.U_NO_HOST]
+check = "url"
+
+[settings.U_SPACE]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

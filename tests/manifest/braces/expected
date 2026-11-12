@@ -1,0 +1,4 @@
+servers.0.description={TRACKER_PORT} is 8443
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example:8443/{a}/}{
+settings.TRACKER_PORT=8443

@@ -532,7 +532,7 @@ test_mcp_load_status() {
   local out
   out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
     set -euo pipefail
-    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/mcp.sh"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
     rc=0; mcp_load nope || rc=$?; echo "nope $rc $MCP_PROBLEM"
     rc=0; mcp_load broken --declared || rc=$?; echo "broken $rc $MCP_PROBLEM"
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
@@ -621,9 +621,11 @@ manifest_module() {  # <name> <TOML lines...>
 
 test_mcp_manifest_module_starts() {
   setup "${FUNCNAME[0]}"
-  manifest_module tracker 'format = 1' 'description = "Tracker"' 'egress = ["mcp.tracker.example"]' \
+  manifest_module tracker 'format = 1' 'description = "Tracker"' 'egress = ["{TRACKER_URL.hostport}"]' \
     'own_secrets = ["db"]' '[settings.TRACKER_SITE]' 'required = true' '[settings.TRACKER_MODE]' 'default = "fast"' \
-    '[secrets.tok]' 'help = "The token"' '[images]' 'app = "docker.io/x/app:1"' \
+    '[settings.TRACKER_URL]' 'check = "url"' '[settings.TRACKER_TEAMS]' 'list = true' 'check = "name"' 'lowercase = true' \
+    '[secrets.tok]' 'help = "The token"' '[secrets."team_{item}"]' 'for_each = "TRACKER_TEAMS"' \
+    '[images]' 'app = "docker.io/x/app:1"' \
     '[[servers]]' 'name = "tracker"' 'url = "https://mcp.tracker.example/mcp"' \
     '[[servers]]' 'name = "tracker-local"' 'url = "http://ab-mcp-tracker:8080/mcp"' 'caller = true' 'description = "Local"'
   # Its code runs through mcp_bind only: one time for the check, one time
@@ -633,6 +635,7 @@ test_mcp_manifest_module_starts() {
     "mcp_check() { echo checked >> '$T/checked'; }" \
     'mcp_start() {' \
     "  { echo \"site=\$TRACKER_SITE mode=\$TRACKER_MODE dir=\$MCP_DIR app=\${MCP_IMAGE[app]}\"" \
+    '    echo "teams=$TRACKER_TEAMS items=${MCP_ITEMS[TRACKER_TEAMS]} base=${MCP_FIELD[TRACKER_URL.base]}"' \
     '    for k in $(printf "%s\n" "${!MCP_SECRET[@]}" | sort); do echo "$k=${MCP_SECRET[$k]}"; done' \
     "  } > '$T/vars'" \
     '  start_sidecar ab-mcp-tracker "${MCP_IMAGE[app]}"' \
@@ -641,8 +644,8 @@ test_mcp_manifest_module_starts() {
   mkdir -p "$CFG/mcp.local/legacy"
   printf '%s\n' 'MCP_URL=http://ab-mcp-legacy:8080/mcp' "mcp_check() { echo legacy >> '$T/checked-legacy'; }" \
     "mcp_start() { echo legacy >> '$T/started-legacy'; }" > "$CFG/mcp.local/legacy/mcp.sh"
-  config "AB_MCP=tracker legacy" "TRACKER_SITE=acme"
-  secrets tracker_tok
+  config "AB_MCP=tracker legacy" "TRACKER_SITE=acme" "TRACKER_URL=https://mcp.tracker.example/" "TRACKER_TEAMS=Red,blue,red"
+  secrets tracker_tok tracker_team_red tracker_team_blue
   ab_run --
   assert_rc 0
   assert_no_out "tracker' left out|unknown key 'TRACKER_SITE'|tracker' has the old format"
@@ -650,7 +653,9 @@ test_mcp_manifest_module_starts() {
   assert_eq "$(cat "$T/checked" 2>/dev/null)" checked "the runs of its mcp_check"
   assert_eq "$(cat "$T/checked-legacy" "$T/started-legacy" 2>/dev/null)" $'legacy\nlegacy' "the runs of the old module"
   assert_eq "$(cat "$T/vars" 2>/dev/null)" "site=acme mode=fast dir=$CFG/mcp.local/tracker app=docker.io/x/app:1"$'\n'\
-"db=tracker_db"$'\n'"mcp_caller=tracker_mcp_caller"$'\n'"tok=tracker_tok" "the variables of its code"
+"teams=red,blue items=red blue base=https://mcp.tracker.example"$'\n'\
+"db=tracker_db"$'\n'"mcp_caller=tracker_mcp_caller"$'\n'"team_blue=tracker_team_blue"$'\n'"team_red=tracker_team_red"$'\n'\
+"tok=tracker_tok" "the variables of its code"
   run_line ab-mcp-tracker | grep -q 'docker.io/x/app:1' || fail "the sidecar of a manifest module did not start"
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
   assert_file_has "$(cache mcp-claude.json)" '"tracker": \{ "type": "http", "url": "https://mcp.tracker.example/mcp" \}'
@@ -664,6 +669,66 @@ test_mcp_manifest_module_starts() {
   ab_run --
   assert_skipped tracker
   assert_out "tracker' left out of this session: missing podman secrets tracker_tok"
+  # A secret with for_each must exist too.
+  secrets tracker_tok
+  sed -i '/^tracker_team_blue$/d' "$STUB_DIR/secrets"
+  ab_run --
+  assert_skipped tracker
+  assert_out "tracker' left out of this session: missing podman secrets tracker_team_blue"
+}
+
+# The built-in checks at a start. The settings of v0.2.0 work with no
+# change, and the start does not change the file. A failed check leaves
+# the module out and names the place of the value. The edges of the
+# checks are in tests/manifest.
+test_mcp_manifest_module_checks() {
+  setup "${FUNCNAME[0]}"
+  manifest_module a 'format = 1' '[settings.A_PORT]' 'check = "port"' '[settings.A_TEAMS]' 'list = true' 'check = "name"' \
+    '[settings.A_CA]' 'check = "file"' '[[servers]]' 'for_each = "A_TEAMS"' 'name = "a-{item}"' 'url = "http://ab-mcp-a:{A_PORT}/mcp"'
+  echo ca > "$T/ca.pem"
+  config "AB_MCP=a" 'A_PORT = "47821"' 'A_TEAMS = "x,y"' "A_CA=$T/ca.pem"
+  cp "$CFG/config.toml" "$T/config.before"
+  ab_run --
+  assert_rc 0
+  assert_no_out "'a' left out"
+  assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7 a-x a-y" "the servers of a list as a string with commas"
+  assert_file_has "$(cache mcp-claude.json)" '"url": "http://ab-mcp-a:47821/mcp"'
+  cmp -s "$CFG/config.toml" "$T/config.before" || fail "the start changed config.toml"
+  sed -i 's/^A_PORT = .*/A_PORT = 47821/' "$CFG/config.toml"
+  ab_run --
+  assert_rc 0
+  assert_file_has "$(cache mcp-claude.json)" '"url": "http://ab-mcp-a:47821/mcp"'
+  # Values from the environment: a list with a space, and a port.
+  ab_run A_PORT=5000 A_TEAMS="p q" --
+  assert_rc 0
+  assert_eq "$(json_keys "$(cache mcp-claude.json)")" "context7 a-p a-q" "the servers of a list from the environment"
+  assert_file_has "$(cache mcp-claude.json)" '"url": "http://ab-mcp-a:5000/mcp"'
+  ab_run A_PORT=0 --
+  assert_skipped a
+  assert_out "'a' left out of this session: environment: A_PORT: .* \(port\)$"
+  # A missing file: status 1, so the access goes.
+  sed -i "s#^A_CA = .*#A_CA = \"$T/no.pem\"#" "$CFG/config.toml"
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: $CFG/config.toml:4: A_CA: not a file that agentbox can read \(file\)$"
+  # At status 1, the secrets with for_each of a list that passed its check
+  # are there (the setup menu shows them).
+  manifest_module b 'format = 1' '[settings.B_TEAMS]' 'list = true' 'check = "name"' '[settings.B_URL]' 'required = true' \
+    '[secrets."tok_{item}"]' 'for_each = "B_TEAMS"' '[[servers]]' 'name = "b"' 'url = "https://b.example/mcp"'
+  local out
+  out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" B_TEAMS="x y"
+    set -euo pipefail
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
+    rc=0; mcp_load b || rc=$?
+    echo "$rc ${MCP_SECRETS[*]}" )"
+  assert_eq "$out" "1 b_tok_x b_tok_y" "the status and the secrets of a module with a missing setting"
+  # A bad egress host from a substitution leaves out this module only.
+  manifest_module a 'format = 1' 'egress = ["{A_URL.base}"]' '[settings.A_URL]' 'check = "url"' \
+    '[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"'
+  ab_run A_URL=https://a.example/p --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:2: egress: 'https://a.example/p' .*\(bad-egress-host\)$"
+  assert_file_has "$(cache mcp-claude.json)" '"context7"'
 }
 
 # The code of a manifest module can leave it out, with a reason. The output
@@ -686,7 +751,7 @@ test_mcp_manifest_module_code_left_out() {
   local out
   out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
     set -euo pipefail
-    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
     mcp_load a; mcp_bind a --check 2>"$T/err" )" || true
   assert_eq "$out" "A is bad" "the stdout of mcp_bind"
   assert_eq "$(cat "$T/err")" "a is sourced" "the stderr of mcp_bind"
@@ -4498,7 +4563,7 @@ manifest_case() {  # <dir>
     local name origin d k i server url auth desc rc
     SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
     set -euo pipefail
-    for k in paths config toml mcp; do
+    for k in paths config toml mcp egress; do
       # shellcheck source=/dev/null
       source "$AB/lib/$k.sh"
     done
@@ -4511,10 +4576,12 @@ manifest_case() {  # <dir>
     cp "$1/module.toml" "$d/$origin/$name/"
     mcp_load "$name" --declared || true
     if [[ -f "$1/settings.toml" ]]; then settings_load "$1/settings.toml" 0 ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; fi
+    # A relative path in settings.toml names a file of the case (check file).
+    cd -- "$1"
     rc=0; mcp_load "$name" || rc=$?
     if (( rc )); then
       echo "status=$rc"
-      for k in ${MCP_MISSING[@]+"${MCP_MISSING[@]}"}; do echo "$k: missing-setting"; done
+      (( rc != 1 )) || printf '%s\n' ${MCP_FAILED[@]+"${MCP_FAILED[@]}"}
       (( rc == 1 )) || sed -E 's/^(module\.toml(:[0-9]+)?): .*\(([a-z-]+)\)$/\1: \3/' <<<"${MCP_PROBLEM#"$MCP_DIR/"}"
       exit 0
     fi

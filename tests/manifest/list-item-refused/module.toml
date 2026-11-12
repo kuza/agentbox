@@ -1,0 +1,9 @@
+format = 1
+
+[settings.TRACKER_TEAMS]
+list = true
+check = "name"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

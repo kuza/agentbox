@@ -1,0 +1,4 @@
+N_USER = "JohnDoe"
+N_DASH = "a-b-c"
+N_LONG = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+N_LOWER = "MyOrg"

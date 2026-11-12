@@ -1,0 +1,19 @@
+format = 1
+
+[settings.P]
+check = "port"
+
+[settings.U]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "http://ab-mcp-tracker:{P}/mcp"
+
+[[servers]]
+name = "tracker-remote"
+url = "{U.base}/mcp"
+
+[[servers]]
+name = "tracker-two"
+url = "{U.base}/{P}"

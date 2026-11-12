@@ -1,0 +1,9 @@
+format = 1
+egress = ["{U.host}:{U.port}"]
+
+[settings.U]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

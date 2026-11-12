@@ -1,0 +1,6 @@
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.N_DASH=a-b-c
+settings.N_LONG=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+settings.N_LOWER=myorg
+settings.N_USER=JohnDoe

@@ -1,0 +1,10 @@
+items.TRACKER_TEAMS=red blue green
+items.TRACKER_TOOLS=repos issues
+servers.0.name=tracker-red
+servers.0.url=https://mcp.tracker.example/red/red,blue,green
+servers.1.name=tracker-blue
+servers.1.url=https://mcp.tracker.example/blue/red,blue,green
+servers.2.name=tracker-green
+servers.2.url=https://mcp.tracker.example/green/red,blue,green
+settings.TRACKER_TEAMS=red,blue,green
+settings.TRACKER_TOOLS=repos,issues

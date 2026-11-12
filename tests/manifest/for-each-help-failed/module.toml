@@ -1,0 +1,16 @@
+format = 1
+
+[settings.L]
+list = true
+check = "name"
+
+[settings.U]
+check = "url"
+
+[secrets."tok_{item}"]
+for_each = "L"
+help = "A token for {item} at {U}"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

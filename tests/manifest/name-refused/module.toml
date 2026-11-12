@@ -1,0 +1,20 @@
+format = 1
+
+[settings.N_DASH_START]
+check = "name"
+
+[settings.N_DASH_END]
+check = "name"
+
+[settings.N_TWO_DASHES]
+check = "name"
+
+[settings.N_LONG]
+check = "name"
+
+[settings.N_UNDERSCORE]
+check = "name"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

@@ -78,7 +78,10 @@ CONFIG_OLD_FILE="${CONFIG_FILE%.toml}.env"
 # the file. For a key of CONFIG_LIST_KEYS, this function splits the value at
 # spaces and commas, and joins the items with a space. With <warn> 1, a key of the file that is not in <keys> or <quiet
 # keys> gets a warning. Returns the status of toml_load. This is the only
-# place that reads the settings from the environment.
+# place that reads the settings from the environment. SETTING_AT[<key>]
+# keeps the place of a value, for the message of a failed check:
+# "<file>:<line>", or "environment" for a value from the environment.
+declare -gA SETTING_AT=()
 settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
   local file="$1" warn="$2" key items keys=" "
   local -A values=() lines=()
@@ -91,7 +94,12 @@ settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
       [[ "$warn" == 1 && "$quiet" != *" $key "* ]] && ab_warn "$file:${lines[$key]%% *}: unknown key '$key', ignored (unknown-key)"
       continue
     fi
-    [[ -n "${!key+x}" ]] || printf -v "$key" '%s' "${values[$key]}"
+    if [[ -n "${!key+x}" ]]; then
+      SETTING_AT[$key]="${SETTING_AT[$key]:-environment}"
+    else
+      printf -v "$key" '%s' "${values[$key]}"
+      SETTING_AT[$key]="$file:${lines[$key]%% *}"
+    fi
   done
   for key in "${CONFIG_LIST_KEYS[@]}"; do
     if [[ "$keys" == *" $key "* && -n "${!key:-}" ]]; then

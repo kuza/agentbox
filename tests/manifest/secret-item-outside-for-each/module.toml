@@ -1,0 +1,8 @@
+format = 1
+
+[secrets."tok_{item}"]
+help = "A token"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

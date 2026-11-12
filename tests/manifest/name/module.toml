@@ -1,0 +1,18 @@
+format = 1
+
+[settings.N_USER]
+check = "name"
+
+[settings.N_DASH]
+check = "name"
+
+[settings.N_LONG]
+check = "name"
+
+[settings.N_LOWER]
+check = "name"
+lowercase = true
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

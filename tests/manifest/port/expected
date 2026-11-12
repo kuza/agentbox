@@ -1,0 +1,6 @@
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.P_HIGH=65535
+settings.P_LOW=1
+settings.P_NUMBER=47821
+settings.P_STRING=47821

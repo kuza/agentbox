@@ -1,0 +1,9 @@
+format = 1
+
+[settings.N]
+check = "name"
+lowercase = true
+
+[[servers]]
+name = "tracker-{N}"
+url = "https://mcp.tracker.example/mcp"

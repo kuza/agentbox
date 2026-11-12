@@ -1,0 +1,15 @@
+format = 1
+
+[settings.L]
+list = true
+check = "name"
+
+[secrets.pat_x]
+help = "X"
+
+[secrets."pat_{item}"]
+for_each = "L"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

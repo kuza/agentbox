@@ -1,0 +1,8 @@
+format = 1
+
+[settings.TRACKER_HOST]
+required = true
+
+[[servers]]
+name = "tracker"
+url = "https://{TRACKER_HOST}/mcp"

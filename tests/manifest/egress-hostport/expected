@@ -1,0 +1,10 @@
+egress.0=H.example:8443
+egress.1=H.example:443
+field.U.base=https://H.example:8443/p
+field.U.host=H.example
+field.U.hostport=H.example:8443
+field.U.port=8443
+field.U.scheme=https
+servers.0.name=tracker
+servers.0.url=https://mcp.tracker.example/mcp
+settings.U=https://H.example:8443/p

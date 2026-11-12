@@ -1,0 +1,14 @@
+format = 1
+
+[settings.TRACKER_TEAMS]
+list = true
+check = "name"
+lowercase = true
+
+[settings.TRACKER_TOOLS]
+list = true
+
+[[servers]]
+for_each = "TRACKER_TEAMS"
+name = "tracker-{item}"
+url = "https://mcp.tracker.example/{item}/{TRACKER_TEAMS}"

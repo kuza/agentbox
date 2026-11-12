@@ -1,0 +1,20 @@
+format = 1
+
+[settings.P_ZERO]
+check = "port"
+
+[settings.P_HIGH]
+check = "port"
+
+[settings.P_ZERO_FIRST]
+check = "port"
+
+[settings.P_WORD]
+check = "port"
+
+[settings.P_MINUS]
+check = "port"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

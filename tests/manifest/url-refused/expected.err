@@ -1,0 +1,16 @@
+status=1
+U_DASH_START: url
+U_DASH_END: url
+U_EMPTY_LABEL: url
+U_DOT_START: url
+U_DOT_END: url
+U_UNDERSCORE: url
+U_PORT_0: url
+U_PORT_65536: url
+U_PORT_ZERO_FIRST: url
+U_USER: url
+U_QUERY: url
+U_FRAGMENT: url
+U_SCHEME: url
+U_NO_HOST: url
+U_SPACE: url

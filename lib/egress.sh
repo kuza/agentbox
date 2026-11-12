@@ -73,12 +73,17 @@ egress_init() {
 }
 
 egress_check_host() {  # <host[:port]> <where, for the error>
-  local label='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
-  if [[ ! "${1,,}" =~ ^\.?($label\.)*$label(:([1-9][0-9]{0,4}))?$ ]] \
-     || (( 10#${BASH_REMATCH[5]:-1} > 65535 )); then
+  if ! egress_host_ok "$1"; then
     echo "error: $2: '$1' is not a host name, .domain or host:port" >&2
     exit 2
   fi
+}
+
+# 0 if <host> is a host name, .domain or host:port. The manifest unit
+# (lib/mcp.sh) uses it too, so a bad host leaves out one module only.
+egress_host_ok() {  # <host[:port]>
+  local label='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+  [[ "${1,,}" =~ ^\.?($label\.)*$label(:([1-9][0-9]{0,4}))?$ ]] && (( 10#${BASH_REMATCH[5]:-1} <= 65535 ))
 }
 
 # Writes the generated squid include into <cache>/agentbox: plain hosts join

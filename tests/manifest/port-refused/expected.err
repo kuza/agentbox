@@ -1,0 +1,6 @@
+status=1
+P_ZERO: port
+P_HIGH: port
+P_ZERO_FIRST: port
+P_WORD: port
+P_MINUS: port

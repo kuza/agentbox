@@ -1,0 +1,9 @@
+format = 1
+
+[settings.TRACKER_PORT]
+check = "port"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example:{TRACKER_PORT}/{{a}}/}}{{"
+description = "{{TRACKER_PORT}} is {TRACKER_PORT}"

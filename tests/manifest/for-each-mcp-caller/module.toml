@@ -1,0 +1,13 @@
+format = 1
+
+[settings.L]
+list = true
+check = "name"
+
+[secrets."mcp_{item}"]
+for_each = "L"
+
+[[servers]]
+name = "tracker"
+url = "http://ab-mcp-tracker:8080/mcp"
+caller = true

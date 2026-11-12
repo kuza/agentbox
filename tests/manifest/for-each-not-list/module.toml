@@ -1,0 +1,11 @@
+format = 1
+
+[settings.TRACKER_TEAM]
+check = "name"
+
+[secrets."tok_{item}"]
+for_each = "TRACKER_TEAM"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

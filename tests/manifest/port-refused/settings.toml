@@ -1,0 +1,5 @@
+P_ZERO = 0
+P_HIGH = 65536
+P_ZERO_FIRST = "080"
+P_WORD = "http"
+P_MINUS = -1

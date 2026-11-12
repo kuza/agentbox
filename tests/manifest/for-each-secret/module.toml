@@ -1,6 +1,9 @@
 format = 1
 
 [settings.GH_OWNERS]
+list = true
+check = "name"
+lowercase = true
 
 [secrets.pat]
 help = "A token"
@@ -10,5 +13,7 @@ for_each = "GH_OWNERS"
 help = "A token for {item}"
 
 [[servers]]
-name = "github"
-url = "http://ab-mcp-github:8080/mcp"
+for_each = "GH_OWNERS"
+name = "github-{item}"
+url = "http://ab-mcp-github:8080/o/{item}/mcp"
+caller = true

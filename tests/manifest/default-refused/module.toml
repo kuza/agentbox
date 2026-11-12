@@ -1,0 +1,9 @@
+format = 1
+
+[settings.TRACKER_PORT]
+check = "port"
+default = 0
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

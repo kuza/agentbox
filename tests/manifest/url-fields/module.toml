@@ -1,0 +1,13 @@
+format = 1
+egress = ["{TRACKER_URL.hostport}", "{TRACKER_HOME.host}"]
+
+[settings.TRACKER_URL]
+check = "url"
+
+[settings.TRACKER_HOME]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "{TRACKER_URL.base}/mcp"
+description = "{TRACKER_URL.scheme} {TRACKER_URL.port} {TRACKER_HOME.base}"

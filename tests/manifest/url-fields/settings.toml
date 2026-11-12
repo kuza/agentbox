@@ -1,0 +1,2 @@
+TRACKER_URL = "https://Mcp-1.Tracker.example:8443/api/v1_x~.:%2B=,!*-/"
+TRACKER_HOME = "http://10.0.0.1"

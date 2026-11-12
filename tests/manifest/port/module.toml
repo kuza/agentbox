@@ -1,0 +1,17 @@
+format = 1
+
+[settings.P_STRING]
+check = "port"
+
+[settings.P_NUMBER]
+check = "port"
+
+[settings.P_LOW]
+check = "port"
+
+[settings.P_HIGH]
+check = "port"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"

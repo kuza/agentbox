@@ -1,0 +1,9 @@
+format = 1
+
+[settings.TRACKER_CA]
+check = "file"
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.tracker.example/mcp"
+description = "CA {TRACKER_CA}"

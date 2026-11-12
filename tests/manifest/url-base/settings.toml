@@ -1,0 +1,2 @@
+TRACKER_URL = "https://t.example:65535/"
+TRACKER_BARE = "http://t.example"
