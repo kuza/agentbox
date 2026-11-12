@@ -843,6 +843,65 @@ mcp_index_tree() {  # <tree> [--check]
   return "$rc"
 }
 
+# The images or the secrets of the manifest modules, for agentbox
+# uninstall: names on stdout, what it cannot find on stderr. Without
+# Python, the names come from the index files: mcp/<name>/module.index of
+# this release and the cache files, also the file of a module that is gone.
+# With Python, also from each manifest, and the for_each secrets of the
+# settings in <values> (the values of config.toml; no <values>: agentbox
+# cannot read UNINSTALL_CONFIG). A module of the old format is not here (uninstall reads
+# its mcp.sh as text). Needs lib/egress.sh (egress_host_ok).
+mcp_uninstall_names() {  # images|secrets [<values>]
+  local fields=images d f k v name cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules"
+  local -a dirs=("${MCP_DIRS[@]}") MCP_DIRS=() names=() w=()
+  [[ "$1" == images ]] || fields="secrets own_secrets caller_secret secrets.for_each"
+  for f in "$SCRIPT_DIR"/mcp/*/module.index "$cache"/*; do
+    name="${f%/module.index}"; name="${name##*/}"
+    # A name with a dot is a temporary file of mcp_index_save.
+    [[ -f "$f" && "$name" =~ $AB_NAME_RE ]] || continue
+    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+      [[ " $fields " != *" $k "* ]] || { read -ra w <<<"$v"; names+=(${w[@]+"${w[@]}"}); }
+    done < "$f"
+  done
+  for d in "${dirs[@]}"; do
+    # One directory at a time: a module of yours and the shared one of that
+    # name both count.
+    MCP_DIRS=("$d")
+    for f in "$d"/*/module.toml; do
+      name="${f%/module.toml}"; name="${name##*/}"
+      [[ -f "$f" && "$name" =~ $AB_NAME_RE ]] || continue
+      if ! mcp_load "$name" --declared; then
+        # The release index is of the shared module, not of yours.
+        [[ -f "$cache/$name" || ( "$d" != "$USER_MCP_DIR" && -f "$SCRIPT_DIR/mcp/$name/module.index" ) ]] ||
+          echo "agentbox: $MCP_PROBLEM. There is no index of MCP module '$name' (in $SCRIPT_DIR/mcp or $cache) either, so agentbox keeps its $1. If they are on this host, remove them yourself (podman ${1/secrets/secret ls})." >&2
+        continue
+      fi
+      if [[ "$1" == images ]]; then
+        names+=(${MCP_IMAGES[@]+"${MCP_IMAGES[@]}"})
+        continue
+      fi
+      names+=(${MCP_SECRETS[@]+"${MCP_SECRETS[@]}"} ${MCP_OWN_SECRETS[@]+"${MCP_OWN_SECRETS[@]}"} "$MCP_CALLER_SECRET")
+      (( ${#MCP_LIST_CONFIG[@]} )) || continue
+      if [[ -z "${2:-}" ]]; then
+        echo "agentbox: agentbox cannot read ${UNINSTALL_CONFIG:-config.toml}, so it removes only the secrets of the list settings of MCP module '$name' that its index has. If you have other such secrets, remove them yourself (podman secret ls)." >&2
+        continue
+      fi
+      # The for_each secrets from the values in config.toml, not from the
+      # environment.
+      mapfile -t -O "${#names[@]}" names < <(
+        local -n values="$2"
+        for k in "${MCP_CONFIG[@]}"; do
+          unset "$k" 2>/dev/null || true
+          [[ -z "${values[$k]+x}" ]] || printf -v "$k" '%s' "${values[$k]}"
+        done
+        mcp_load "$name" || true
+        printf '%s\n' ${MCP_FOR_EACH_SECRETS[@]+"${MCP_FOR_EACH_SECRETS[@]}"}
+      )
+    done
+  done
+  printf '%s\n' ${names[@]+"${names[@]}"} | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u || true
+}
+
 # A module that cannot run is left out of this start, with a warning: the
 # session starts without it rather than not at all. With "keep" (sidecars
 # and host services only: its MCP_EGRESS hosts leave squid), what it

@@ -4739,9 +4739,10 @@ index_check() {
   ) > "$T/out" 2>&1
   RC=$?
 }
-# release_index: release.sh --index of $T/tree; output in $T/out.
+# release_index [<tree>]: release.sh --index of <tree> (default $T/tree);
+# output in $T/out.
 release_index() {
-  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" bash "$T/tree/release.sh" --index > "$T/out" 2>&1
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" bash "${1:-$T/tree}/release.sh" --index > "$T/out" 2>&1
   RC=$?
 }
 # index_tree: a copy of the repository tree in $T/tree, with the manifest
@@ -4805,6 +4806,107 @@ test_mcp_index_drift_stale() {
   index_check "$T/tree"
   assert_rc 1
   assert_out "mcp/ix/module.index .*run release.sh --index$"
+}
+
+# ix_manifest <tree> [<secret>]: the manifest test module ix in the mcp/ of
+# <tree>, with a for_each secret, then release.sh --index of <tree>.
+ix_manifest() {
+  mkdir -p "$1/mcp/ix"
+  printf '%s\n' 'format = 1' 'egress = ["ix.example"]' 'own_secrets = ["db"]' '[settings.IX_TEAMS]' 'list = true' \
+    'check = "name"' 'lowercase = true' "[secrets.${2:-tok}]" '[secrets."team_{item}"]' 'for_each = "IX_TEAMS"' \
+    '[images]' 'app = "docker.io/x/ix:1"' '[[servers]]' 'name = "ix"' 'url = "http://ab-mcp-ix:8080/mcp"' 'caller = true' \
+    > "$1/mcp/ix/module.toml"
+  release_index "$1"
+  assert_rc 0
+}
+# uninstall_all [env...]: agentbox uninstall --yes --all of $T/tree; output
+# in $T/out.
+uninstall_all() {
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$T/sysbin:$PATH" "$@" \
+    bash "$T/tree/agentbox" uninstall --yes --all > "$T/out" 2>&1 < /dev/null
+  RC=$?
+}
+
+# Uninstall with Python: the manifests, the for_each secrets of the values
+# in config.toml (not of the environment), and the for_each names of the
+# index. A module of the old format: its mcp.sh, read as text.
+test_uninstall_manifest_with_python() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  ix_manifest "$T/tree"
+  AB="$T/tree"
+  mkdir -p "$CFG/mcp.local/old"
+  printf '%s\n' 'MCP_URL=http://ab-mcp-old:8080/mcp' 'MCP_SECRETS=(old_s)' > "$CFG/mcp.local/old/mcp.sh"
+  config "AB_MCP=ix" "IX_TEAMS=gone"
+  ab_run --
+  sed -i 's/^IX_TEAMS = .*/IX_TEAMS = ["A", "b"]/' "$CFG/config.toml"
+  # A module of yours with no index: Python reads its manifest.
+  manifest_module yours 'format = 1' '[secrets.tok]' '[[servers]]' 'name = "yours"' 'url = "https://yours.example/mcp"'
+  secrets ix_tok ix_db ix_mcp_caller ix_team_a ix_team_b ix_team_gone ix_team_env yours_tok old_s github_pat_x
+  # An uninstall that keeps the secrets keeps the cache index too.
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$T/sysbin:$PATH" \
+    bash "$T/tree/agentbox" uninstall --yes > "$T/out" 2>&1 < /dev/null
+  [[ -f "$(cache modules/ix)" ]] || fail "the cache index removed by an uninstall that keeps the secrets"
+  [[ -e "$(cache toml)" ]] && fail "the cache of the reader left"
+  uninstall_all IX_TEAMS=env
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "ix_team_env github_pat_x" "secrets after --all"
+  grep -qx 'podman rmi docker.io/x/ix:1' "$STUB_DIR/calls" || fail "the image of ix left behind"
+  assert_no_out "no index|cannot read|command not found"
+}
+
+# Uninstall without Python: the union of the index of the release and the
+# cache files, also of a module that is gone and of a file that setup wrote
+# before the first start. A temporary file of the cache does not count.
+test_uninstall_manifest_without_python() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  ix_manifest "$T/tree"
+  AB="$T/tree"
+  manifest_module gone 'format = 1' '[secrets.tok]' '[[servers]]' 'name = "gone"' 'url = "https://gone.example/mcp"'
+  mkdir -p "$CFG/mcp.local/old"
+  printf '%s\n' 'MCP_URL=http://ab-mcp-old:8080/mcp' 'MCP_SECRETS=(old_s)' > "$CFG/mcp.local/old/mcp.sh"
+  config "AB_MCP=gone"
+  ab_run --
+  rm -r -- "$CFG/mcp.local/gone" "$(cache modules/ix)"
+  setup_run "e $(setup_entry ix)\nd\n\nt\ns\n"
+  assert_rc 0
+  assert_out "stored the Podman secret ix_team_d"
+  printf '%s\0' secrets junk_s > "$(cache modules/ix.Ab12Cd)"
+  # A module of yours with a manifest and no index.
+  manifest_module yours 'format = 1' '[secrets.tok]' '[[servers]]' 'name = "yours"' 'url = "https://yours.example/mcp"'
+  secrets ix_tok ix_db ix_mcp_caller ix_team_x gone_tok yours_tok old_s junk_s
+  no_python_stub "$T/nopy"
+  # Without the cache of the reader, the manifests cannot be read.
+  rm -rf -- "$(cache toml)"
+  uninstall_all "PATH=$T/nopy:$T/bin:$T/sysbin:$PATH"
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "ix_team_x yours_tok junk_s" "secrets after --all"
+  grep -qx 'podman rmi docker.io/x/ix:1' "$STUB_DIR/calls" || fail "the image of ix left behind"
+  assert_out "no index of MCP module 'yours' .*keeps its images"
+  assert_out "no index of MCP module 'yours' .*keeps its secrets.*podman secret ls"
+}
+
+# After a rollback, uninstall without Python reads the index of the
+# installed release.
+test_uninstall_manifest_after_rollback() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  ix_manifest "$T/rel/agentbox-v1.0.0" one
+  make_release v1.1.0
+  ix_manifest "$T/rel/agentbox-v1.1.0" two
+  pack v1.1.0
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  ab_cmd agentbox update --yes
+  ab_cmd agentbox rollback
+  assert_eq "$(current_version)" v1.0.0 "after rollback"
+  printf '%s\n' ix_one ix_two > "$STUB_DIR/secrets"
+  no_python_stub "$T/nopy"
+  rm -rf -- "$(cache toml)"
+  ab_cmd env PATH="$T/nopy:$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "ix_two" "secrets after --all"
 }
 
 # --- main -------------------------------------------------------------------

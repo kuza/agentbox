@@ -14,14 +14,18 @@
 # agentbox and its modules use.
 # Your files: <AB_HOME> (config.toml, env/ with passwords, skills, ...).
 # Needs SCRIPT_DIR, lib/paths.sh, lib/release.sh, IMG_* from lib/config.sh,
-# lib/sidecars.sh and lib/mcp.sh (mcp_names).
+# lib/sidecars.sh, lib/egress.sh and lib/mcp.sh (mcp_names,
+# mcp_uninstall_names).
 
-# The mcp.sh of each module of mcp_names: yours and the shared one, also
-# when yours replaces it. Images and secrets of both can be on the host.
+# The mcp.sh of each module of the old format in mcp_names: yours and the
+# shared one, also when yours replaces it. Images and secrets of both can be
+# on the host. A manifest module goes to mcp_uninstall_names.
 uninstall_mcp_files() {
   local n d
   while IFS= read -r n; do
-    for d in "${MCP_DIRS[@]}"; do [[ ! -f "$d/$n/mcp.sh" ]] || printf '%s\n' "$d/$n/mcp.sh"; done
+    for d in "${MCP_DIRS[@]}"; do
+      [[ ! -f "$d/$n/mcp.sh" || -f "$d/$n/module.toml" ]] || printf '%s\n' "$d/$n/mcp.sh"
+    done
   done < <(mcp_names)
 }
 
@@ -46,46 +50,58 @@ uninstall_names() {  # <MCP_ variable>
   done < <(uninstall_mcp_files) | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$' | sort -u
 }
 
-# The Podman secrets whose names come from a setting of a module:
-# MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For github,
-# ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner that
-# config.toml lists, in lowercase. Only those: a secret of the same prefix
-# that agentbox does not use stays. When it cannot read the file (no Python
-# 3.11, or an error), it keeps those secrets and says so on stderr.
-uninstall_secrets_by_setting() {
-  local f key prefix v list file="$CONFIG_FILE" path="$CONFIG_FILE" tmp="" known=1 msgs
-  local -A values=()
+# The values in config.toml into the array <values>: the file only, not
+# the environment. Status 1 when it cannot read the file (no Python 3.11,
+# or an error): then it says so on stderr. UNINSTALL_CONFIG is the file.
+uninstall_config() {  # <values>
+  local -n _uc_values="$1"
+  local path tmp="" msgs rc=0
+  UNINSTALL_CONFIG="$CONFIG_FILE"
   # Before the first start of v0.2.0, config.env is not converted: read a
   # converted copy of it.
-  [[ ! -f "$file" && -f "$CONFIG_OLD_FILE" ]] && file="$CONFIG_OLD_FILE"
-  if [[ ! -f "$file" ]]; then
-    :
+  [[ ! -f "$UNINSTALL_CONFIG" && -f "$CONFIG_OLD_FILE" ]] && UNINSTALL_CONFIG="$CONFIG_OLD_FILE"
+  path="$UNINSTALL_CONFIG"
+  if [[ ! -f "$path" ]]; then
+    return 0
   elif ! toml_python; then
-    toml_no_python "read $file" warning
-    known=""
-  elif [[ "$file" == "$CONFIG_OLD_FILE" ]]; then
+    toml_no_python "read $path" warning
+    return 1
+  elif [[ "$path" == "$CONFIG_OLD_FILE" ]]; then
     # The messages of the writer name lines of config.env: shown only when
     # it cannot convert the file.
-    if tmp="$(mktemp)" && msgs="$("$TOML_PYTHON" -I "$SCRIPT_DIR/lib/toml-writer.py" "$SCRIPT_DIR/lib/toml-schema/config.toml" keys "$file" 2>&1 > "$tmp")"; then
+    if tmp="$(mktemp)" && msgs="$("$TOML_PYTHON" -I "$SCRIPT_DIR/lib/toml-writer.py" "$SCRIPT_DIR/lib/toml-schema/config.toml" keys "$path" 2>&1 > "$tmp")"; then
       path="$tmp"
     else
       [[ -n "${msgs:-}" ]] && printf '%s\n' "$msgs" >&2
-      known=""
+      rm -f -- "$tmp"
+      return 1
     fi
   fi
-  # The values in the file only, not in the environment. A file that
-  # cannot be read gives an error, and its secrets stay.
-  if [[ -n "$known" && -f "$path" ]] && ! toml_load config "$path" values; then known=""; fi
+  # A file that cannot be read gives an error, and its secrets stay.
+  toml_load config "$path" _uc_values || rc=1
   rm -f -- "$tmp"
+  return "$rc"
+}
+
+# The Podman secrets whose names come from a setting of a module of the old
+# format: MCP_SECRETS_BY_SETTING=("<KEY> <prefix>"), read as text. For
+# github, ("GH_OWNERS github_pat_"): github_pat_<owner> for each owner in
+# <values> (uninstall_config), in lowercase. Only those: a secret of the
+# same prefix that agentbox does not use stays. Without <values>, it keeps
+# those secrets and says so on stderr.
+uninstall_secrets_by_setting() {  # [<values>]
+  local f key prefix v list
+  local -A _usbs_none=()
+  local -n _usbs_values="${1:-_usbs_none}"
   while IFS= read -r f; do
     sed -n 's/^[[:space:]]*MCP_SECRETS_BY_SETTING=(\(.*\))[[:space:]]*$/\1/p' "$f" | tr -d "\"'"
   done < <(uninstall_mcp_files) | while read -r key prefix; do
     [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ && "$prefix" =~ ^[a-z0-9_]+$ ]] || continue
-    if [[ -z "$known" ]]; then
-      echo "agentbox: agentbox cannot read $key in $file, so it keeps any secrets $prefix<name>. If you have such secrets, remove them yourself (podman secret ls)." >&2
+    if [[ -z "${1:-}" ]]; then
+      echo "agentbox: agentbox cannot read $key in $UNINSTALL_CONFIG, so it keeps any secrets $prefix<name>. If you have such secrets, remove them yourself (podman secret ls)." >&2
       continue
     fi
-    IFS=', ' read -ra list <<<"${values[$key]:-}"
+    IFS=', ' read -ra list <<<"${_usbs_values[$key]:-}"
     for v in ${list[@]+"${list[@]}"}; do
       v="${v,,}"
       [[ "$v" =~ ^[a-z0-9][a-z0-9-]*$ ]] && printf '%s%s\n' "$prefix" "$v"
@@ -94,7 +110,8 @@ uninstall_secrets_by_setting() {
 }
 
 agentbox_uninstall() {
-  local yes="" all="" reply secrets_too="" files_too="" a c v n id
+  local yes="" all="" reply secrets_too="" files_too="" a c v n id config="" cache
+  local -A config_values=()
   for a in "$@"; do
     case "$a" in
       --yes) yes=1 ;;
@@ -151,18 +168,27 @@ agentbox_uninstall() {
     [[ -n "${id:-}" ]] && podman rmi "$id" >/dev/null 2>&1 && echo "removed image $id (replaced earlier)"
   done < <(cat "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/retired-images" 2>/dev/null)
   # Also the images modules build here (mcp/bb4), by their agentbox.build label.
-  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES) \
+  for v in "$IMAGE" "$IMG_SQUID" "$IMG_NGINX" $(uninstall_names MCP_IMAGES) $(mcp_uninstall_names images) \
            $(podman images --filter label=agentbox.build --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^localhost/agentbox-'); do
     podman image exists "$v" 2>/dev/null && podman rmi "$v" >/dev/null 2>&1 && echo "removed image $v"
   done
   if [[ -n "$secrets_too" ]]; then
+    uninstall_config config_values && config=config_values
     for v in claude_oauth openai_api_key llm_openai_caller $(uninstall_names MCP_SECRETS) $(uninstall_names MCP_OWN_SECRETS) \
-             $(uninstall_names MCP_CALLER_SECRET) $(uninstall_secrets_by_setting); do
+             $(uninstall_names MCP_CALLER_SECRET) $(uninstall_secrets_by_setting $config) $(mcp_uninstall_names secrets $config); do
       podman secret inspect "$v" >/dev/null 2>&1 && podman secret rm "$v" >/dev/null && echo "removed secret $v"
     done
   fi
 
-  rm -rf -- "${XDG_CACHE_HOME:-$HOME/.cache}/agentbox"
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox"
+  if [[ -n "$secrets_too" || ! -d "$cache/modules" ]]; then
+    rm -rf -- "$cache"
+  else
+    # The index of the modules has the for_each names that agentbox made:
+    # a later agentbox uninstall --all needs them.
+    find "$cache" -mindepth 1 -maxdepth 1 ! -name modules ! -name modules.lock -exec rm -rf -- {} +
+    echo "kept $cache/modules: the names of the secrets that agentbox made, for agentbox uninstall --all"
+  fi
   rm -f -- "${XDG_CACHE_HOME:-$HOME/.cache}"/agentbox.*
   if grep -qs 'agentbox git-guard' "$HOME/.local/bin/git"; then
     rm -f -- "$HOME/.local/bin/git" && echo "removed git-guard; git is the system's again"
