@@ -1,0 +1,30 @@
+# Woodpecker CI: pipelines, step logs and pipeline configs, read-only,
+# through rtuszik/woodpecker-mcp (README, Woodpecker (MCP)). The token stays
+# in an nginx sidecar, and nginx refuses writes (mcp.sh). The nginx image of
+# agentbox is not in a manifest.
+format = 1
+description = "Woodpecker CI pipelines, step logs and configs (read-only)"
+# The key between nginx and the server. mcp_start makes it.
+own_secrets = ["bridge_key"]
+
+# The base URL. mcp_start removes /api at the end of the path, then each
+# / at the end.
+[settings.WOODPECKER_URL]
+required = true
+check = "url"
+
+# A CA certificate file on the host, for an https Woodpecker that your own
+# CA signs. Without it, nginx uses the public CAs of its image.
+[settings.WOODPECKER_CA]
+check = "file"
+
+[secrets.token]
+help = "a personal access token of a Woodpecker user that can only read the repos the agent needs (README, Woodpecker (MCP))"
+
+[images]
+server = "ghcr.io/rtuszik/woodpecker-mcp:0.5.3"
+
+[[servers]]
+name = "woodpecker"
+url = "http://ab-mcp-woodpecker:8080/mcp"
+caller = true

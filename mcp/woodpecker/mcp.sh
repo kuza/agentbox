@@ -19,36 +19,17 @@
 #                                GET and HEAD through only, puts in the
 #                                Woodpecker token, verifies Woodpecker's
 #                                certificate
-MCP_DESCRIPTION="Woodpecker CI pipelines, step logs and configs (read-only)"
-MCP_URL="http://ab-mcp-woodpecker:8080/mcp"
-MCP_CONFIG=(WOODPECKER_URL WOODPECKER_CA)
-MCP_REQUIRED_CONFIG=(WOODPECKER_URL)
-MCP_SECRETS=(woodpecker_token)
-MCP_SECRET_HELP=("woodpecker_token: a personal access token of a Woodpecker user that can only read the repos the agent needs (README, Woodpecker (MCP))")
-MCP_OWN_SECRETS=(woodpecker_bridge_key)
-MCP_CALLER_SECRET=woodpecker_mcp_caller
-WOODPECKER_MCP_IMAGE="ghcr.io/rtuszik/woodpecker-mcp:0.5.3"
-MCP_IMAGES=("$WOODPECKER_MCP_IMAGE" "$IMG_NGINX")
-
-#   WOODPECKER_URL  base URL of the Woodpecker server, without /api
-#   WOODPECKER_CA   optional: a CA certificate file on the host for an https
-#                   Woodpecker signed by your own CA (default: the public
-#                   CAs nginx's image trusts)
-# WOODPECKER_URL without trailing slashes and /api.
-WOODPECKER_BASE="${WOODPECKER_URL:-}"
-WOODPECKER_BASE="${WOODPECKER_BASE%"${WOODPECKER_BASE##*[!/]}"}"; WOODPECKER_BASE="${WOODPECKER_BASE%/api}"
-WOODPECKER_BASE="${WOODPECKER_BASE%"${WOODPECKER_BASE##*[!/]}"}"
-
-# It goes into nginx's config: plain URL characters only, no ; { } $ # or
-# quotes, which would change the config, and no user:password@, which
-# proxy_pass cannot take.
-mcp_check() {
-  [[ "$WOODPECKER_BASE" =~ ^https?://[A-Za-z0-9._~:/%+=,!*-]+$ ]] \
-    || echo "WOODPECKER_URL must be an http:// or https:// URL of plain characters, got '${WOODPECKER_URL:-}'"
-}
-
+# module.toml holds the data of the module. The url check of WOODPECKER_URL
+# keeps the characters that would change the config of nginx (; { } $ # and
+# quotes) and a user:password@ out of it.
 mcp_start() {
-  local url="$WOODPECKER_BASE" ca=/etc/ssl/certs/ca-certificates.crt ca_mount=() srv_id f
+  # The URL with no /api and no / at the end. Only the path loses /api, so a
+  # host named api stays.
+  local url="${MCP_FIELD[WOODPECKER_URL.scheme]}://${MCP_FIELD[WOODPECKER_URL.hostport]}" path
+  local ca=/etc/ssl/certs/ca-certificates.crt ca_mount=() srv_id f
+  path="${MCP_FIELD[WOODPECKER_URL.base]#"$url"}"
+  path="${path%/api}"
+  url+="${path%"${path##*[!/]}"}"
   if [[ "$url" == http://* ]]; then
     ab_warn "WOODPECKER_URL is http://: the Woodpecker token, which can do all its user can," \
          "goes over the network unencrypted"
@@ -59,7 +40,7 @@ mcp_start() {
     ca_mount=(-v "$f:$ca:ro,Z")
   fi
   # A random key between nginx and the server, made once.
-  ensure_caller_secret woodpecker_bridge_key
+  ensure_caller_secret "${MCP_SECRET[bridge_key]}"
   # The server's isolation is this network's: one of that name made
   # otherwise is not used.
   if ! podman network exists ab-mcp-woodpecker; then
@@ -76,7 +57,7 @@ mcp_start() {
     -e WOODPECKER_SERVER=http://ab-mcp-woodpecker:8081 \
     -e WOODPECKER_MCP_READ_ONLY=true \
     -e PORT=8000 \
-    "$WOODPECKER_MCP_IMAGE"
+    "${MCP_IMAGE[server]}"
   # nginx resolves the server's name once, when it starts: recreated with
   # the server (its ID as a label), as in mcp/github.
   srv_id="$(podman inspect -f '{{.Id}}' ab-mcp-woodpecker-srv 2>/dev/null || true)"
@@ -85,9 +66,9 @@ mcp_start() {
     --label "agentbox.upstream=$srv_id" \
     -e WOODPECKER_URL="$url" \
     -e WOODPECKER_CA_FILE="$ca" \
-    --secret woodpecker_token,type=env,target=WP_TOKEN \
-    --secret woodpecker_bridge_key,type=env,target=WP_BRIDGE_KEY \
-    --secret woodpecker_mcp_caller,type=env,target=WP_CALLER_TOKEN \
+    --secret "${MCP_SECRET[token]},type=env,target=WP_TOKEN" \
+    --secret "${MCP_SECRET[bridge_key]},type=env,target=WP_BRIDGE_KEY" \
+    --secret "${MCP_SECRET[mcp_caller]},type=env,target=WP_CALLER_TOKEN" \
     ${ca_mount[@]+"${ca_mount[@]}"} \
     -v "$(sidecar_copy ab-mcp-woodpecker "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"

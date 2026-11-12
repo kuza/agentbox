@@ -263,7 +263,7 @@ test_mcp_failed_start_skips_that_module_only() {
   secrets woodpecker_token grafana_sa
   ab_run --
   assert_skipped woodpecker
-  assert_out "MCP module 'woodpecker' left out of this session: WOODPECKER_URL must be an http"
+  assert_out "MCP module 'woodpecker' left out of this session: $CFG/config.toml:[0-9]+: WOODPECKER_URL: .* \\(url\\)$"
   run_line ab-mcp-grafana >/dev/null || fail "the other module's sidecar not started"
   grep -q '"grafana"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "the other module left out too"
   grep -q '"woodpecker"' "$T/home/.cache/agentbox/mcp-pi.json" && fail "pi still gets woodpecker"
@@ -274,13 +274,14 @@ test_mcp_failed_start_skips_that_module_only() {
   ab_run --
   assert_rc 0
   run_line ab-mcp-woodpecker-srv >/dev/null || fail "woodpecker not started once fixed"
-  config "WOODPECKER_CA=$T/missing-ca.pem"
-  ab_run --
+  # (mcp_start fails: it cannot make the bridge key.)
+  sed -i '/^woodpecker_bridge_key$/d' "$STUB_DIR/secrets"
+  ab_run STUB_SECRET_CREATE_FAIL=1 --
   assert_skipped woodpecker
+  assert_out "woodpecker' left out of this session: its start failed"
   grep -q '^podman rm -f.* ab-mcp-woodpecker' "$STUB_DIR/calls" && fail "open sessions lost woodpecker"
   [[ " $(started) " == *" ab-mcp-woodpecker-srv "* ]] || fail "woodpecker's server stopped"
-  sed -i '/^WOODPECKER_CA =/d' "$CFG/config.toml"
-  # ...unless access must go: a setting that does not check out (mcp_check),
+  # ...unless access must go: a setting that does not check out (a check),
   # as for an emptied one...
   sed -i 's#^WOODPECKER_URL =.*#WOODPECKER_URL = "ci.example"#' "$CFG/config.toml"
   ab_run --
@@ -1447,7 +1448,8 @@ test_mcp_woodpecker() {
   assert_eq "$(cut -d' ' -f2 <<<"$ids" | paste -sd' ')" "woodpecker_token woodpecker_bridge_key" "secret_ids"
   assert_eq "$(cut -d' ' -f3 <<<"$ids" | grep -c '^id-[0-9]')" 2 "secret IDs"
   # The daily scan covers the pinned image.
-  local image; image="$(sed -n 's/^WOODPECKER_MCP_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/woodpecker/mcp.sh")"
+  local image; image="$(sed -n 's/^server = "\(.*\)"$/\1/p' "$ROOT/mcp/woodpecker/module.toml")"
+  [[ -n "$image" ]] || fail "no server image in module.toml"
   grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
   # The template: bridge key towards the server, GET and HEAD only and the token
   # towards Woodpecker, its certificate verified.
@@ -1456,7 +1458,8 @@ test_mcp_woodpecker() {
   assert_file_has "$t" 'limit_except GET \{'
   assert_file_has "$t" 'proxy_set_header Authorization "Bearer \$\{WP_TOKEN\}";'
   assert_file_has "$t" 'proxy_ssl_verify on;'
-  # A CA of your own is mounted; a missing one or a bad URL stops the start.
+  # A CA of your own is mounted. A missing one (the file check) or a bad URL
+  # (the url check) leaves the module out and removes its sidecars.
   echo "-----BEGIN CERTIFICATE-----" > "$T/ca.pem"
   : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/ca.pem"
   ab_run --
@@ -1466,13 +1469,15 @@ test_mcp_woodpecker() {
   : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
   ab_run --
   assert_skipped woodpecker
-  assert_out "missing.pem is missing"
+  assert_out "woodpecker' left out of this session: $CFG/config.toml:3: WOODPECKER_CA: .* \\(file\\)$"
+  grep -qx 'podman rm -f -v ab-mcp-woodpecker-srv' "$STUB_DIR/calls" || fail "sidecars kept with a missing CA"
   local bad
-  for bad in ci.example 'https://ci.example/;}server{' 'https://ci.example/$host' 'https://ci.example/#x' 'https://u:p@ci.example'; do
+  for bad in ci.example 'https://ci.example/;}server{' 'https://ci.example/$host' 'https://ci.example/#x' 'https://u:p@ci.example' \
+      'https://ci_1.example' 'https://-ci.example' 'https://ci..example' 'https://ci.example:65536' 'https://ci.example:0443'; do
     : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=$bad"
     ab_run --
     assert_skipped woodpecker
-    assert_out "WOODPECKER_URL must be an http:// or https:// URL"
+    assert_out "woodpecker' left out of this session: $CFG/config.toml:2: WOODPECKER_URL: .* \\(url\\)$"
   done
   : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=http://ci.example"
   ab_run --
@@ -1481,6 +1486,10 @@ test_mcp_woodpecker() {
   : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example//api//"
   ab_run --
   run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_URL=https://ci.example " || fail "slashes kept: $(run_line ab-mcp-woodpecker)"
+  # A host named api keeps its name: only the path loses /api.
+  : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://api/"
+  ab_run --
+  run_line ab-mcp-woodpecker | grep -q -- "-e WOODPECKER_URL=https://api " || fail "host api lost: $(run_line ab-mcp-woodpecker)"
   # A network of that name without --internal is not used.
   ab_run STUB_NET_INTERNAL=false --
   assert_skipped woodpecker
@@ -3465,6 +3474,17 @@ test_setup_manifest_module() {
   sed -i -e '/^TR_URL/d' -e 's/^TR_TEAMS = .*/TR_TEAMS = ["Bad!"]/' "$CFG/config.toml"
   setup_run "q\n"
   assert_out "TR_URL NEEDED · TR_TEAMS=Bad!"
+}
+
+# The file check of WOODPECKER_CA (v0.2.1): a CA file that does not exist
+# makes woodpecker NOT USABLE in the menu.
+test_setup_woodpecker_missing_ca() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/missing.pem"
+  secrets woodpecker_token
+  setup_run "q\n"
+  assert_out "WOODPECKER_CA=$T/missing.pem · secret woodpecker_token: stored · NOT USABLE: $CFG/config.toml:3: WOODPECKER_CA: .* \\(file\\)"
 }
 
 # A module with only module.toml in the menu: context7. The menu does not
