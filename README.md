@@ -727,7 +727,7 @@ The keys of `module.toml` (`lib/toml-schema/manifest.toml` has the full schema):
 | `description` | One line that pi shows. A server without its own `description` gets this one |
 | `[settings.<KEY>]` | A setting that the module reads, from `config.toml`, `env/<repo>.toml` or the environment. `<KEY>` has uppercase letters, digits and `_`, and starts with a letter. The keys of the table are below. agentbox reads the settings only while the module is enabled. While it is not, they can stay in `config.toml`, and agentbox ignores them without a warning |
 | `[secrets.<name>]` | A Podman secret that you store, for example the API token of the service. Its Podman name is `<module>_<name>` (`[secrets.basic]` of graylog is `graylog_basic`). `help` tells what to type: `agentbox setup` shows it when it asks for the secret. With `for_each = "<KEY>"`, the module has one secret for each item of the list setting `<KEY>`, and the name has `{item}` (`[secrets."pat_{item}"]` of github gives `github_pat_<owner>`). If a secret does not exist, the start leaves the module out |
-| `own_secrets = [...]` | The secrets that `mcp_start` makes itself, for example a bridge key. Their Podman names are `<module>_<name>` too. `agentbox uninstall --all` removes them |
+| `own_secrets = [...]` | The secrets that `mcp_start` makes itself, for example a bridge key. Their Podman names are `<module>_<name>` too. A name has only `a-z`, `0-9` and `_`, and it cannot be `mcp_caller` or a name in `[secrets]`. `agentbox uninstall --all` removes them |
 | `[[servers]]` | One MCP server, one table for each. The keys of the table are below. A module needs at least one server |
 | `[images]` | `<name> = "<image>"` for each image that the code runs. `AB_UPGRADE` pulls them while the module is enabled, and `agentbox uninstall` removes them. Do not put the nginx image of agentbox (`$IMG_NGINX`) here: agentbox pulls it anyway |
 | `egress = [...]` | The hosts that the agent itself connects to (remote servers). agentbox adds them to the squid allowlist. A host can use substitutions (`"{BB4_URL.hostport}"`) |
@@ -805,7 +805,7 @@ Put the code in functions. The code outside the functions runs without `set -e`:
 
 #### Converting a module
 
-Before v0.2.1, a module was only an `mcp.sh` that set `MCP_*` variables (the old format). A module of the old format in `mcp.local/` still works in this version. Each start shows a warning for it while it is enabled. **v0.3.0 removes the old format.** Convert your modules before that version.
+Before v0.2.1, a module was only an `mcp.sh` that set `MCP_*` variables (the old format). A module of the old format in `mcp.local/` still works in this version. Each start shows a warning for it while it is enabled. **v0.3.0 removes the old format.** Convert your modules before that version. v0.2.0 cannot run a converted module. Before `agentbox rollback` to v0.2.0, move the converted modules out of `mcp.local/`.
 
 Each variable of the old format becomes a key of the manifest:
 
@@ -1425,7 +1425,7 @@ Set `GRAPHIFY_VERSION` in `Containerfile`. The next start rebuilds the image. Th
 
 #### Pinning sidecar images
 
-The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour. This happened with the caller-auth and Host checks of mcp-grafana. The `[images]` of each `mcp/<name>/module.toml` give the tags, and a release can change them. To pin the tag of a module yourself, copy its directory to `mcp.local/<name>/` and change the tag in the `[images]` of the copy. The copy replaces the shared module, so you do not get the changes of later releases to that module. Compare the copy with the shared module after each update. The nginx image is `IMG_NGINX` in `lib/config.sh`. You can change it only in a clone. Squid is not pulled: `Containerfile.squid` builds it here from Debian (`localhost/agentbox-squid`). Thus its packages are as current as the last `AB_UPGRADE=1`.
+The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour. This happened with the caller-auth and Host checks of mcp-grafana. The `[images]` of each `mcp/<name>/module.toml` give the tags, and a release can change them. To pin the tag of a module yourself, copy its full directory, with `mcp.sh` and its other files (`cp -R <agentbox>/mcp/<name> ~/.config/agentbox/mcp.local/`). Then change the tag in the `[images]` of the copy. A copy of only `module.toml` has no code that starts the sidecars. The copy replaces the shared module, so you do not get the changes of later releases to that module. Compare the copy with the shared module after each update. v0.2.0 cannot run a module with a `module.toml`. Before `agentbox rollback` to v0.2.0, move the copy out of `mcp.local/`. The nginx image is `IMG_NGINX` in `lib/config.sh`. You can change it only in a clone. Squid is not pulled: `Containerfile.squid` builds it here from Debian (`localhost/agentbox-squid`). Thus its packages are as current as the last `AB_UPGRADE=1`.
 
 ### Disk space
 

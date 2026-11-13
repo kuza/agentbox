@@ -14,3 +14,6 @@ U_FRAGMENT: url
 U_SCHEME: url
 U_NO_HOST: url
 U_SPACE: url
+U_SEMICOLON: url
+U_QUOTE: url
+U_BRACE: url

@@ -9,18 +9,19 @@
 format = 1
 description = "GitHub pull requests, issues, CI runs and repository contents"
 
-# The toolsets that nginx pins. mcp_check accepts only a-z and _ in each
-# toolset, because the value goes into a header of nginx.
+# mcp_check accepts only a-z and _ in each toolset, because the value goes
+# into a header of nginx.
 [settings.GH_TOOLSETS]
 list = true
 default = "context,repos,issues,pull_requests,actions"
+help = "the toolsets of the GitHub MCP server, with only a-z and _ in each toolset"
 
-# More resource owners, each with its own PAT. GitHub names do not depend
-# on case, so agentbox makes them lowercase.
+# GitHub names do not depend on case, so agentbox makes them lowercase.
 [settings.GH_OWNERS]
 list = true
 check = "name"
 lowercase = true
+help = "more resource owners (organizations or users), each with its own PAT"
 
 [secrets.pat]
 help = "a fine-grained personal access token, read-only (README, GitHub (MCP))"

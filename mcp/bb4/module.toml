@@ -14,22 +14,20 @@ description = "A remote browser on the browser server"
 own_secrets = ["bridge_key"]
 egress = ["{BB4_URL.hostport}"]
 
-# The MCP base URL of the browser server: the scheme, the host and the
-# port only (http://browser.example.internal:5101).
 [settings.BB4_URL]
 required = true
 check = "url-base"
+help = "the MCP base URL of the browser server: the scheme, the host and the port only (http://browser.example.internal:5101)"
 
-# Your user name on the browser server (your GitHub user name).
 [settings.BB4_USER]
 required = true
 check = "name"
+help = "your user name on the browser server (your GitHub user name)"
 
-# The port of the DevTools (CDP) WebSocket of the browser, on the host of
-# BB4_URL.
 [settings.BB4_DEVTOOLS_PORT]
 default = "5100"
 check = "port"
+help = "the port of the DevTools (CDP) WebSocket of the browser, on the host of BB4_URL"
 
 [[servers]]
 name = "bb4"

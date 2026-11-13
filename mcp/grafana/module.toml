@@ -4,10 +4,10 @@
 format = 1
 description = "Grafana dashboards, alerts and Prometheus/Loki queries (read-only)"
 
-# The base URL, without /api.
 [settings.GRAFANA_URL]
 required = true
 check = "url"
+help = "the base URL of Grafana, without /api"
 
 [secrets.sa]
 help = "a Grafana service account token, Viewer role (README, step 2)"

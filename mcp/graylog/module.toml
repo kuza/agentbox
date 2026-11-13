@@ -5,10 +5,11 @@
 format = 1
 description = "Search and analyse logs in Graylog (read-only)"
 
-# The base URL. mcp_start removes a / at the end, and /api or /api/mcp.
+# mcp_start removes a / at the end, and /api or /api/mcp.
 [settings.GRAYLOG_URL]
 required = true
 check = "url"
+help = "the base URL of Graylog"
 
 [secrets.basic]
 help = "a Graylog API token of a read-only user (README, step 2)"

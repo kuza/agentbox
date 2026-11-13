@@ -7,16 +7,15 @@ description = "Woodpecker CI pipelines, step logs and configs (read-only)"
 # The key between nginx and the server. mcp_start makes it.
 own_secrets = ["bridge_key"]
 
-# The base URL. mcp_start removes /api at the end of the path, then each
-# / at the end.
+# mcp_start removes /api at the end of the path, then each / at the end.
 [settings.WOODPECKER_URL]
 required = true
 check = "url"
+help = "the base URL of Woodpecker"
 
-# A CA certificate file on the host, for an https Woodpecker that your own
-# CA signs. Without it, nginx uses the public CAs of its image.
 [settings.WOODPECKER_CA]
 check = "file"
+help = "a CA certificate file on the host, for an https Woodpecker that your own CA signs"
 
 [secrets.token]
 help = "a personal access token of a Woodpecker user that can only read the repos the agent needs (README, Woodpecker (MCP))"

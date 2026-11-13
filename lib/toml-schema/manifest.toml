@@ -13,12 +13,13 @@
 # \n: a multi-line string is refused, as in each kind.
 # "names" on the rule "*": the pattern (a Python and Go regular
 # expression) that each name of the table must match, else bad-name.
+# "items" on a list: the pattern that each item must match, else bad-name.
 #
 # A newer format can use TOML syntax that this reader does not know. Then
 # the error is syntax, not newer-format.
 format = { type = "int", required = true, newest = 1 }
 description = { type = "string" }
-own_secrets = { type = "list" }
+own_secrets = { type = "list", items = '^[a-z0-9_]+$' }  # as a name in [secrets]
 egress = { type = "list" }
 
 [settings]

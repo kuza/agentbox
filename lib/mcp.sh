@@ -72,11 +72,14 @@
 #                        services it asked for.
 #
 # Sourced by run.sh. Provides mcp_init, mcp_check_secrets, mcp_write_configs,
-# mcp_start_all and these results: MCP_ENABLED, MCP_CONFIG_KEYS, MCP_IMAGES_ALL,
-# MCP_SESSION_ARGS, MCP_NO_PROXY, MCP_CLAUDE_JSON, MCP_PI_JSON, MCP_EGRESS_ALL
-# ("host module" per entry, for lib/egress.sh), MCP_MANAGED (name and URL per
-# line, for cleaning up old registrations). Needs lib/egress.sh
-# (egress_host_ok) for mcp_load without --declared.
+# mcp_start_all, and for other files mcp_names (setup, uninstall),
+# mcp_index_save (setup), mcp_index_tree (release.sh) and
+# mcp_uninstall_names (uninstall). The results: MCP_ENABLED,
+# MCP_CONFIG_KEYS, MCP_IMAGES_ALL, MCP_SESSION_ARGS, MCP_NO_PROXY,
+# MCP_CLAUDE_JSON, MCP_PI_JSON, MCP_EGRESS_ALL ("host module" per entry,
+# for lib/egress.sh), MCP_MANAGED (name and URL per line, for cleaning up
+# old registrations). Needs lib/egress.sh (egress_host_ok) for mcp_load
+# without --declared.
 
 MCP_DIRS=("$USER_MCP_DIR" "$SCRIPT_DIR/mcp")
 
@@ -103,8 +106,8 @@ mcp_names() {
 }
 
 # 0 if the mcp.sh in <directory> parses (bash -n).
-mcp_parses() {  # <name> <its directory, from mcp_find>
-  bash -n "$2/mcp.sh" 2>/dev/null
+mcp_parses() {  # <its directory, from mcp_find>
+  bash -n "$1/mcp.sh" 2>/dev/null
 }
 
 # Loads again a module that mcp_check_secrets let through (status 0). A
@@ -142,7 +145,7 @@ mcp_load() {  # <name> [--declared]
     return
   fi
   MCP_FORMAT=old
-  if ! mcp_parses "$1" "$MCP_DIR"; then
+  if ! mcp_parses "$MCP_DIR"; then
     MCP_PROBLEM="its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
     return 2
   fi
@@ -181,7 +184,7 @@ mcp_bind() {  # <name> [--check]
   # Names that the top level of mcp.sh does not use: it sees these locals.
   local _mcp_k _mcp_why _mcp_old
   [[ -f "$MCP_DIR/mcp.sh" ]] || return 0
-  if ! mcp_parses "$1" "$MCP_DIR"; then
+  if ! mcp_parses "$MCP_DIR"; then
     echo "its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
     return 2
   fi
@@ -226,8 +229,12 @@ mcp_bind_source() {
 # Runs mcp_bind --check in a subshell. The reason goes to stdout, the status
 # is 0, 1 or 2 as for mcp_bind. Without a reason, a stop is status 2.
 mcp_bind_check() {  # <name>
-  local why rc=0
-  why="$(mcp_bind "$1" --check)" || rc=$?
+  local why rc=0 out
+  # A file, not the pipe of $(...): a program that the top level of mcp.sh
+  # starts keeps the stdout of mcp_bind open, and $(...) would wait for it.
+  out="$(mktemp)" || { echo "cannot make a temporary file for the check of its mcp.sh"; return 2; }
+  ( mcp_bind "$1" --check ) > "$out" || rc=$?
+  why="$(cat -- "$out")"; rm -f -- "$out"
   (( ! rc )) || [[ -n "$why" ]] || { why="its mcp.sh stopped with status $rc"; rc=2; }
   [[ -z "$why" ]] || printf '%s\n' "$why"
   return $(( rc > 2 ? 2 : rc ))
@@ -445,7 +452,15 @@ mcp_load_manifest() {  # <name> [--declared]
     MCP_SECRETS+=("$1_$k")
     [[ -z "${v[secrets.$k.help]:-}" ]] || MCP_SECRET_HELP_OF[$1_$k]="${v[secrets.$k.help]}"
   done
-  for k in ${v[own_secrets]:-}; do
+  read -ra all <<<"${v[own_secrets]:-}"
+  for k in ${all[@]+"${all[@]}"}; do
+    if [[ "$k" == mcp_caller ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: agentbox makes mcp_caller for a server with caller = true; remove it (reserved-secret)"
+      return 2
+    elif [[ -n "${MCP_SECRET[$k]+x}" ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: '$k' is in [secrets] or two times in own_secrets: keep it one time (duplicate-secret)"
+      return 2
+    fi
     MCP_SECRET[$k]="$1_$k"
     MCP_OWN_SECRETS+=("$1_$k")
   done
@@ -696,7 +711,8 @@ mcp_init() {
          continue ;;
       3) toml_no_python "read $MCP_DIR/module.toml"; exit 2 ;;
       *) ab_warn "MCP module '$name' left out of this session: $MCP_PROBLEM"
-         # Its settings are not read; they get no warning (MCP_QUIET_KEYS).
+         # Its settings are not read. They get no warning (MCP_QUIET_KEYS)
+         # for a module of the old format, and for a manifest that loads.
          MCP_SKIPPED+=("$name")
          continue ;;
     esac

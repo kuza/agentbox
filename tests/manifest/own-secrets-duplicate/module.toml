@@ -1,0 +1,9 @@
+format = 1
+own_secrets = ["bridge_key"]
+
+[secrets.bridge_key]
+help = "A key"
+
+[[servers]]
+name = "tab"
+url = "http://ab-mcp-tab:8080/mcp"

@@ -77,6 +77,9 @@ Action:
 - If you have modules in `mcp.local/`, convert them to `module.toml`
   before v0.3.0, which removes the old format. README, "Converting a
   module", shows the steps.
+- v0.2.0 cannot run a module with a `module.toml`. Before
+  `agentbox rollback` to v0.2.0, move the converted modules and the copies
+  of shared modules out of `mcp.local/`.
 - If a check now refuses a value of yours, the start names the setting.
   Correct the value in `config.toml`.
 

@@ -37,7 +37,7 @@ tabularis_plain() {  # <text>: 0 if it holds only plain characters
 }
 
 mcp_check() {
-  local cmd="$TABULARIS_CMD" port="$TABULARIS_PORT"
+  local cmd="${TABULARIS_CMD-}" port="${TABULARIS_PORT-}"
   if ! tabularis_plain "$cmd" || [[ "$cmd" == " "* ]]; then
     echo "TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'"
   # The service runs in your home directory, not here: a relative path
@@ -55,7 +55,7 @@ mcp_check() {
 }
 
 mcp_start() {
-  local cmd="$TABULARIS_CMD" port="$TABULARIS_PORT"
+  local cmd="${TABULARIS_CMD-}" port="${TABULARIS_PORT-}"
   local wait="${AB_TABULARIS_WAIT:-60}"
   local node npm tab key bridge image_id i state
   if ! host_units_available; then

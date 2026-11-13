@@ -17,10 +17,10 @@
 # of only commas or spaces gives no toolset, and nginx would then send no
 # header.
 mcp_check() {
-  if [[ -z "$GH_TOOLSETS" ]]; then
+  if [[ -z "${GH_TOOLSETS-}" ]]; then
     echo "GH_TOOLSETS has no toolset names: give at least one, or remove the setting to get the default"
-  elif [[ "$GH_TOOLSETS" =~ [^a-z_,] ]]; then
-    echo "GH_TOOLSETS must hold toolset names of a-z and _ only, got '$GH_TOOLSETS'"
+  elif [[ "${GH_TOOLSETS-}" =~ [^a-z_,] ]]; then
+    echo "GH_TOOLSETS must hold toolset names of a-z and _ only, got '${GH_TOOLSETS-}'"
   fi
 }
 
@@ -44,7 +44,7 @@ mcp_start() {
   start_sidecar ab-mcp-github \
     --network ab-internal --network ab-egress \
     --label "agentbox.upstream=$srv_id" \
-    -e GH_TOOLSETS="$GH_TOOLSETS" \
+    -e GH_TOOLSETS="${GH_TOOLSETS-}" \
     --secret "${MCP_SECRET[pat]},type=env,target=GH_PAT" \
     ${secrets[@]+"${secrets[@]}"} \
     --secret "${MCP_SECRET[mcp_caller]},type=env,target=GH_CALLER_TOKEN" \

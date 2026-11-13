@@ -265,6 +265,9 @@ def walk(table, rules, prefix, line):
             if message:
                 error("type", at, message)
                 continue
+            if rule.get("items") and not all(re.fullmatch(rule["items"], str(i)) for i in value):
+                error("bad-name", at, f"'{path}': each item must match {rule['items']}")
+                continue
             record("value", path, at, at, converted)
     for key, rule in rules.items():
         if rule.get("required") and key not in table:

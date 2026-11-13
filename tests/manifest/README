@@ -146,6 +146,8 @@ first error:
 2. Each setting in its order: unknown-check.
 3. Each secret in its order: reserved-secret, and bad-substitution for
    {item} in a secret with no for_each.
+   Then each item of own_secrets in its order: reserved-secret, and
+   duplicate-secret.
 4. no-server.
 5. The templates, before the values: each secret with for_each
    (bad-secret-name for a name with no {item}), each server, then egress
@@ -202,9 +204,13 @@ bad-format          "format" is 0 or lower. The first format is 1.
 reserved-name       The module has the name "git". The prefix "git_" of
                     the secret names is for the modules from git. The
                     name is not a key, so the error has no line.
-reserved-secret     The manifest has [secrets.mcp_caller]. agentbox makes
-                    this secret for a server with caller = true. The line
-                    of the table header.
+reserved-secret     The manifest has [secrets.mcp_caller], or mcp_caller in
+                    own_secrets. agentbox makes this secret for a server
+                    with caller = true. The line of the table header, or
+                    of "own_secrets".
+duplicate-secret    An item of own_secrets is also a name in [secrets],
+                    or it is two times in own_secrets. The line of
+                    "own_secrets".
 no-server           The manifest has no [[servers]]. The line of
                     "format".
 bad-server-name     A server name is not lowercase letters, digits and

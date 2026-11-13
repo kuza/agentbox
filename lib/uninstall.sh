@@ -53,9 +53,11 @@ uninstall_names() {  # <MCP_ variable>
 # The values in config.toml into the array <values>: the file only, not
 # the environment. Status 1 when it cannot read the file (no Python 3.11,
 # or an error): then it says so on stderr. UNINSTALL_CONFIG is the file.
+# SETTING_AT gets the place of each value, for the message of a failed check.
 uninstall_config() {  # <values>
   local -n _uc_values="$1"
-  local path tmp="" msgs rc=0
+  local path tmp="" msgs rc=0 k
+  local -A lines=()
   UNINSTALL_CONFIG="$CONFIG_FILE"
   # Before the first start of v0.2.0, config.env is not converted: read a
   # converted copy of it.
@@ -78,7 +80,12 @@ uninstall_config() {  # <values>
     fi
   fi
   # A file that cannot be read gives an error, and its secrets stay.
-  toml_load config "$path" _uc_values || rc=1
+  toml_load config "$path" _uc_values lines || rc=1
+  # The lines of a converted config.env are not the lines of the file.
+  for k in "${!lines[@]}"; do
+    SETTING_AT[$k]="$UNINSTALL_CONFIG"
+    [[ "$path" != "$UNINSTALL_CONFIG" ]] || SETTING_AT[$k]+=":${lines[$k]%% *}"
+  done
   rm -f -- "$tmp"
   return "$rc"
 }

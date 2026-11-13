@@ -45,6 +45,15 @@ check = "url"
 [settings.U_SPACE]
 check = "url"
 
+[settings.U_SEMICOLON]
+check = "url"
+
+[settings.U_QUOTE]
+check = "url"
+
+[settings.U_BRACE]
+check = "url"
+
 [[servers]]
 name = "tracker"
 url = "https://mcp.tracker.example/mcp"

@@ -705,6 +705,31 @@ test_mcp_manifest_module_starts() {
   assert_out "tracker' left out of this session: missing podman secrets tracker_team_blue"
 }
 
+# A program that the top level of mcp.sh starts in the background does not
+# hold the check of the module (mcp_bind_check).
+test_mcp_manifest_module_code_starts_a_program() {
+  setup "${FUNCNAME[0]}"
+  manifest_module a 'format = 1' '[[servers]]' 'name = "a"' 'url = "http://ab-mcp-a:8080/mcp"'
+  printf '%s\n' 'sleep 5 &' 'mcp_check() { echo "A is bad"; }' > "$CFG/mcp.local/a/mcp.sh"
+  config "AB_MCP=a"
+  SECONDS=0
+  ab_run --
+  (( SECONDS < 4 )) || fail "the check waited ${SECONDS}s for a program of the top level of mcp.sh"
+  assert_skipped a
+  assert_out "a' left out of this session: A is bad$"
+}
+
+# A rollback to v0.2.0 sources the mcp.sh of a v0.2.1 module in mcp.local/,
+# and sets no setting of its manifest. Its mcp_check must give a reason,
+# not stop the start under set -u.
+test_shared_module_check_without_settings() {
+  local m out
+  for m in github tabularis; do
+    out="$(set -euo pipefail; source "$ROOT/mcp/$m/mcp.sh"; mcp_check)" || fail "$m: mcp_check stops without its settings"
+    [[ -n "$out" ]] || fail "$m: mcp_check gives no reason without its settings"
+  done
+}
+
 # The built-in checks at a start. The settings of v0.2.0 work with no
 # change, and the start does not change the file. A failed check leaves
 # the module out and names the place of the value. The edges of the
@@ -739,6 +764,15 @@ test_mcp_manifest_module_checks() {
   ab_run --
   assert_skipped a
   assert_out "'a' left out of this session: $CFG/config.toml:4: A_CA: not a file that agentbox can read \(file\)$"
+  # A file that exists and cannot be read: status 1 too. Root can read it.
+  if (( EUID )); then
+    chmod 000 "$T/ca.pem"
+    sed -i "s#^A_CA = .*#A_CA = \"$T/ca.pem\"#" "$CFG/config.toml"
+    ab_run --
+    chmod 600 "$T/ca.pem"
+    assert_skipped a
+    assert_out "'a' left out of this session: $CFG/config.toml:4: A_CA: not a file that agentbox can read \(file\)$"
+  fi
   # At status 1, the secrets with for_each of a list that passed its check
   # are there (the setup menu shows them).
   manifest_module b 'format = 1' '[settings.B_TEAMS]' 'list = true' 'check = "name"' '[settings.B_URL]' 'required = true' \
@@ -757,6 +791,14 @@ test_mcp_manifest_module_checks() {
   assert_skipped a
   assert_out "'a' left out of this session: .*/a/module.toml:2: egress: 'https://a.example/p' .*\(bad-egress-host\)$"
   assert_file_has "$(cache mcp-claude.json)" '"context7"'
+  # A control character in a substituted value: only the file check lets
+  # one through, from a file name.
+  printf 'ca\n' > "$T/a"$'\t'"b"
+  manifest_module a 'format = 1' '[settings.A_CA]' 'check = "file"' \
+    '[[servers]]' 'name = "a"' 'url = "https://a.example/{A_CA}"'
+  ab_run A_CA="$T/a"$'\t'"b" --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*\(bad-value\)$"
 }
 
 # The code of a manifest module can leave it out, with a reason. The output
@@ -3733,9 +3775,11 @@ test_refuses_agentbox_code_and_user_files() {
   done
   # Another installed version (rollback would run it), and the directory of
   # git-guard (it runs on every git call on the host).
-  # The sidecars' copies in the cache, which may hold passwords (mcp/dbhub).
-  mkdir -p "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache/agentbox/sidecars"
-  for r in "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache"; do
+  # The cache of agentbox: the sidecars' copies, which may hold passwords
+  # (mcp/dbhub), the index files (uninstall removes their secrets) and the
+  # reader cache.
+  mkdir -p "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache/agentbox/sidecars" "$T/home/.cache/agentbox/modules"
+  for r in "$T/home/.local/share/agentbox/versions/v9.9.9" "$T/home/.local/bin" "$T/home/.cache" "$T/home/.cache/agentbox/modules"; do
     ab_run_repo "$r"
     assert_rc 2
     assert_out "refusing to mount $r: it overlaps"
@@ -4987,6 +5031,8 @@ test_uninstall_manifest_without_python() {
   assert_rc 0
   assert_out "stored the Podman secret ix_team_d"
   printf '%s\0' secrets junk_s > "$(cache modules/ix.Ab12Cd)"
+  # A name with a glob or a "-" at the start: the name filter refuses it.
+  printf '%s\0' secrets 'ix_* -x' > "$(cache modules/iy)"
   # A module of yours with a manifest and no index.
   manifest_module yours 'format = 1' '[secrets.tok]' '[[servers]]' 'name = "yours"' 'url = "https://yours.example/mcp"'
   secrets ix_tok ix_db ix_mcp_caller ix_team_x gone_tok yours_tok old_s junk_s
@@ -4996,6 +5042,7 @@ test_uninstall_manifest_without_python() {
   uninstall_all "PATH=$T/nopy:$T/bin:$T/sysbin:$PATH"
   assert_rc 0
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "ix_team_x yours_tok junk_s" "secrets after --all"
+  grep -Eq '^podman secret (inspect|rm) (ix_\*|-x)$' "$STUB_DIR/calls" && fail "a secret name that the filter must refuse"
   grep -qx 'podman rmi docker.io/x/ix:1' "$STUB_DIR/calls" || fail "the image of ix left behind"
   assert_out "no index of MCP module 'yours' .*keeps its images"
   assert_out "no index of MCP module 'yours' .*keeps its secrets.*podman secret ls"
@@ -5060,7 +5107,7 @@ test_uninstall_github_owner_tokens() {
   printf '%s\n' github_pat_e > "$STUB_DIR/secrets"
   uninstall_all
   assert_rc 0
-  assert_out "GH_OWNERS: .*\\(name\\), so it removes only the secrets of the list settings of MCP module 'github' that its index has"
+  assert_out "config\\.toml:1: GH_OWNERS: .*\\(name\\), so it removes only the secrets of the list settings of MCP module 'github' that its index has"
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_e" "secrets after --all with a bad owner"
 }
 

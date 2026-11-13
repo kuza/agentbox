@@ -8,15 +8,15 @@ description = "Databases from your Tabularis connections: schemas and SQL querie
 # The key between nginx and supergateway. mcp_start makes it.
 own_secrets = ["bridge_key"]
 
-# The command that runs Tabularis; mcp_start adds --mcp. mcp_check accepts
-# a name or an absolute path, and only plain characters, because the value
-# goes into a systemd command line.
+# mcp_start adds --mcp. mcp_check accepts a name or an absolute path, and
+# only plain characters, because the value goes into a systemd command line.
 [settings.TABULARIS_CMD]
 default = "tabularis"
+help = "the command that runs Tabularis: a name or an absolute path, with only letters, digits, spaces and _./:=+-"
 
-# The port of supergateway on 127.0.0.1. mcp_check accepts 1024 to 65535.
 [settings.TABULARIS_PORT]
 default = "47821"
+help = "the port of supergateway on 127.0.0.1, from 1024 to 65535"
 
 [[servers]]
 name = "tabularis"
