@@ -1,0 +1,24 @@
+# Tabularis: the database connections that you saved in the Tabularis
+# desktop app, through its own MCP server (README, Tabularis (MCP)). The
+# bridge on the host, the relay and nginx are in mcp.sh. The nginx image of
+# agentbox is not in a manifest. The environment variable AB_TABULARIS_WAIT
+# is not a setting of the module: mcp_check checks it.
+format = 1
+description = "Databases from your Tabularis connections: schemas and SQL queries"
+# The key between nginx and supergateway. mcp_start makes it.
+own_secrets = ["bridge_key"]
+
+# The command that runs Tabularis; mcp_start adds --mcp. mcp_check accepts
+# a name or an absolute path, and only plain characters, because the value
+# goes into a systemd command line.
+[settings.TABULARIS_CMD]
+default = "tabularis"
+
+# The port of supergateway on 127.0.0.1. mcp_check accepts 1024 to 65535.
+[settings.TABULARIS_PORT]
+default = "47821"
+
+[[servers]]
+name = "tabularis"
+url = "http://ab-mcp-tabularis:8080/mcp"
+caller = true

@@ -20,12 +20,7 @@
 #
 # Tabularis writes every query and its result to stderr: it goes to
 # /dev/null, and supergateway logs nothing, so no data lands in the journal.
-MCP_DESCRIPTION="Databases from your Tabularis connections: schemas and SQL queries"
-MCP_URL="http://ab-mcp-tabularis:8080/mcp"
-MCP_CONFIG=(TABULARIS_CMD TABULARIS_PORT)
-MCP_OWN_SECRETS=(tabularis_bridge_key)
-MCP_CALLER_SECRET=tabularis_mcp_caller
-MCP_IMAGES=("$IMG_NGINX")
+# module.toml holds the data of the module.
 
 # supergateway and every package under it, at the versions and hashes of
 # bridge/package-lock.json: npm ci checks each package against its hash and
@@ -33,15 +28,17 @@ MCP_IMAGES=("$IMG_NGINX")
 # maintainers update the lock with
 #   cd mcp/tabularis/bridge && npm install --package-lock-only --ignore-scripts
 
-#   TABULARIS_CMD      runs Tabularis, --mcp is appended (default: tabularis)
-#   TABULARIS_PORT     supergateway's port on 127.0.0.1 (default: 47821)
 #   AB_TABULARIS_WAIT  seconds to wait for supergateway to listen (default: 60)
-# Both settings end up in a systemd command line, which expands $ and %:
-# only plain characters are accepted.
-TABULARIS_PLAIN='^[A-Za-z0-9_./:=+ -]+$'
+# TABULARIS_CMD and TABULARIS_PORT end up in a systemd command line, which
+# expands $ and %: only plain characters are accepted.
+tabularis_plain() {  # <text>: 0 if it holds only plain characters
+  local re='^[A-Za-z0-9_./:=+ -]+$'
+  [[ "$1" =~ $re ]]
+}
+
 mcp_check() {
-  local cmd="${TABULARIS_CMD:-tabularis}" port="${TABULARIS_PORT:-47821}"
-  if [[ ! "$cmd" =~ $TABULARIS_PLAIN || "$cmd" == " "* ]]; then
+  local cmd="$TABULARIS_CMD" port="$TABULARIS_PORT"
+  if ! tabularis_plain "$cmd" || [[ "$cmd" == " "* ]]; then
     echo "TABULARIS_CMD may hold only letters, digits, spaces and _./:=+-, and starts with the command, got '$cmd'"
   # The service runs in your home directory, not here: a relative path
   # would point elsewhere.
@@ -58,7 +55,7 @@ mcp_check() {
 }
 
 mcp_start() {
-  local cmd="${TABULARIS_CMD:-tabularis}" port="${TABULARIS_PORT:-47821}"
+  local cmd="$TABULARIS_CMD" port="$TABULARIS_PORT"
   local wait="${AB_TABULARIS_WAIT:-60}"
   local node npm tab key bridge image_id i state
   if ! host_units_available; then
@@ -89,15 +86,15 @@ mcp_start() {
     exit 1
   fi
   bridge="$(tabularis_bridge_dir)"
-  if [[ ! "$key$node$tab$bridge" =~ $TABULARIS_PLAIN ]]; then
+  if ! tabularis_plain "$key$node$tab$bridge"; then
     ab_error "the tabularis module cannot use paths with characters other than letters, digits, spaces and _./:=+- ($key, $node, $tab, $bridge)"
     exit 2
   fi
   if [[ ! -s "$key" ]] && tabularis_new_key "$key"; then
-    secret_store tabularis_bridge_key < "$key"
+    secret_store "${MCP_SECRET[bridge_key]}" < "$key"
     echo "agentbox: created the tabularis bridge key" >&2
-  elif [[ "${AB_RESTART:-}" == 1 ]] || ! secret_exists tabularis_bridge_key; then
-    secret_store tabularis_bridge_key < "$key"
+  elif [[ "${AB_RESTART:-}" == 1 ]] || ! secret_exists "${MCP_SECRET[bridge_key]}"; then
+    secret_store "${MCP_SECRET[bridge_key]}" < "$key"
   fi
 
   tabularis_fail_if_taken "$port"
@@ -151,8 +148,8 @@ mcp_start() {
   start_sidecar ab-mcp-tabularis \
     --network ab-internal \
     --label "agentbox.bridge=$(sha256sum < "$key" | cut -c1-16)" \
-    --secret tabularis_mcp_caller,type=env,target=TABULARIS_CALLER_TOKEN \
-    --secret tabularis_bridge_key,type=env,target=TABULARIS_BRIDGE_KEY \
+    --secret "${MCP_SECRET[mcp_caller]},type=env,target=TABULARIS_CALLER_TOKEN" \
+    --secret "${MCP_SECRET[bridge_key]},type=env,target=TABULARIS_BRIDGE_KEY" \
     -v ab-mcp-tabularis-sock:/run/tabularis \
     -v "$(sidecar_copy ab-mcp-tabularis "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
     "$IMG_NGINX"

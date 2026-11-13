@@ -1812,6 +1812,21 @@ test_tabularis_wiring() {
   return 0
 }
 
+# The defaults in module.toml: the command tabularis and the port 47821.
+# If a program listens on 47821, the start refuses that port by its number.
+test_tabularis_defaults() {
+  tab_setup "${FUNCNAME[0]}"
+  sed -i '/^TABULARIS_PORT =/d' "$CFG/config.toml"
+  if [[ "$(free_port 47821)" != 47821 ]]; then
+    ab_run AB_TABULARIS_WAIT=0 --
+    assert_out "TABULARIS_PORT 47821 on 127.0.0.1 is in use by another program"
+    return 0
+  fi
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  [[ "$(bridge_line)" == *" --stdio tabularis --mcp 2>/dev/null "*" --port 47821 "* ]] || fail "defaults: $(bridge_line)"
+}
+
 # A new lock file (or new overrides): a new install, the bridge restarted
 # on it. Installs unused for 30 days go; recent ones stay, another agentbox
 # copy may use them. A failed install stops the start. Leftovers of
