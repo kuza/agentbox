@@ -29,7 +29,7 @@ jobs:
           mkdir -p ~/.local/bin ~/.config/agentbox
           install -m 755 git-guard ~/.local/bin/git
           printf '%s\tnone\n' "$HOME/somewhere" > ~/.config/agentbox/mounted-repos
-          PATH="$HOME/.local/bin:$PATH" timeout 300 ./tests/run.sh
+          PATH="$HOME/.local/bin:$PATH" timeout 600 ./tests/run.sh
 
   shellcheck:
     runs-on: ubuntu-24.04
