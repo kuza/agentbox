@@ -232,6 +232,21 @@ session_optional_file() {  # <agent> <name> <file or ""> <fallback text>
   fi
 }
 
+# An agent that stops or crashes can keep terminal modes on. TERM_RESET
+# turns off these modes:
+# - mouse reports and focus events
+# - bracketed paste and the alternate screen
+# - application keys, the kitty keyboard protocol and modifyOtherKeys
+# - the character set and the text attributes
+# It also shows the cursor. It does not clear the screen, so the history of
+# the terminal stays. It uses ?1047l, not ?1049l: ?1049l can move the cursor
+# in tmux. term_reset uses the same condition as the -t flag of podman.
+TERM_RESET=$'\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?1004l\e[?2004l\e[?1047l\e[?1l\e>\e[<u\e[>4;0m\e(B\e[0m\e[?25h'
+term_reset() {
+  [[ -t 0 && -t 1 ]] && printf '%s' "$TERM_RESET"
+  return 0
+}
+
 # SELinux labels for host directories used by sessions: lowercase ":z" (shared)
 # on everything a session mounts from the host (repo, .git parts, skills, pi
 # config). Uppercase ":Z" gives a directory a label private to ONE container,
@@ -257,14 +272,18 @@ session_optional_file() {  # <agent> <name> <file or ""> <fallback text>
 # networks, so external names resolved: a channel for data in the query
 # names, without any TCP. Nothing listens on 127.0.0.1 where aardvark-dns
 # runs, so external names fail; container names still resolve.
+# Runs the session, then resets the terminal and exits with the status of
+# podman. No exec: the reset must run after the container stops.
+# Thus a SIGTERM to this shell does not stop podman. To stop a session,
+# use `podman stop ab-<agent>-<PID>`.
 session_exec() {  # <agent arguments...>
-  local venv_key no_proxy tty_flags
+  local venv_key no_proxy tty_flags rc=0
   venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
   no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}${FORWARD_NAMES[*]+${FORWARD_NAMES[*]},}${SERVICE_NAMES[*]+${SERVICE_NAMES[*]},}ab-llm-openai")"
   # Allocate a TTY only when attached to a terminal (keeps piping/scripts working).
   tty_flags=(-i)
   [[ -t 0 && -t 1 ]] && tty_flags+=(-t)
-  exec podman run --rm "${tty_flags[@]}" \
+  podman run --rm "${tty_flags[@]}" \
     --name "ab-$AGENT-$$" \
     --network ab-internal \
     --dns 127.0.0.1 \
@@ -287,5 +306,7 @@ session_exec() {  # <agent arguments...>
     --workdir "$WORK_DIR" \
     ${GIT_MOUNTS[@]+"${GIT_MOUNTS[@]}"} \
     "${AGENT_ARGS[@]}" \
-    "$IMAGE" ${AGENT_CMD[@]+"${AGENT_CMD[@]}"} "$@"
+    "$IMAGE" ${AGENT_CMD[@]+"${AGENT_CMD[@]}"} "$@" || rc=$?
+  term_reset
+  exit "$rc"
 }

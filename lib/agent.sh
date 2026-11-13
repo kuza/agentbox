@@ -90,8 +90,11 @@ agent_login() {
     exit 2
   fi
   echo "agentbox: open the URL below, sign in, and paste the code from the browser back here" >&2
-  if ! podman run --rm -it --network ab-egress --userns="$USERNS" \
-       -v "$AGENT_VOL:$AGENT_PREFIX:ro" "$IMAGE" setup-token; then
+  local rc=0
+  podman run --rm -it --network ab-egress --userns="$USERNS" \
+    -v "$AGENT_VOL:$AGENT_PREFIX:ro" "$IMAGE" setup-token || rc=$?
+  term_reset
+  if (( rc )); then
     echo "error: claude setup-token failed; run agentbox login again and paste a fresh code" >&2
     exit 1
   fi

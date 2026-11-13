@@ -72,9 +72,9 @@ for lib in config toml convert release images agent sidecars mcp egress forward 
   source "$SCRIPT_DIR/lib/$lib.sh"
 done
 
-# This start's warnings, for warnings_review before the session; gone with
-# the start (session_exec replaces this process, warnings_review removes it
-# before).
+# This start's warnings, for warnings_review before the session. The EXIT
+# trap removes the file when the start or the session stops; warnings_review
+# removes it before the session starts.
 AB_WARNINGS_FILE="$(mktemp)"
 trap 'rm -f -- "$AB_WARNINGS_FILE" "$AB_WARNINGS_FILE.err"' EXIT
 

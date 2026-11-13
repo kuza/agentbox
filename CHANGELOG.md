@@ -4,6 +4,14 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.2.2
+
+- An agent that stops or crashes can keep terminal modes on, for example
+  mouse reports, bracketed paste or application keys. Now agentbox resets
+  these modes and shows the cursor after the container of a session or of
+  `agentbox login` stops. It does this only at a terminal and does not
+  clear the screen. The exit status of the session does not change.
+
 ## v0.2.1
 
 - Each shared MCP module has a manifest, `module.toml`: its description,

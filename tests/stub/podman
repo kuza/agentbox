@@ -30,6 +30,7 @@
 #   STUB_SECRET_CREATE_FAIL  secret create fails
 #   STUB_HIDDEN_FILE  agent_prepare_home's script finds that file hidden
 #   STUB_GRAPHIFY   ok: `graphify install` writes the skill files; else nothing
+#   STUB_SESSION_RC the session container (run --rm --name ab-...) prints STUB-SESSION-END and exits with this status
 set -u
 S="${STUB_DIR:?}"
 touch "$S/secrets" "$S/running" "$S/labels" "$S/image_labels" "$S/image_pulled" "$S/digests" "$S/image_ids" "$S/container_images" "$S/ids" \
@@ -218,6 +219,10 @@ case "$1 ${2:-}" in
     seq=$(( $(cat "$S/idseq" 2>/dev/null || echo 0) + 1 )); echo "$seq" > "$S/idseq"
     echo "$name $name-$seq" >> "$S/ids" ;;
   "run --rm")
+    if [[ -n "${STUB_SESSION_RC:-}" && " $* " == *" --name ab-"* ]]; then
+      printf 'STUB-SESSION-END'
+      exit "$STUB_SESSION_RC"
+    fi
     # agent_prepare_home's script reports a hidden file of yours.
     if [[ -n "${STUB_HIDDEN_FILE:-}" && " $* " == *" AB_COVERED="* ]]; then
       echo "warning: ~/$STUB_HIDDEN_FILE in the volume is hidden"

@@ -3053,6 +3053,7 @@ test_login() {
   assert_rc 0
   assert_out "token stored as the podman secret claude_oauth"
   grep -q 'podman run --rm -it .* localhost/agentbox setup-token' "$STUB_DIR/calls" || fail "setup-token not run"
+  grep -qF -- "$TEST_TERM_RESET" "$T/out" || fail "no reset after setup-token"
   assert_eq "$(cat "$STUB_DIR/secret-claude_oauth")" sk-ant-oat01-abc123 "stored token"
   grep -q '^podman run --rm -i .*--name ab-claude' "$STUB_DIR/calls" && fail "a session started"
   # The browser's code is not the token: nothing stored.
@@ -3076,6 +3077,27 @@ test_login() {
   echo "localhost/agentbox-squid old" >> "$STUB_DIR/image_labels"
   tty_run 'sk-ant-oat01-new\n' AB_LOGIN=1 --
   grep -q '^podman build.*agentbox-squid' "$STUB_DIR/calls" && fail "login built squid"
+  return 0
+}
+
+# The reset of the terminal modes after a container stops (lib/session.sh,
+# TERM_RESET). A copy here, so that a change to the string fails the test.
+TEST_TERM_RESET=$'\e[?1000l\e[?1002l\e[?1003l\e[?1006l\e[?1004l\e[?2004l\e[?1047l\e[?1l\e>\e[<u\e[>4;0m\e(B\e[0m\e[?25h'
+
+# The session keeps the exit status of podman. At a terminal, the output
+# ends with the mark of the stub and then the reset, so the reset comes
+# after podman stops. Without a terminal, the output has no reset.
+test_session_resets_terminal() {
+  setup "${FUNCNAME[0]}"
+  ab_run STUB_SESSION_RC=3 --
+  assert_rc 3
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start"
+  grep -qF -- "$TEST_TERM_RESET" "$T/out" && fail "a reset without a terminal"
+  command -v script >/dev/null || return 0
+  tty_run '' AB_WARNINGS_ASK=0 STUB_SESSION_RC=3 --
+  assert_rc 3
+  local end="STUB-SESSION-END$TEST_TERM_RESET"
+  [[ "$(tail -c "${#end}" "$T/out")" == "$end" ]] || fail "the output does not end with the reset after podman"
   return 0
 }
 
