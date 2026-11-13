@@ -3101,6 +3101,92 @@ test_session_resets_terminal() {
   return 0
 }
 
+# The end of a session (lib/session.sh, session_end): one line in
+# sessions.log, a message on stderr after a crash or a SIGKILL, and the
+# repository as a label of the container. The exit status does not change.
+test_session_log() {
+  setup "${FUNCNAME[0]}"
+  local log="$T/home/.cache/agentbox/sessions.log" line rc
+  local ts='[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{2}:[0-9]{2}'
+  local since='--since "[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"'
+  ab_run STUB_SESSION_RC=0 --
+  assert_rc 0
+  grep -qF -- "--label agentbox.repo=$REPO " "$STUB_DIR/calls" || fail "no repo label in the podman run call"
+  [[ "$(wc -l < "$log")" == 1 ]] || fail "not one line in sessions.log"
+  line="$(tail -n1 "$log")"
+  [[ "$line" =~ ^$ts\ $ts\ ab-claude-[0-9]+\ claude\ exit=0\ "$REPO"$ ]] || fail "bad log line: $line"
+  grep -q 'crashed\|SIGKILL' "$T/out" && fail "a message for exit 0"
+
+  ab_run STUB_SESSION_RC=139 --
+  assert_rc 139
+  [[ "$(tail -n1 "$log")" == *" exit=139 (SIGSEGV) $REPO" ]] || fail "bad log line for 139: $(tail -n1 "$log")"
+  assert_out "agentbox: the agent crashed \\(exit 139, SIGSEGV\\)"
+  assert_out "coredumpctl list $since\$"
+
+  ab_run STUB_SESSION_RC=134 --
+  assert_rc 134
+  [[ "$(tail -n1 "$log")" == *" exit=134 (SIGABRT) $REPO" ]] || fail "bad log line for 134"
+  assert_out "agentbox: the agent crashed \\(exit 134, SIGABRT\\)"
+  assert_out "coredumpctl list $since\$"
+
+  ab_run STUB_SESSION_RC=137 --
+  assert_rc 137
+  [[ "$(tail -n1 "$log")" == *" exit=137 (SIGKILL) $REPO" ]] || fail "bad log line for 137"
+  assert_out "SIGKILL stopped the agent"
+  assert_out "podman stop"
+  assert_out "journalctl -k $since \\| grep -i oom\$"
+
+  for rc in 130 143; do
+    ab_run STUB_SESSION_RC=$rc --
+    assert_rc "$rc"
+    grep -q 'crashed\|SIGKILL\|--since' "$T/out" && fail "a message for exit $rc"
+  done
+  [[ "$(tail -n1 "$log")" == *" exit=143 (SIGTERM) $REPO" ]] || fail "bad log line for 143"
+  [[ "$(wc -l < "$log")" == 6 ]] || fail "not six lines in sessions.log"
+
+  # The message goes to stderr, not to stdout.
+  : > "$STUB_DIR/calls"
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_UPDATES=0 \
+      STUB_SESSION_RC=139 bash "$AB/run.sh" "$REPO" > "$T/out" 2> "$T/err" < /dev/null
+  grep -q 'crashed\|coredumpctl' "$T/out" && fail "the message is on stdout"
+  grep -q 'coredumpctl' "$T/err" || fail "no message on stderr"
+
+  # The log keeps the last 1000 lines.
+  seq 1 1500 > "$log"
+  ab_run STUB_SESSION_RC=0 --
+  [[ "$(wc -l < "$log")" == 1000 ]] || fail "sessions.log has $(wc -l < "$log") lines, not 1000"
+  [[ "$(head -n1 "$log")" == 502 ]] || fail "the cut kept the wrong lines"
+
+  # A log that agentbox cannot write does not change the exit status.
+  rm -f "$log"; mkdir "$log"
+  ab_run STUB_SESSION_RC=139 --
+  assert_rc 139
+  assert_out "the agent crashed"
+  rm -rf "$log"
+
+  # The repository path is the last field, as it is: with a space, and
+  # with Cyrillic letters when no locale is set.
+  REPO="$T/my repo/Проект"; mkdir -p "$REPO/.git/hooks"; touch "$REPO/.git/config"
+  ab_run LANG= LC_ALL= STUB_SESSION_RC=0 --
+  assert_rc 0
+  [[ "$(wc -l < "$log")" == 1 ]] || fail "the path gave more than one line"
+  [[ "$(cat "$log")" == *" exit=0 $REPO" ]] || fail "the path is not the last field as it is: $(cat "$log")"
+  # A newline in the path becomes "?", so that the session stays one line.
+  rm -f "$log"
+  REPO="$T/a"$'\n'"b"; mkdir -p "$REPO/.git/hooks"; touch "$REPO/.git/config"
+  ab_run STUB_SESSION_RC=0 --
+  assert_rc 0
+  [[ "$(cat "$log")" == *" exit=0 $T/a?b" ]] || fail "a newline in the path is not ?: $(cat "$log")"
+
+  # At a terminal, the message comes after the reset of the terminal.
+  command -v script >/dev/null || return 0
+  tty_run '' AB_WARNINGS_ASK=0 STUB_SESSION_RC=139 --
+  assert_rc 139
+  [[ "$(cat "$T/out")" == *"STUB-SESSION-END$TEST_TERM_RESET"*"the agent crashed"* ]] ||
+    fail "the message does not come after the reset"
+  return 0
+}
+
 test_first_start_offers_login() {
   command -v script >/dev/null || return 0
   setup "${FUNCNAME[0]}"

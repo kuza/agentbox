@@ -275,16 +275,19 @@ term_reset() {
 # Runs the session, then resets the terminal and exits with the status of
 # podman. No exec: the reset must run after the container stops.
 # Thus a SIGTERM to this shell does not stop podman. To stop a session,
-# use `podman stop ab-<agent>-<PID>`.
+# use `podman stop ab-<agent>-<PID>`. After the reset, session_end writes
+# the log line and the message about a crash.
 session_exec() {  # <agent arguments...>
-  local venv_key no_proxy tty_flags rc=0
+  local venv_key no_proxy tty_flags rc=0 start name="ab-$AGENT-$$"
   venv_key="$(basename "$REPO")-$(printf '%s' "$REPO" | sha256sum | cut -c1-8)"
   no_proxy="$(IFS=,; echo "${MCP_NO_PROXY[*]+${MCP_NO_PROXY[*]},}${FORWARD_NAMES[*]+${FORWARD_NAMES[*]},}${SERVICE_NAMES[*]+${SERVICE_NAMES[*]},}ab-llm-openai")"
   # Allocate a TTY only when attached to a terminal (keeps piping/scripts working).
   tty_flags=(-i)
   [[ -t 0 && -t 1 ]] && tty_flags+=(-t)
+  start="$(date +%s)"
   podman run --rm "${tty_flags[@]}" \
-    --name "ab-$AGENT-$$" \
+    --name "$name" \
+    --label "agentbox.repo=$REPO" \
     --network ab-internal \
     --dns 127.0.0.1 \
     ${SERVICE_NET[@]+"${SERVICE_NET[@]}"} \
@@ -308,5 +311,56 @@ session_exec() {  # <agent arguments...>
     "${AGENT_ARGS[@]}" \
     "$IMAGE" ${AGENT_CMD[@]+"${AGENT_CMD[@]}"} "$@" || rc=$?
   term_reset
+  session_end "$name" "$start" "$rc" || true
   exit "$rc"
+}
+
+# The end of a session. session_end writes one line to the session log:
+#   <start> <end> <container> <agent> exit=<status>[ (SIG<name>)] <repository>
+# The times are local times with the offset. The repository path is the
+# last field, as it is, so that spaces and other letters stay readable.
+# session_end replaces a newline or a carriage return in the path with
+# "?", so that each session stays on one line. After a crash (134, 139)
+# or a SIGKILL (137), session_end shows on stderr where to look further.
+# The --since time of these commands has no offset: all versions of
+# systemd read the local time in this form.
+session_end() {  # <container> <start time, seconds since the epoch> <exit status>
+  local name="$1" start_s="$2" rc="$3" sig="" start end since repo
+  (( rc > 128 )) && sig="$(kill -l "$(( rc - 128 ))" 2>/dev/null)" && sig="SIG$sig"
+  start="$(date -d "@$start_s" --iso-8601=seconds 2>/dev/null)"
+  end="$(date --iso-8601=seconds 2>/dev/null)"
+  repo="${REPO//[$'\n\r']/?}"
+  session_log "$start $end $name $AGENT exit=$rc${sig:+ ($sig)} $repo" || true
+  since="$(date -d "@$start_s" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+  case "$rc" in
+    134|139)
+      echo "agentbox: the agent crashed (exit $rc${sig:+, $sig}). To see the core dump, run:" >&2
+      echo "  coredumpctl list --since \"$since\"" >&2 ;;
+    137)
+      echo "agentbox: SIGKILL stopped the agent (exit $rc). Maybe the kernel stopped it for lack of memory," >&2
+      echo "or podman kill or podman stop (after its timeout) stopped it. To find the messages of the OOM killer, run:" >&2
+      echo "  journalctl -k --since \"$since\" | grep -i oom" >&2 ;;
+  esac
+  return 0
+}
+
+# Appends <line> to <cache>/agentbox/sessions.log. The log keeps the last
+# SESSION_LOG_LINES lines. A lock stops two sessions that end at the same
+# time from losing a line. Without the lock, session_log only appends the
+# line. Errors do not stop the caller: the log is only a record.
+SESSION_LOG_LINES=1000
+session_log() {  # <line>
+  local log="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/sessions.log" lock="" locked="" n
+  { mkdir -p -- "${log%/*}" && exec {lock}>> "$log.lock"; } 2>/dev/null || lock=""
+  [[ -n "$lock" ]] && flock "$lock" 2>/dev/null && locked=1
+  { printf '%s\n' "$1" >> "$log"; } 2>/dev/null
+  if [[ -n "$locked" ]]; then
+    n="$(wc -l < "$log" 2>/dev/null)" || n=0
+    if (( n > SESSION_LOG_LINES )); then
+      { tail -n "$SESSION_LOG_LINES" -- "$log" > "$log.$$" && mv -f -- "$log.$$" "$log"; } 2>/dev/null ||
+        rm -f -- "$log.$$"
+    fi
+  fi
+  [[ -n "$lock" ]] && exec {lock}>&-
+  return 0
 }

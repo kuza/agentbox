@@ -11,6 +11,12 @@ the steps a release needs from you, such as a rebuild.
   these modes and shows the cursor after the container of a session or of
   `agentbox login` stops. It does this only at a terminal and does not
   clear the screen. The exit status of the session does not change.
+- Each session adds one line to `~/.cache/agentbox/sessions.log`: the
+  times, the container, the agent, the exit status and the repository.
+  The log keeps the last 1000 lines. After a crash (exit 139 or 134) or
+  a SIGKILL (exit 137), agentbox shows the command to look further. The
+  session container has the label `agentbox.repo`. README, "When the
+  agent crashes", tells more.
 
 ## v0.2.1
 

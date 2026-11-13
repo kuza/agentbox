@@ -22,7 +22,7 @@ agentbox mounts no host credentials into the agent container. All service tokens
 - **[Integrations](#integrations):** [MCP servers](#mcp-servers) · [GitHub (MCP)](#github-mcp) · [Woodpecker (MCP)](#woodpecker-mcp) · [Tabularis (MCP)](#tabularis-mcp) · [DBHub (MCP)](#dbhub-mcp) · [Remote browser (bb4)](#remote-browser-bb4) · [Documentation (Context7)](#documentation-context7)
 - **[In the box](#in-the-box):** [Python](#python) · [Go](#go) · [Graphify](#graphify) · [Trivy](#trivy)
 - **[Your projects](#your-projects):** [Local services](#local-services) · [Test servers](#test-servers) · [Per-project environment](#per-project-environment)
-- **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up)
+- **[Maintenance](#maintenance):** [Releases](#releases) · [Updates](#updates) · [Disk space](#disk-space) · [Uninstall](#uninstall) · [Troubleshooting](#troubleshooting) · [Token not picked up](#token-not-picked-up) · [When the agent crashes](#when-the-agent-crashes)
 - **[Reference](#reference):** [Configuration reference](#configuration-reference) · [Files](#files) · [Tests](#tests) · [Not yet verified](#not-yet-verified)
 
 ## Getting started
@@ -1559,6 +1559,26 @@ agentbox . -p "say ok"
 - If the command fails here too, the token is invalid or expired. Create a new token (setup step 4). Then replace the secret.
 
 **3. Stale login state in `ab-claude-home`.** If you once ran `/login` inside the box, the stored credentials can take precedence over the token. Run `/logout` in a session, or remove `/home/node/.claude/.credentials.json` from the volume.
+
+### When the agent crashes
+
+When a session ends, agentbox adds one line to `~/.cache/agentbox/sessions.log`. The line has the start and end time (local time with the offset), the container, the agent, the exit status, and the repository. The repository path is the last field, as it is. The log keeps the last 1000 sessions.
+
+```
+2026-11-12T09:59:43+01:00 2026-11-12T14:41:50+01:00 ab-claude-2865876 claude exit=139 (SIGSEGV) /home/me/work/agentbox
+```
+
+After some exit statuses, agentbox shows a message and the command to look further:
+
+- Exit 139 (SIGSEGV) or 134 (SIGABRT): the agent crashed. To find the core dump, run `coredumpctl list --since "<start time>"`.
+- Exit 137 (SIGKILL): the kernel stopped the agent for lack of memory, or `podman kill` or `podman stop` stopped it. `podman stop` sends SIGKILL after its timeout. To find the messages of the OOM killer, run `journalctl -k --since "<start time>" | grep -i oom`.
+
+Other exit statuses give no message. Each session container has the label `agentbox.repo`. To see which session works on which repository, run `podman ps --format '{{.Names}} {{.Labels}}'`.
+
+Some ends of a session give no line in the log:
+
+- You stop the `agentbox` process itself with SIGTERM.
+- The terminal closes, an SSH connection drops, or you run `tmux kill-session`. Then the `agentbox` process gets SIGHUP and stops before the container.
 
 ## Reference
 
