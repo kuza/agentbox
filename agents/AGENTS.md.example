@@ -11,6 +11,23 @@ Keep it agent-neutral; name an agent only where a rule is specific to it.
 - Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or a mode that runs tools without confirmation (such as Claude Code's auto mode) is not permission to commit.
 - When a reply asks the user a question or presents a plan for approval, end the turn there and wait for the answer. Do not start the work in the same reply.
 
+## Services and forwards
+
+The user can give the box databases, queues, caches and other TCP services.
+Before you install or start your own PostgreSQL, Redis, RabbitMQ or a
+similar service, find out what the box already has:
+
+1. Read `NO_PROXY`. It lists the names that the session reaches directly:
+   the user's local services (`AB_SERVICES`), the forwards to test servers
+   (`AB_FORWARD`), and the MCP sidecars (`ab-mcp-*`).
+2. To check one name, run `getent hosts <name>`.
+3. Connect by the name and the usual port of the service, for example
+   `postgres:5432`, `redis:6379` or `rabbitmq:5672`.
+
+If the service that you need is not there, ask the user. Do not install a
+copy in the box. These services hold real data: before a command that
+writes or deletes data, ask the user.
+
 ## Documentation
 
 Your training data predates current library versions, and web fetches reach
