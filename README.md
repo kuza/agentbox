@@ -112,7 +112,7 @@ agentbox-$v/install.sh
 
 After that, `agentbox update` installs newer releases and verifies their signatures itself.
 
-Edit `config.toml`, or use `agentbox setup` ([Setup menu](#setup-menu)). Choose the MCP servers with `AB_MCP`, for example `AB_MCP = ["grafana", "graylog"]`. Set the values that those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL`. Use base URLs only, without `/api` or `/api/mcp`; agentbox removes these trailing parts anyway.
+Edit `config.toml`, or use `agentbox setup` ([Setup menu](#setup-menu)). Choose the MCP servers with `AB_MCP`, for example `AB_MCP = ["grafana", "graylog"]`. Set the values that those modules need, such as `GRAFANA_URL` / `GRAYLOG_URL`. Use base URLs only, without `/api` or `/api/mcp`. The graylog module removes these parts at the end of the URL; the grafana module does not. A URL must not have `user@`, a query (`?orgId=1`) or a fragment (`#...`): the module checks it ([Writing a module](#writing-a-module), the `url` check).
 
 Context7 is always on. Skip the steps below for the servers that you do not use. See [MCP servers](#mcp-servers).
 
@@ -290,15 +290,15 @@ Other settings
 number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit
 ```
 
-The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet). If the start would leave the module out (a setting that is not correct, or a fault in its `mcp.sh`), the menu shows "NOT USABLE" and the reason.
+The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet). If the start would leave the module out (a setting that is not correct, or a fault in its `module.toml` or `mcp.sh`), the menu shows "NOT USABLE" and the reason.
 
-- A number enables or disables an entry, or asks for a value. For a value, Enter keeps the current value, and `-` unsets it.
+- A number enables or disables an entry, or asks for a value. For a value, Enter keeps the current value, and `-` unsets it. For a setting of a module, the prompt shows the help of the setting from the manifest of the module, if it has one.
 - When you enable a module, the menu asks for its settings. It also asks, with hidden input, for the secrets that the module does not have. The prompt tells what to type, and the module changes that input into the secret (the Graylog token becomes its basic-auth value). If you disable the module again before you save, the menu discards what you typed for it.
 - `e <number>` asks for all settings and secrets of a module, enabled or disabled. It does not enable or disable the module. For a stored secret, a new value replaces it, and Enter keeps it. Use this to enter a renewed token.
 - `s` saves. The menu keeps the previous file next to it, with `.bak` added, and stores the secrets. If `config.toml` is a link, it stays a link, and the menu edits the file that the link points to.
 - `q` quits. If some changes are not saved, `q` asks first.
 
-The menu edits `config.toml` line by line, and keeps your comments and the order of its lines. It writes a list as an array. A flag that you enable gets `true`. A flag that you disable gets `false` if it is on by default. Otherwise, the menu puts a `#` before its line. For a key that is not set, the menu uses the `#KEY = ...` line from the example, if the file has one.
+The menu edits `config.toml` line by line, and keeps your comments and the order of its lines. It writes a list as an array, also a list setting of a module (`GH_OWNERS = ["myorg"]`). A flag that you enable gets `true`. A flag that you disable gets `false` if it is on by default. Otherwise, the menu puts a `#` before its line. For a key that is not set, the menu uses the `#KEY = ...` line from the example, if the file has one.
 
 The menu does not change a key whose value is on more than one line, and it says why. Edit that key yourself.
 
@@ -335,7 +335,7 @@ Tokens never go into `config.toml`. The menu only edits the file. The next `agen
 |---|---|---|---|
 | `ab-claude-<pid>` | `ab-internal` | Claude OAuth token only | Claude Code session, one per run |
 | `ab-egress` | `ab-internal`, `ab-egress` | none | Squid forward proxy with a domain allowlist |
-| `ab-mcp-grafana` | `ab-internal`, `ab-egress` | Grafana service account token | Official `grafana/mcp-grafana`, streamable HTTP on `:8000/mcp`, bearer-token caller auth, Host allowlist, `--disable-write`, usage stats off. Module `grafana` |
+| `ab-mcp-grafana` | `ab-internal`, `ab-egress` | Grafana service account token | Official `grafana/mcp-grafana`, streamable HTTP on `:8000/mcp`, checks the caller token, Host allowlist, `--disable-write`, usage stats off. Module `grafana` |
 | `ab-mcp-graylog` | `ab-internal`, `ab-egress` | Graylog API token | nginx reverse proxy to the built-in MCP endpoint of Graylog: checks the caller token and replaces it with the Graylog `Authorization`. Module `graylog` |
 | `ab-mcp-github` | `ab-internal`, `ab-egress` | GitHub PAT | nginx: checks the caller token, injects the PAT, pins toolsets and lockdown mode. Module `github` |
 | `ab-llm-openai` | `ab-internal`, `ab-egress` | OpenAI API key | nginx: checks the caller token, injects the API key, forwards to `api.openai.com` with certificate verification. Only for pi in API-key mode |
@@ -344,7 +344,7 @@ Tokens never go into `config.toml`. The menu only edits the file. The next `agen
 | `ab-mcp-woodpecker-srv` | `ab-mcp-woodpecker` **only** (`--internal`, no outside DNS) | none | `rtuszik/woodpecker-mcp` in read-only mode. It can reach nginx and nothing else, not even squid. The agent cannot reach it. Module `woodpecker` |
 | `ab-mcp-bb4` | `ab-internal`, `ab-egress` | bb4 bridge key | nginx: checks the caller token, forwards to `ab-mcp-bb4-devtools` with the bridge key. Module `bb4` |
 | `ab-mcp-bb4-devtools` | `ab-egress` **only** | bb4 bridge key | chrome-devtools-mcp behind supergateway, built here. It connects to the DevTools WebSocket of the remote browser. The agent cannot reach it. Module `bb4` |
-| `ab-mcp-dbhub` | `ab-internal`, `ab-egress` | Database passwords (from your `dbhub.toml`, through a mode-600 copy in the cache) | `bytebase/dbhub`: bearer-token caller auth, Host allowlist, read-only tools only. Module `dbhub` |
+| `ab-mcp-dbhub` | `ab-internal`, `ab-egress` | Database passwords (from your `dbhub.toml`, through a mode-600 copy in the cache) | `bytebase/dbhub`: checks the caller token, Host allowlist, read-only tools only. Module `dbhub` |
 | `ab-mcp-tabularis` | `ab-internal` **only** | Tabularis bridge key | nginx: checks the caller token, replaces it with the bridge key, forwards to the unix socket of the relay. Module `tabularis` |
 | `ab-mcp-tabularis-relay` | host network | none | socat: forwards the unix socket in the volume `ab-mcp-tabularis-sock` to supergateway on `127.0.0.1`. The agent cannot reach it. Module `tabularis` |
 
@@ -572,7 +572,7 @@ A source that you disable is removed at the next start of pi. agentbox does not 
 
 The auto memory of Claude Code is **off by default** in the box. `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` only when that key is not set yet, so it keeps an explicit choice there. To use auto memory in one project, set `"autoMemoryEnabled": true` in the `.claude/settings.json` of that repo.
 
-Put the instructions for all repos in `~/.config/agentbox/AGENTS.md`. Start from the template. It has the rules that this box needs (ask before you commit, where to find library documentation):
+Put the instructions for all repos in `~/.config/agentbox/AGENTS.md`. Start from the template. It has the rules that this box needs (ask before you commit, the services of the box, where to find library documentation):
 
 ```bash
 cp agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md
@@ -682,12 +682,12 @@ Then run `/mattpocock-setup-matt-pocock-skills` in a session, once per repo. Imp
 
 ### MCP servers
 
-Each MCP server is a module: a directory with an `mcp.sh` file and the other files that the server needs (for example, an nginx template).
+Each MCP server is a module: a directory with a manifest (`module.toml`) and, if the module needs code, an `mcp.sh` and other files (for example, an nginx template). See [Writing a module](#writing-a-module).
 
 | Directory | |
 |---|---|
 | `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub`, `bb4` |
-| `mcp.local/<name>/` | Your own modules, in [your files](#your-files). If a module has the same name as a module in `mcp/`, it replaces that module |
+| `mcp.local/<name>/` | Your own modules, in [your files](#your-files). If a module has the same name as a module in `mcp/`, it replaces that module. A module of the old format (only `mcp.sh`) works until v0.3.0, with a warning: see [Converting a module](#converting-a-module) |
 
 `AB_MCP` in `config.toml` lists the enabled modules (`AB_MCP = ["grafana", "graylog"]`). The `context7` module is always enabled. At each start, `run.sh` checks the settings and secrets of the enabled modules and starts their sidecars. It writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`). It also writes the remote hosts for squid (see [Egress](#egress)).
 
@@ -695,36 +695,207 @@ A module can lack a setting or a secret, can be absent from this version, or can
 
 #### Writing a module
 
-`mcp.sh` is a bash script that `run.sh` sources on the host. It sets variables. If the server needs a sidecar, it also defines `mcp_start`. The code outside the functions runs without `set -e`: if a command there fails, the start does not stop. Put the checks of the settings in `mcp_check`:
+A module is a directory with these files:
 
-| | |
-|---|---|
-| `MCP_URL` | Required if `MCP_SERVERS` is not set. The URL that the agents connect to: `http://ab-mcp-<name>:<port>/mcp` for a sidecar. For a remote server, the URL of the server (and put its host in `MCP_EGRESS`) |
-| `MCP_SERVERS=(...)` | Optional, for a module with more than one server (see `mcp/bb4/`). Each item is `"<name>\|<url>\|<caller or ->\|<description>"`. The items replace the one server that has the name of the module. `caller`: the agents send the caller token of the module to the server. `-`: the agents send no token (a remote server). `caller` needs `MCP_CALLER_SECRET`. Each server name must be different from the other server names in the module and in other modules. If a module does not obey a rule, the start leaves it out and gives the reason. As for `MCP_URL`, the agents reach a host without a dot without the proxy, unless the host is in `MCP_EGRESS` |
-| `MCP_DESCRIPTION` | One line that pi shows |
-| `MCP_CONFIG=(...)` | The `config.toml` keys that the module reads. `run.sh` reads them only while the module is enabled. While it is not, they can stay in `config.toml`, and agentbox ignores them without a warning. Write the array on one line: agentbox reads this line as text for a module that is not enabled or does not parse |
-| `MCP_REQUIRED_CONFIG=(...)` | The keys from `MCP_CONFIG` that must have a value |
-| `MCP_SECRETS=(...)` | Podman secrets that must exist, for example the API token of the service |
-| `MCP_SECRET_HELP=(...)` | Optional: `"<secret>: what to type"` for each secret. `agentbox setup` shows it when it asks for the secret |
-| `mcp_check()` | Optional: checks the settings of the module. It prints one line for each problem, and nothing if the settings are correct. It must not start or change anything, because `agentbox setup` also runs it. If it prints a problem, the start leaves the module out and removes what the module runs, as for an empty setting. `agentbox setup` shows the problem as "NOT USABLE" |
-| `mcp_secret_value()` | Optional: `<secret> <what was typed>` → the value to store. Use it for a secret that agentbox does not store as typed (`graylog` stores `base64("<token>:token")`) |
-| `MCP_OWN_SECRETS=(...)` | Podman secrets that `mcp_start` creates itself. `agentbox uninstall --all` removes them |
-| `MCP_CALLER_SECRET` | The name of a caller token secret. agentbox generates the token on first use. The agents send `Authorization: Bearer <token>`, and the sidecar checks it. In the session, the environment variable `AB_MCP_TOKEN_<NAME>` holds the token |
-| `MCP_EGRESS=(...)` | Hosts that the agent itself connects to (remote servers). agentbox adds them to squid's allowlist |
-| `MCP_IMAGES=(...)` | Images that `AB_UPGRADE` pulls |
-| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. Name them `ab-mcp-<module>` or `ab-mcp-<module>-<part>`. `run.sh` removes containers with that prefix that no enabled module started. (If the start of a module failed, the module keeps its own containers.) The function runs in a subshell. On an error, give the reason with `ab_error "..."` and run `exit 1`. agentbox prints the reason and shows it in the warning. agentbox then leaves out only that module, and keeps what the module already runs for open sessions. If the access must stop, run `exit "$MCP_TAKE_AWAY"`: agentbox then also removes the sidecars of the module and their copies. agentbox marks what a module starts as its own (label `agentbox.module`; for a host service, its description). agentbox finds these items by that mark, not by the name. Variables that the function sets do not reach the rest of `run.sh`. `$MCP_DIR` is the directory of the module, and `$IMG_NGINX` is the nginx image that the shipped modules use. Mount the files of the module as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read). If a program must run on the host, start it with `start_host_unit agentbox-mcp-<something> [VAR=value...] -- <command...>`. This makes a transient systemd user service. agentbox restarts the service when its command changes, and stops it when no enabled module asks for it (see `mcp/tabularis/`) |
+- `module.toml`, the manifest: the description, settings, secrets, servers, images and egress hosts of the module, as data. agentbox reads it with its TOML reader and runs no code of the module for it.
+- `mcp.sh`, only if the module needs code: to start sidecars (`mcp_start`), for a check that no built-in check has (`mcp_check`), or to store a secret in another form (`mcp_secret_value`).
+- other files that the code uses, for example an nginx template.
 
-A remote server needs three lines, as in `mcp/context7/mcp.sh`:
+A remote server needs only a manifest. An example (see also `mcp/context7/module.toml`):
 
-```bash
-MCP_DESCRIPTION="Issue tracker"
-MCP_URL="https://mcp.example.com/mcp"
-MCP_EGRESS=(mcp.example.com)
+```toml
+format = 1
+description = "Issue tracker"
+egress = ["mcp.example.com"]
+
+[[servers]]
+name = "tracker"
+url = "https://mcp.example.com/mcp"
 ```
 
 If a server needs a credential, give it a sidecar that holds the credential. Then the token never enters the agent container. See `mcp/graylog/` (nginx adds the header) and `mcp/grafana/` (the server checks a caller token). Attach sidecars to `ab-internal` (the agent reaches them by name) and to `ab-egress` (their way out).
 
 **A module is code that runs on your host** with your user, like `run.sh` itself. Read a module before you enable it. Treat a `mcp.local/` module from another person like a script from that person.
+
+##### The manifest
+
+The keys of `module.toml` (`lib/toml-schema/manifest.toml` has the full schema):
+
+| Key | |
+|---|---|
+| `format = 1` | Required. The format of the manifest. If the number is higher than this agentbox knows, the start leaves the module out, and the reason says that the file needs a newer agentbox |
+| `description` | One line that pi shows. A server without its own `description` gets this one |
+| `[settings.<KEY>]` | A setting that the module reads, from `config.toml`, `env/<repo>.toml` or the environment. `<KEY>` has uppercase letters, digits and `_`, and starts with a letter. The keys of the table are below. agentbox reads the settings only while the module is enabled. While it is not, they can stay in `config.toml`, and agentbox ignores them without a warning |
+| `[secrets.<name>]` | A Podman secret that you store, for example the API token of the service. Its Podman name is `<module>_<name>` (`[secrets.basic]` of graylog is `graylog_basic`). `help` tells what to type: `agentbox setup` shows it when it asks for the secret. With `for_each = "<KEY>"`, the module has one secret for each item of the list setting `<KEY>`, and the name has `{item}` (`[secrets."pat_{item}"]` of github gives `github_pat_<owner>`). If a secret does not exist, the start leaves the module out |
+| `own_secrets = [...]` | The secrets that `mcp_start` makes itself, for example a bridge key. Their Podman names are `<module>_<name>` too. `agentbox uninstall --all` removes them |
+| `[[servers]]` | One MCP server, one table for each. The keys of the table are below. A module needs at least one server |
+| `[images]` | `<name> = "<image>"` for each image that the code runs. `AB_UPGRADE` pulls them while the module is enabled, and `agentbox uninstall` removes them. Do not put the nginx image of agentbox (`$IMG_NGINX`) here: agentbox pulls it anyway |
+| `egress = [...]` | The hosts that the agent itself connects to (remote servers). agentbox adds them to the squid allowlist. A host can use substitutions (`"{BB4_URL.hostport}"`) |
+
+The keys of a setting:
+
+| Key | |
+|---|---|
+| `required = true` | The module cannot start without a value. `agentbox setup` shows "NEEDED", and the start leaves the module out |
+| `default = <value>` | The value if the setting is not set or is empty |
+| `check = "<check>"` | A built-in check of the value (see the next table). If the value fails, the start leaves the module out and removes what the module runs. `agentbox setup` shows "NOT USABLE" and the reason |
+| `list = true` | A list. The value is a TOML array, or a string with spaces or commas (`GH_OWNERS = "a,b"`, or a value from the environment). Each item counts once. A check checks each item. `agentbox setup` writes a list as an array |
+| `lowercase = true` | agentbox makes the value lowercase before the check (github owners) |
+| `help = "..."` | What to type. `agentbox setup` shows it when it asks for the value, on one line. A new line (`\n`) becomes a space |
+
+A setting has no type: the check looks at the value. `port` accepts `47821` and `"47821"`. Code gets a TOML integer as its digits, `true` as `1` and `false` as `0`.
+
+The built-in checks:
+
+| Check | The value | Fields |
+|---|---|---|
+| `url` | `http://` or `https://`, a host, an optional port and an optional path. The host is one or more labels with a `.` between them. A label has letters, digits and `-`, with no `-` at the start or the end. The port is from 1 to 65535, with no `0` at the start. The path has letters, digits and the characters `. _ ~ : / % + = , ! * -`. No `user@`, no query (`?`) and no fragment (`#`) | `scheme`, `host`, `port` (empty if the URL has no port), `hostport` (the host, and `:port` if there is a port), `base` (`<scheme>://<hostport>` and the path, with no `/` at the end) |
+| `url-base` | The same as `url`, with no path. One `/` at the end is allowed | The same; `base` is `<scheme>://<hostport>` |
+| `port` | A number from 1 to 65535, with no `0` at the start | |
+| `name` | A GitHub name: letters, digits and `-`, with no `-` at the start or the end, no `--`, and at most 39 characters | |
+| `file` | A file that exists and that agentbox can read | |
+
+The message of a failed check has the form `<place>: <KEY>: <reason> (<check>)`. The place is the file and the line of the value (`config.toml:12`), `environment`, or the line of the setting in `module.toml` for a default. For a rule that no built-in check has, use `mcp_check` in `mcp.sh`.
+
+The keys of a server:
+
+| Key | |
+|---|---|
+| `name` | Required. Lowercase letters, digits and `-`. Each server name must be different from the other server names in the module and in other modules |
+| `url` | Required. The URL that the agents connect to: `http://ab-mcp-<module>:<port>/mcp` for a sidecar. For a remote server, its URL; put its host in `egress` too. The agents reach a host without a dot without the proxy, unless the host is in `egress` |
+| `caller = true` | The agents send the caller token of the module to the server. agentbox makes the token on first use, as the Podman secret `<module>_mcp_caller`. The agents send `Authorization: Bearer <token>`, and the sidecar checks it. In the session, the environment variable `AB_MCP_TOKEN_<NAME>` holds the token. Without `caller`, the agents send no token (a remote server). Do not declare `[secrets.mcp_caller]` |
+| `description` | One line that pi shows. Without it, the server gets the `description` of the module |
+| `for_each = "<KEY>"` | One server for each item of the list setting `<KEY>`, with `{item}` in its `name` and `url` (`github-{item}` of github) |
+
+The name, the URL and the description of a server cannot have a `|`.
+
+Substitutions put the value of a setting into a text of the manifest. They work in the name, the URL and the description of a server, and in an egress host. In a table with `for_each`, they also work in the help of a secret, and `{item}` works in the name of the secret:
+
+- `{KEY}`: the value of the setting.
+- `{KEY.field}`: a field of its check, for example `{BB4_URL.hostport}` or `{BB4_URL.base}`.
+- `{item}`: the item, in a table with `for_each`.
+- `{{` and `}}`: a `{` and a `}`.
+
+A setting in a substitution must have a check, and `for_each` needs a setting with `list = true` and a check. agentbox refuses a substituted value with a `|`, a control character or a space. If a setting in the name or the URL of a server has no value, the module needs it: `agentbox setup` shows "NEEDED". If a setting in an egress host has no value, agentbox leaves out that host.
+
+If the manifest has an error, the start leaves the module out with `module.toml:<line>: <reason> (<code>)`. The other modules work. `tests/manifest/README` lists the error codes. agentbox refuses a module with the name `git`: this name is for modules from git in a later version.
+
+A shared module also has `module.index`, the names of its images and secrets for `agentbox uninstall` without Python ([Uninstall](#uninstall)). After a change of `module.toml`, run `./release.sh --index`. The tests fail if a `module.index` is not the index of its manifest.
+
+##### The code: `mcp.sh`
+
+agentbox runs `mcp.sh` only when it needs the code of the module: for `mcp_check`, `mcp_start` and `mcp_secret_value`. It runs the file in a subshell. First it sets these variables, then it sources `mcp.sh`:
+
+| Variable | |
+|---|---|
+| `<KEY>` | Each setting of the manifest, after the default and `lowercase`. A list setting is its items joined with a comma (`a,b`). A setting with no value is empty |
+| `MCP_ITEMS[<KEY>]` | For a list setting: its items, each once, joined with a space (`a b`). If the setting has a `check`, each item passed it. Without a check, check the items in `mcp_check` |
+| `MCP_FIELD[<KEY>.<field>]` | The fields of the `url` or `url-base` check of a setting (`MCP_FIELD[WOODPECKER_URL.base]`). A list setting has no fields |
+| `MCP_SECRET[<name>]` | The Podman name of each secret of the module: each `[secrets.<name>]`, each secret of a `for_each` (`MCP_SECRET[pat_myorg]`), each name in `own_secrets`, and `mcp_caller` for the caller token |
+| `MCP_IMAGE[<name>]` | The image of each key in `[images]` (`MCP_IMAGE[server]`) |
+| `MCP_DIR` | The directory of the module |
+
+Put the code in functions. The code outside the functions runs without `set -e`: if a command there fails, the start does not stop. An `exit` outside the functions makes the module broken. If `mcp.sh` sets a variable of the old format (`MCP_URL`, `MCP_SECRETS` and the others in [Converting a module](#converting-a-module)), agentbox refuses the module: the manifest holds the data.
+
+| Function | |
+|---|---|
+| `mcp_check()` | Optional: a check that no built-in check has (the port range of `mcp/tabularis/`, the characters of `GH_TOOLSETS` in `mcp/github/`). It runs after the settings pass the checks of the manifest. It prints one line for each problem, and nothing if the settings are correct. It must not start or change anything, because `agentbox setup` also runs it. If it prints a problem, the start leaves the module out and removes what the module runs, as for an empty setting. `agentbox setup` shows the problem as "NOT USABLE" |
+| `mcp_secret_value()` | Optional: `<secret> <what was typed>` → the value to store. Use it for a secret that agentbox does not store as typed (`graylog` stores `base64("<token>:token")`) |
+| `mcp_start()` | Starts the sidecars with `start_sidecar <container> <podman run arguments>`. Name them `ab-mcp-<module>` or `ab-mcp-<module>-<part>`. `run.sh` removes containers with that prefix that no enabled module started. (If the start of a module failed, the module keeps its own containers.) The function runs in a subshell. On an error, give the reason with `ab_error "..."` and run `exit 1`. agentbox prints the reason and shows it in the warning. agentbox then leaves out only that module, and keeps what the module already runs for open sessions. If the access must stop, run `exit "$MCP_TAKE_AWAY"`: agentbox then also removes the sidecars of the module and their copies. agentbox marks what a module starts as its own (label `agentbox.module`; for a host service, its description). agentbox finds these items by that mark, not by the name. Variables that the function sets do not reach the rest of `run.sh`. `$IMG_NGINX` is the nginx image that the shared modules use. Mount the files of the module as `-v "$(sidecar_copy <container> "$MCP_DIR/<file>"):<path>:ro,Z"`, never directly (see [Troubleshooting](#troubleshooting), files that cannot be read). If a program must run on the host, start it with `start_host_unit agentbox-mcp-<something> [VAR=value...] -- <command...>`. This makes a transient systemd user service. agentbox restarts the service when its command changes, and stops it when no enabled module asks for it (see `mcp/tabularis/`) |
+
+#### Converting a module
+
+Before v0.2.1, a module was only an `mcp.sh` that set `MCP_*` variables (the old format). A module of the old format in `mcp.local/` still works in this version. Each start shows a warning for it while it is enabled. **v0.3.0 removes the old format.** Convert your modules before that version.
+
+Each variable of the old format becomes a key of the manifest:
+
+| Old format (`mcp.sh`) | Manifest (`module.toml`) |
+|---|---|
+| — | `format = 1` |
+| `MCP_DESCRIPTION` | `description` |
+| `MCP_URL` | A `[[servers]]` table with `name` (the name of the module) and `url` |
+| `MCP_SERVERS=("<name>\|<url>\|<caller or ->\|<description>")` | One `[[servers]]` table for each item, with `name`, `url`, `description`, and `caller = true` for `caller` |
+| `MCP_CONFIG=(KEY ...)` | A `[settings.KEY]` table for each key |
+| `MCP_REQUIRED_CONFIG=(KEY ...)` | `required = true` in `[settings.KEY]` |
+| `MCP_SECRETS=(<module>_<name>)` | `[secrets.<name>]` |
+| `MCP_SECRET_HELP=("<secret>: <help>")` | `help` in its `[secrets.<name>]` |
+| `MCP_SECRETS_BY_SETTING=("KEY <prefix>")` | `[secrets."<name>{item}"]` with `for_each = "KEY"`, where `<name>` is `<prefix>` without `<module>_` (`github_pat_` gives `pat_{item}`). Give `[settings.KEY]` `list = true` and a check |
+| `MCP_OWN_SECRETS=(<module>_<name>)` | `own_secrets = ["<name>"]` |
+| `MCP_CALLER_SECRET` | `caller = true` in the `[[servers]]` table. The secret is `<module>_mcp_caller` |
+| `MCP_EGRESS=(...)` | `egress = [...]` |
+| `MCP_IMAGES=(...)` | `[images]`, with a name for each image. Leave out `$IMG_NGINX` |
+| A setting in `MCP_URL`, `MCP_SERVERS` or `MCP_EGRESS` (`"$KEY"`, `"${KEY%/}"`) | A substitution `{KEY}` or `{KEY.field}` (see [Writing a module](#writing-a-module)). Give `[settings.KEY]` a check |
+| A default in `mcp.sh` (`"${KEY:-value}"`) | `default = "value"` in `[settings.KEY]` |
+| A pattern check in `mcp_check` | `check = "<check>"`, if a built-in check has the same rule. Keep the other rules in `mcp_check` |
+
+Do these steps:
+
+1. Write `module.toml` next to `mcp.sh`, with the keys of the table.
+2. In `mcp.sh`, remove each `MCP_*` variable of the table, and keep the functions.
+3. In the functions, use `${MCP_SECRET[<name>]}` and `${MCP_IMAGE[<name>]}` in place of the names of secrets and images.
+4. If `mcp.sh` now has no function, remove it.
+5. Run `agentbox setup`. It shows "NEEDED" or "NOT USABLE" with the reason if the module has a problem.
+6. Start a session, and check the servers with `/mcp`.
+
+The manifest gives each secret the Podman name `<module>_<name>`. If the old name of a secret does not start with `<module>_`, store the secret again under the new name (`agentbox setup` asks for it). Then remove the old secret with `podman secret rm`.
+
+An example: the graylog module. Before, `mcp/graylog/mcp.sh`:
+
+```bash
+MCP_DESCRIPTION="Search and analyse logs in Graylog (read-only)"
+MCP_URL="http://ab-mcp-graylog:8080/mcp"
+MCP_CONFIG=(GRAYLOG_URL)
+MCP_REQUIRED_CONFIG=(GRAYLOG_URL)
+MCP_SECRETS=(graylog_basic)
+MCP_SECRET_HELP=("graylog_basic: a Graylog API token of a read-only user (README, step 2)")
+MCP_CALLER_SECRET=graylog_mcp_caller
+MCP_IMAGES=("$IMG_NGINX")
+
+mcp_secret_value() {  # <secret> <typed>
+  printf '%s:token' "$2" | base64 -w0
+}
+
+mcp_start() {
+  local url="${GRAYLOG_URL%/}"
+  url="${url%/api/mcp}"
+  url="${url%/api}"
+  start_sidecar ab-mcp-graylog \
+    --network ab-internal --network ab-egress \
+    -e GRAYLOG_URL="$url" \
+    --secret graylog_basic,type=env,target=GRAYLOG_BASIC \
+    --secret graylog_mcp_caller,type=env,target=GRAYLOG_CALLER_TOKEN \
+    -v "$(sidecar_copy ab-mcp-graylog "$MCP_DIR/nginx.conf.template"):/etc/nginx/templates/default.conf.template:ro,Z" \
+    "$IMG_NGINX"
+}
+```
+
+After, `mcp/graylog/module.toml`:
+
+```toml
+format = 1
+description = "Search and analyse logs in Graylog (read-only)"
+
+[settings.GRAYLOG_URL]
+required = true
+check = "url"
+
+[secrets.basic]
+help = "a Graylog API token of a read-only user (README, step 2)"
+
+[[servers]]
+name = "graylog"
+url = "http://ab-mcp-graylog:8080/mcp"
+caller = true
+```
+
+The new `mcp/graylog/mcp.sh` keeps `mcp_secret_value` as it was. In `mcp_start`, only the names of the secrets change:
+
+```bash
+    --secret "${MCP_SECRET[basic]},type=env,target=GRAYLOG_BASIC" \
+    --secret "${MCP_SECRET[mcp_caller]},type=env,target=GRAYLOG_CALLER_TOKEN" \
+```
+
+The `url` check is new: before, graylog did not check `GRAYLOG_URL`. The Podman names of the secrets stay the same (`graylog_basic`, `graylog_mcp_caller`).
 
 ### GitHub (MCP)
 
@@ -747,7 +918,7 @@ What the agent can **not** do: `git fetch`/`git push`, or change code on GitHub.
 
 The agent can add its own MCP registrations in `ab-claude-home`. Thus nginx, not the client config, enforces the server behaviour. **The real boundary is still the PAT's permissions.**
 
-Default toolsets: `context,repos,issues,pull_requests,actions`. To change them, set `GH_TOOLSETS` in `config.toml`. The next start recreates the sidecar.
+Default toolsets: `context,repos,issues,pull_requests,actions`. To change them, set `GH_TOOLSETS` in `config.toml`, as an array (`GH_TOOLSETS = ["repos", "issues"]`) or a string with spaces or commas. A toolset name has only lowercase letters and `_`. The next start recreates the sidecar.
 
 Lockdown mode hides content in public repositories from users without push access to them. At this time, it applies only when the agent reads issues. Thus content that other tools get from public repositories can still carry prompt injection.
 
@@ -802,7 +973,7 @@ podman rm -f ab-mcp-github ab-mcp-github-srv
 podman secret rm github_pat github_mcp_caller   # and github_pat_<owner> for each owner
 ```
 
-`agentbox uninstall --all` removes the tokens of the owners that `GH_OWNERS` lists at that time. Remove the token of an owner that you took out of `GH_OWNERS` yourself. Without Python 3.11 or newer, uninstall cannot read `GH_OWNERS`: it keeps these tokens and says so.
+`agentbox uninstall --all` removes the token of each owner that `GH_OWNERS` lists at that time. It also removes the token of each owner that a start or `agentbox setup` of v0.2.1 or later used, also after you removed that owner from `GH_OWNERS`. See [Uninstall](#uninstall).
 
 #### GitHub read access (optional)
 
@@ -820,7 +991,7 @@ A more contained alternative: leave it off, and tell the agent to read public re
 
 Optional: the `woodpecker` module (add `woodpecker` to `AB_MCP`). The agent reads [Woodpecker CI](https://woodpecker-ci.org/): repositories, pipelines and their status, step logs, pipeline configs, and the queue. **Read only**: the agent cannot start, restart, cancel or approve anything.
 
-Woodpecker has no official MCP server. The module runs [`rtuszik/woodpecker-mcp`](https://github.com/rtuszik/woodpecker-mcp). `mcp/woodpecker/mcp.sh` pins it to one release, and agentbox scans it daily with the other images.
+Woodpecker has no official MCP server. The module runs [`rtuszik/woodpecker-mcp`](https://github.com/rtuszik/woodpecker-mcp). `mcp/woodpecker/module.toml` pins it to one release, and agentbox scans it daily with the other images.
 
 #### How it is wired
 
@@ -839,7 +1010,7 @@ Woodpecker's personal access tokens have no scopes: a token can do all that its 
    - Set `WOODPECKER_URL = "..."` in `config.toml`.
    - Add `woodpecker` to `AB_MCP`.
    - Run `read -rsp 'Woodpecker token: ' T && printf '%s' "$T" | podman secret create woodpecker_token -; echo; unset T`.
-4. If Woodpecker uses https with a certificate from your own CA, set `WOODPECKER_CA` to the CA certificate file on the host.
+4. If Woodpecker uses https with a certificate from your own CA, set `WOODPECKER_CA` to the CA certificate file on the host. If agentbox cannot read the file, the start leaves the module out and removes its sidecars, and `agentbox setup` shows "NOT USABLE".
 
 #### Things to watch
 
@@ -906,7 +1077,7 @@ Optional: the `dbhub` module (add `dbhub` to `AB_MCP`). The agent reads the SQL 
 
 #### How it is wired
 
-- **`ab-mcp-dbhub`** runs `bytebase/dbhub` on `ab-internal` and `ab-egress`. `mcp/dbhub/mcp.sh` pins it to one release, and agentbox scans it daily with the other images. It connects to the databases directly, because a database connection is not HTTP and cannot go through squid. It rejects requests without the caller token (`dbhub_mcp_caller`). In addition, a `Host` allowlist protects against DNS rebinding.
+- **`ab-mcp-dbhub`** runs `bytebase/dbhub` on `ab-internal` and `ab-egress`. `mcp/dbhub/module.toml` pins it to one release, and agentbox scans it daily with the other images. It connects to the databases directly, because a database connection is not HTTP and cannot go through squid. It rejects requests without the caller token (`dbhub_mcp_caller`). In addition, a `Host` allowlist protects against DNS rebinding.
 - **Your `dbhub.toml`** lists the databases as `[[sources]]`, with their passwords. DBHub does not read this file. A start can come after a change to `dbhub.toml`, to the module or to the agentbox image. At such a start, `mcp/dbhub/config.py` parses the file with Python's TOML parser (in a throwaway container of the agentbox image, without network). It then writes a new DBHub config from the parsed data: your sources, with only strings, numbers, booleans and lists of these as values. For each source, the config also has the two tools that the agent gets: `execute_sql` with `readonly = true`, and `search_objects`.
 
   If `dbhub.toml` has anything else, the module is left out of that start, with the reason. This includes another table (`[[tools]]` too, because one of your tools could write), a source without an `id`, a nested table or a date. DBHub gets only what agentbox wrote. Thus agentbox and DBHub cannot read your file in two different ways.
@@ -1254,7 +1425,7 @@ Set `GRAPHIFY_VERSION` in `Containerfile`. The next start rebuilds the image. Th
 
 #### Pinning sidecar images
 
-The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour. This happened with the caller-auth and Host checks of mcp-grafana. To control this, pin tags in the `IMG_*` variables at the top of `run.sh`, and change them deliberately. Squid is not pulled: `Containerfile.squid` builds it here from Debian (`localhost/agentbox-squid`). Thus its packages are as current as the last `AB_UPGRADE=1`.
+The sidecars use floating tags (`:latest`, `:alpine`), so an upgrade can change their behaviour. This happened with the caller-auth and Host checks of mcp-grafana. The `[images]` of each `mcp/<name>/module.toml` give the tags, and a release can change them. To pin the tag of a module yourself, copy its directory to `mcp.local/<name>/` and change the tag in the `[images]` of the copy. The copy replaces the shared module, so you do not get the changes of later releases to that module. Compare the copy with the shared module after each update. The nginx image is `IMG_NGINX` in `lib/config.sh`. You can change it only in a clone. Squid is not pulled: `Containerfile.squid` builds it here from Debian (`localhost/agentbox-squid`). Thus its packages are as current as the last `AB_UPGRADE=1`.
 
 ### Disk space
 
@@ -1284,14 +1455,26 @@ It lists what it removes and asks before it removes anything:
 
 Then it asks two more questions. The default answer to each is no:
 
-- the Podman secrets that agentbox and its modules use (`claude_oauth`, `openai_api_key`, the MCP tokens and caller tokens);
+- the Podman secrets that agentbox and its modules use (`claude_oauth`, `openai_api_key`, the tokens of the MCP servers and the caller tokens);
 - your files in `~/.config/agentbox`: `config.toml` (and the `config.env` of v0.1.x), `env/` with passwords, your skills, `AGENTS.md`, local modules.
 
 `agentbox uninstall --yes` removes without questions, but keeps the secrets and your files. `--yes --all` removes those too. It does not touch the repositories that you opened in the box. If you use a clone, run `./agentbox uninstall` in it. The clone itself stays; delete it yourself.
 
 A setting from `environment.d` stays in your login session until you log out.
 
-Uninstall works without Python 3.11 or newer, but then it cannot read `GH_OWNERS`. It keeps the `github_pat_<owner>` secrets and says so. Remove them yourself (`podman secret ls`).
+To find the images and secrets of the MCP modules, uninstall reads an index of each module:
+
+- `mcp/<name>/module.index` of the installed release, for each shared module;
+- `~/.cache/agentbox/modules/<name>`, which each start writes. `agentbox setup` adds to it the `for_each` secrets that it stores. Thus the file has each secret that agentbox made with `for_each`, for example `github_pat_<owner>` for each owner that a start or `agentbox setup` used. A file of a module that is gone still counts.
+
+With Python 3.11 or newer, uninstall also reads the manifest of each module. It also reads the values of the list settings in `config.toml`, for example `GH_OWNERS`, but not from the environment. If uninstall cannot read a manifest (for example, without Python), it uses only the index of that module. It removes each of these secrets that exists on the host. It removes no other secret with the prefix `github_pat_`. A module of the old format (only `mcp.sh`) in `mcp.local/` is read as text, as before.
+
+If uninstall cannot find a name, it says so, and keeps what it cannot name. Remove those items yourself (`podman secret ls`, `podman images`). This happens in these cases:
+
+- Without Python, for a module of yours with a manifest and no index (it never started). Uninstall keeps its images and secrets.
+- When uninstall cannot read the manifest of a module or `config.toml`, or a list setting fails its check. Then it removes only the `for_each` secrets of that module that its index has.
+
+If you keep the secrets, uninstall keeps `~/.cache/agentbox/modules` too. Then an `agentbox uninstall --all` of a new install or of a clone finds the names.
 
 ### Troubleshooting
 
@@ -1311,7 +1494,7 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `agentbox needs Python 3.11 or newer` | Install it ([Requirements](#requirements)). `agentbox update`, `rollback` and `uninstall` work without it. |
 | `... was not converted to TOML` | agentbox could not read that old file. The warning above names the line. Correct the old file. Then start again. You can also write its `.toml` file yourself. See [Conversion to TOML](#conversion-to-toml). |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. |
-| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A setting that is not correct: the reason names it; `agentbox setup` shows it too. A server in its `MCP_SERVERS` that does not have the correct form, `caller` without `MCP_CALLER_SECRET`, or a server name that another module also has: fix the `mcp.sh` of the module. The session starts without the module. |
+| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A setting that is not correct: the reason names it, with its place and the check (`config.toml:12: GRAFANA_URL: ... (url)`); `agentbox setup` shows it too. An error in its `module.toml`: the reason gives `module.toml:<line>: <reason> (<code>)`; if it says that the file needs a newer agentbox, update agentbox. A server name that another module also has: rename one of the servers. For a module of the old format, a server in its `MCP_SERVERS` that does not have the correct form, or `caller` without `MCP_CALLER_SECRET`: fix the `mcp.sh` of the module, or convert it ([Converting a module](#converting-a-module)). The session starts without the module. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a necessary host. The error names it. Find `DENIED` in the squid log, and add the host to a group in `egress.local.d/` (see [Egress](#egress)). The next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed. Add other registries deliberately: each one makes egress wider. |
@@ -1431,7 +1614,7 @@ AB_RESTART=1 agentbox .
 | `VERSION`, `CHANGELOG.md`, `release/allowed_signers` | The release version (`git archive` writes it), the changes per release, the keys that updates must be signed with |
 | `run.sh` | The entry point: the steps in order (config, image, updates, sidecars, session). The steps themselves are in `lib/` |
 | `lib/*.sh` | The steps of `run.sh`: settings, agent, sidecars, MCP modules, local services, skills, session |
-| `mcp/<name>/` | MCP server modules, which you enable with `AB_MCP`: `mcp.sh` plus files such as nginx templates. See [MCP servers](#mcp-servers) |
+| `mcp/<name>/` | MCP server modules, which you enable with `AB_MCP`: the manifest `module.toml`, its `module.index`, and the code `mcp.sh` with files such as nginx templates. See [MCP servers](#mcp-servers) |
 | `config.toml.example` | The settings template. `install.sh` copies it to `~/.config/agentbox/config.toml` |
 | `lib/toml-reader.py`, `lib/toml-writer.py`, `lib/toml-schema/` | The TOML reader of the settings, the sources and the egress groups, the writer of the [conversion](#conversion-to-toml), and the keys and types of each kind of file |
 | `pi.sh` | The same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |

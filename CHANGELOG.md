@@ -4,6 +4,82 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.2.1
+
+- Each shared MCP module has a manifest, `module.toml`: its description,
+  settings, secrets, servers, images and egress hosts, as data. `mcp.sh`
+  keeps only the code of a module. context7 has no `mcp.sh`. README,
+  "Writing a module", describes the format, and "Converting a module"
+  shows how to convert a module of the old format.
+- Your settings files do not change. The settings of v0.2.0 work as they
+  are: a port as a string or a number, and a list as an array or as a
+  string with spaces or commas.
+- A module of the old format (only `mcp.sh`) in `mcp.local/` still works.
+  Each start shows a warning for it while it is enabled. A module with a
+  `module.toml` and old `MCP_*` variables in its `mcp.sh` is left out with
+  the reason.
+- The modules check their settings with five built-in checks (`url`,
+  `url-base`, `port`, `name`, `file`). All modules give a failed check in
+  one message form: `<place>: <KEY>: <reason> (<check>)`. The place is the
+  file and the line of the value (`config.toml:12`), `environment`, or the
+  line of a default in `module.toml`. The start shows only the first failed
+  setting of a module. The message of a list setting does not name the bad
+  item.
+- The checks refuse some values that v0.2.0 took. A module with such a
+  value is left out, agentbox removes what it runs, and `agentbox setup`
+  shows "NOT USABLE":
+  - `GRAFANA_URL` and `GRAYLOG_URL` (no check before): a query
+    (`?orgId=1`, which Grafana adds to browser URLs), a fragment (`#...`),
+    `user@` in the host part, `@` in the path, `_` in a host, a scheme in
+    uppercase, a host that ends with `.`, an IPv6 host, a port with a `0`
+    at the start, a port above 65535 or an empty port, and a character in
+    the path other than letters, digits and `. _ ~ : / % + = , ! * -`.
+  - `WOODPECKER_URL`: a character other than a letter, a digit, `-` or `.`
+    in the host (such as `_`); a host label with `-` at the start or the
+    end; an empty label (`ci..example`, a host that ends with `.`); a port
+    above 65535, with a `0` at the start, empty or not digits; a second
+    `:` in the host part; no host.
+  - `WOODPECKER_CA`: a missing or unreadable file now leaves the module
+    out and removes its sidecars. In v0.2.0, the start of the module
+    stopped, and open sessions kept the sidecars.
+  - `BB4_USER`: a `-` at the end, `--`, and more than 39 characters.
+  - `GH_TOOLSETS`: a toolset with a character other than `a-z` and `_`,
+    and a value of only commas or spaces.
+- `GH_TOOLSETS` is a list setting. Spaces and commas separate the
+  toolsets, and nginx gets them joined with a comma, each once:
+  `"repos issues"` and `"repos, issues"` become `repos,issues`.
+- `GH_OWNERS`: a tab between names separates the names. A bad name
+  gives the message of the `name` check, not the list of the bad names.
+- `agentbox setup` shows the help of a setting when it asks for the value.
+  It writes a list setting of a module as an array (`GH_OWNERS = ["acme"]`,
+  `GH_TOOLSETS`).
+- `agentbox uninstall` finds the images and secrets of the modules in an
+  index: `mcp/<name>/module.index` of the release, and a file in
+  `~/.cache/agentbox/modules/` that each start writes. `agentbox setup`
+  adds the owner tokens that it stores.
+  Uninstall without Python now removes them too. It removes each
+  `github_pat_<owner>` that a start or `agentbox setup` of v0.2.1 or later
+  used, also for an owner that you removed from `GH_OWNERS`. If it cannot
+  read a manifest or `config.toml`, it removes only the owner tokens of
+  the index, and says so. Without Python, it cannot read `config.toml`.
+  The same is true when one owner in `config.toml` is bad. If it cannot
+  find the names of a module at all, it says so too. If you keep the
+  secrets, uninstall keeps `~/.cache/agentbox/modules`. An
+  `agentbox uninstall --all` of a new install or a clone uses it.
+- `agents/AGENTS.md.example` has a new section "Services and forwards".
+  It tells the agent to look for the services of the box before it
+  installs its own database or queue.
+
+Action:
+
+- If you have your own `~/.config/agentbox/AGENTS.md`, copy the section
+  "Services and forwards" from `agents/AGENTS.md.example` into it.
+- If you have modules in `mcp.local/`, convert them to `module.toml`
+  before v0.3.0, which removes the old format. README, "Converting a
+  module", shows the steps.
+- If a check now refuses a value of yours, the start names the setting.
+  Correct the value in `config.toml`.
+
 ## v0.2.0
 
 - Your settings are in `config.toml`, a flat TOML file, not in
