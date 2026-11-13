@@ -1621,7 +1621,8 @@ TOML
   assert_skipped dbhub
   assert_out "dbhub.toml: no \[\[sources\]\] entry"
   # The daily scan covers the pinned image.
-  local image; image="$(sed -n 's/^DBHUB_IMAGE="\(.*\)"$/\1/p' "$ROOT/mcp/dbhub/mcp.sh")"
+  local image; image="$(sed -n 's/^server = "\(.*\)"$/\1/p' "$ROOT/mcp/dbhub/module.toml")"
+  [[ -n "$image" ]] || fail "no server image in module.toml"
   grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
   # Turned off: the sidecar and the copy with the passwords go.
   printf '[[sources]]\nid = "a"\n' > "$CFG/dbhub.toml"

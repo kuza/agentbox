@@ -32,7 +32,7 @@ uninstall_mcp_files() {
 # Values of an MCP_ variable in all modules, read as text, not run: names
 # like grafana_sa or images like ghcr.io/x/y:tag, in "", '' or no quotes,
 # on one line, indented or not. A "$VAR" or "${VAR}" there is looked up as a
-# VAR= line of the same file (MCP_IMAGES=("$DBHUB_IMAGE")); one the file
+# VAR= line of the same file (MCP_IMAGES=("$SERVER_IMAGE")); one the file
 # does not set ("$IMG_NGINX") is left out, agentbox_uninstall removes it
 # anyway.
 uninstall_names() {  # <MCP_ variable>

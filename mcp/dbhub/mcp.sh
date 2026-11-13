@@ -5,12 +5,9 @@
 # the sources plus a read-only execute_sql and search_objects for each, to
 # the cache (mode 600), mounted into the sidecar. The session never gets the
 # passwords; agents authenticate to the sidecar with the caller token.
-MCP_DESCRIPTION="SQL databases listed in dbhub.toml: schemas and queries (read-only)"
-MCP_URL="http://ab-mcp-dbhub:8080/mcp"
-MCP_CALLER_SECRET=dbhub_mcp_caller
-DBHUB_IMAGE="docker.io/bytebase/dbhub:1.5.0"
-MCP_IMAGES=("$DBHUB_IMAGE")
-
+# module.toml holds the data of the module.
+#
+# The environment of the DBHub container (not settings of the module):
 #   DBHUB_AUTH_TOKEN     callers must send "Authorization: Bearer <token>"
 #   DBHUB_ALLOWED_HOSTS  DNS-rebinding protection: only the Host the agent sends
 mcp_start() {
@@ -27,10 +24,10 @@ mcp_start() {
   f="$(dbhub_config "$src")" || exit "$MCP_TAKE_AWAY"
   start_sidecar ab-mcp-dbhub \
     --network ab-internal --network ab-egress \
-    --secret dbhub_mcp_caller,type=env,target=DBHUB_AUTH_TOKEN \
+    --secret "${MCP_SECRET[mcp_caller]},type=env,target=DBHUB_AUTH_TOKEN" \
     -e DBHUB_ALLOWED_HOSTS=ab-mcp-dbhub \
     -v "$f:/etc/dbhub/dbhub.toml:ro,Z" \
-    "$DBHUB_IMAGE" \
+    "${MCP_IMAGE[server]}" \
     --transport http --port 8080 --config /etc/dbhub/dbhub.toml
 }
 

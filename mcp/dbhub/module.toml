@@ -1,0 +1,13 @@
+# DBHub: SQL databases through bytebase/dbhub, read only. The databases are
+# in <AB_HOME>/dbhub.toml; mcp.sh and config.py make the config of DBHub
+# from it. The module has no setting.
+format = 1
+description = "SQL databases listed in dbhub.toml: schemas and queries (read-only)"
+
+[images]
+server = "docker.io/bytebase/dbhub:1.5.0"
+
+[[servers]]
+name = "dbhub"
+url = "http://ab-mcp-dbhub:8080/mcp"
+caller = true
