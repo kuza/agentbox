@@ -1,0 +1,8 @@
+# earendil-works/pi-review: /review and /end-review for pi. The agent
+# reviews the uncommitted changes, the changes against a base branch, a
+# commit, or a set of folders and files. It gives findings by priority and
+# a verdict. It reads the shared instructions from REVIEW_GUIDELINES.md next
+# to the .pi directory of the repo. No npm dependencies.
+# "/review pr" needs the GitHub CLI (gh), and the box does not have it.
+# Enable with AB_PI_EXTENSIONS=pi-review (README, pi extensions).
+url = "https://github.com/earendil-works/pi-review"

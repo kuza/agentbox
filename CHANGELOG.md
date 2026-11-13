@@ -17,6 +17,9 @@ the steps a release needs from you, such as a rebuild.
   a SIGKILL (exit 137), agentbox shows the command to look further. The
   session container has the label `agentbox.repo`. README, "When the
   agent crashes", tells more.
+- A new shared pi extension source, `pi-review`
+  (earendil-works/pi-review). It gives pi `/review` and `/end-review`.
+  Enable it with `AB_PI_EXTENSIONS` or in `agentbox setup`.
 
 ## v0.2.1
 

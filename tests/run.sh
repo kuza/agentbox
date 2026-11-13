@@ -4496,7 +4496,7 @@ test_pi_extension_shared_sources_and_setup() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
   local n
-  for n in pi-subagents pi-prompt-history; do
+  for n in pi-subagents pi-prompt-history pi-review; do
     assert_file_has "$AB/pi-extensions.d/$n.toml" '^url = "https://github.com/'
   done
   # Setup shows the URL of each pi extension source. An old file of yours

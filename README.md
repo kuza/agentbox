@@ -552,7 +552,7 @@ An extension is code that pi runs in the box, with the same access as the agent.
 
 | Directory | |
 |---|---|
-| `pi-extensions.d/<name>.toml` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`) |
+| `pi-extensions.d/<name>.toml` | Shared sources, in git: `pi-subagents` (sub-agents and workflows), `pi-prompt-history` (`Ctrl+R` search over your prompts), `ponytail` (the ponytail rules at each turn, with the skill source `ponytail`), `pi-review` (`/review` and `/end-review`: a code review of the changes, a commit or the files; `/review pr` needs `gh`, which the box does not have) |
 | `pi-extensions.local.d/<name>.toml` | Your own, in [your files](#your-files). A name that also exists in `pi-extensions.d/` replaces that source |
 
 A source is TOML data, and agentbox never runs it. `url` is the git URL of the repository (required). `ref` is a branch, tag or commit to pin to (optional). Without `ref`, agentbox installs the default branch and offers updates. `needs_skills` is an array of the skill sources that the extension uses (optional). If one of them is not in `AB_SKILLS`, the start of pi says so. The extension works without it, but its skill commands fail. A missing `url` or an unknown key is an error, with its line.
