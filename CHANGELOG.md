@@ -11,6 +11,14 @@ the steps a release needs from you, such as a rebuild.
   part to remove, for example `remove the part from "?": "?orgId=1"`.
   grafana and graylog now remove each `/` at the end of the URL, not
   only one.
+- The message of a failed list setting names the first bad item again.
+  v0.2.0 named all bad items, in a different form. The form is now
+  `<place>: <KEY>: '<item>': <reason> (<check>)`. The v0.2.1 notes said
+  that the message does not name the item. The message shows at most 40
+  characters of the item, and a control character becomes `?`.
+- A new line in the value of a list setting from the environment now
+  separates items, for example `AB_MCP=$'grafana\ngithub'` or
+  `GH_OWNERS=$'a\nb'`. Before, agentbox used only the first line.
 
 ## v0.2.2
 

@@ -755,7 +755,7 @@ The built-in checks:
 | `name` | A GitHub name: letters, digits and `-`, with no `-` at the start or the end, no `--`, and at most 39 characters | |
 | `file` | A file that exists and that agentbox can read | |
 
-The message of a failed check has the form `<place>: <KEY>: <reason> (<check>)`. The place is the file and the line of the value (`config.toml:12`), `environment`, or the line of the setting in `module.toml` for a default. For a rule that no built-in check has, use `mcp_check` in `mcp.sh`.
+The message of a failed check has the form `<place>: <KEY>: <reason> (<check>)`. The place is the file and the line of the value (`config.toml:12`), `environment`, or the line of the setting in `module.toml` for a default. For a list setting, the message names the first item that fails: `<place>: <KEY>: '<item>': <reason> (<check>)`. For a rule that no built-in check has, use `mcp_check` in `mcp.sh`.
 
 The keys of a server:
 

@@ -267,6 +267,16 @@ mcp_manifest_at() {  # <path>
 declare -gA MCP_CHECKS=([url]="scheme host port hostport base" [url-base]="scheme host port hostport base"
   [port]="" [name]="" [file]="")
 
+# Prints <text> in a form that a message can show: each control character
+# becomes ?, so that the message stays on one line and cannot change the
+# terminal. It prints at most 40 characters and then "...", because a value
+# can hold a token.
+mcp_shown_text() {  # <text>
+  local t="${1//[[:cntrl:]]/?}"
+  (( ${#t} <= 40 )) || t="${t:0:40}..."
+  printf '%s' "$t"
+}
+
 # One function for each check: mcp_valid_<check>, with "_" in place of
 # "-". It checks one value. If the value fails, it sets why to the reason
 # and returns 1. The url checks put their fields into fld. The caller
@@ -278,12 +288,9 @@ mcp_valid_url() {  # <value> [base: no path]
   if [[ ! "$1" =~ $re ]] || (( 10#${BASH_REMATCH[7]:-1} > 65535 )); then
     why="not an http:// or https:// URL: a host, an optional port from 1 to 65535 and an optional path, with no user@, query or fragment"
     # A URL from the browser often has a query, such as ?orgId=1: name the part to remove.
-    # The hint shows at most 40 characters, because a query can hold a token.
-    # A control character becomes ?, so that the message stays on one line.
     head="${1%%[?#]*}"
     if [[ "$head" != "$1" ]]; then
-      part="${1:${#head}}"; part="${part//[[:cntrl:]]/?}"
-      (( ${#part} > 40 )) && part="${part:0:40}..."
+      part="$(mcp_shown_text "${1:${#head}}")"
       why+="; remove the part from \"${part:0:1}\": \"$part\""
     fi
     return 1
@@ -406,8 +413,10 @@ mcp_manifest_items() {  # <path>
 # gives status 1. The for_each secrets of each list setting that passed
 # its check are still set. MCP_FAILED has "<KEY>: <code>" for each failed
 # setting, and MCP_PROBLEM the first reason,
-# "<place>: <KEY>: <reason> (<check>)". The place is SETTING_AT
-# (lib/config.sh), "environment", or the line of the manifest for a default.
+# "<place>: <KEY>: <reason> (<check>)". For a list setting, the reason
+# names the first item that fails: "<place>: <KEY>: '<item>': <reason>
+# (<check>)". The place is SETTING_AT (lib/config.sh), "environment", or
+# the line of the manifest for a default.
 mcp_load_manifest() {  # <name> [--declared]
   local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" " nfailed
   local -a items=() all=() each=()
@@ -521,7 +530,10 @@ mcp_load_manifest() {  # <name> [--declared]
     items=("$val")
     if [[ " ${MCP_LIST_CONFIG[*]-} " == *" $k "* ]]; then
       # A list: an array (its items joined with a comma) or a string with
-      # spaces or commas. Each item once.
+      # spaces, commas or new lines. Each item once. Only the environment
+      # gives a new line or a carriage return: the reader of config.toml
+      # refuses them.
+      val="${val//[$'\r\n']/ }"
       read -ra all <<<"${val//,/ }"
       items=(); seen=" "
       for it in ${all[@]+"${all[@]}"}; do
@@ -542,6 +554,8 @@ mcp_load_manifest() {  # <name> [--declared]
       "mcp_valid_${c//-/_}" "$it" && continue
       MCP_FAILED+=("$k: $c")
       failed+="$k "
+      # The message of a list names the item that fails.
+      [[ -z "${MCP_ITEMS[$k]+x}" ]] || why="'$(mcp_shown_text "$it")': $why"
       [[ -n "$MCP_PROBLEM" ]] || MCP_PROBLEM="$at: $k: $why ($c)"
       continue 2
     done

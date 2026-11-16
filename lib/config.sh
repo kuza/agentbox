@@ -76,14 +76,14 @@ CONFIG_OLD_FILE="${CONFIG_FILE%.toml}.env"
 # Reads the settings in <file> (TOML, the kind config) into variables of
 # the same names, for <keys> only. A variable in the environment wins over
 # the file. For a key of CONFIG_LIST_KEYS, this function splits the value at
-# spaces and commas, and joins the items with a space. With <warn> 1, a key of the file that is not in <keys> or <quiet
+# spaces, commas and new lines, and joins the items with a space. With <warn> 1, a key of the file that is not in <keys> or <quiet
 # keys> gets a warning. Returns the status of toml_load. This is the only
 # place that reads the settings from the environment. SETTING_AT[<key>]
 # keeps the place of a value, for the message of a failed check:
 # "<file>:<line>", or "environment" for a value from the environment.
 declare -gA SETTING_AT=()
 settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
-  local file="$1" warn="$2" key items keys=" "
+  local file="$1" warn="$2" key val items keys=" "
   local -A values=() lines=()
   shift 2
   while (( $# )) && [[ "$1" != -- ]]; do keys+="$1 "; shift; done
@@ -103,7 +103,10 @@ settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
   done
   for key in "${CONFIG_LIST_KEYS[@]}"; do
     if [[ "$keys" == *" $key "* && -n "${!key:-}" ]]; then
-      read -ra items <<< "${!key//,/ }"
+      # A new line or a carriage return (only the environment gives them)
+      # separates items, as a space or a comma does.
+      val="${!key//[$'\r\n']/ }"
+      read -ra items <<< "${val//,/ }"
       printf -v "$key" '%s' "${items[*]}"
     fi
   done

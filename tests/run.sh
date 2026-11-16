@@ -1806,6 +1806,66 @@ test_github_more_owners() {
   assert_out "config.toml:[0-9]+: GH_OWNERS: .*\\(name\\)"
 }
 
+# A list setting from the environment: a new line (also with a carriage
+# return) separates the items.
+test_github_owners_new_line() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github"
+  secrets github_pat github_pat_a github_pat_b
+  local j nl
+  j="$(cache mcp-claude.json)"
+  for nl in $'\n' $'\r\n'; do
+    rm -f -- "$j"
+    ab_run "GH_OWNERS=a${nl}b" --
+    assert_rc 0
+    grep -q '"github-a": .*/o/a/mcp"' "$j" || fail "github-a missing ($(printf %q "$nl"))"
+    grep -q '"github-b": .*/o/b/mcp"' "$j" || fail "github-b missing ($(printf %q "$nl"))"
+  done
+}
+
+# A core list setting from the environment: a new line (also with a
+# carriage return) separates the items.
+test_core_list_new_line() {
+  setup "${FUNCNAME[0]}"
+  config "GRAFANA_URL=https://g.example"
+  secrets grafana_sa github_pat
+  local j nl
+  j="$(cache mcp-claude.json)"
+  for nl in $'\n' $'\r\n'; do
+    rm -f -- "$j"
+    ab_run "AB_MCP=grafana${nl}github" --
+    assert_rc 0
+    grep -q '"grafana": ' "$j" || fail "grafana missing ($(printf %q "$nl"))"
+    grep -q '"github": ' "$j" || fail "github missing ($(printf %q "$nl"))"
+  done
+}
+
+# The message of a failed list item names the item, after lowercase. The
+# message of a setting that is not a list has no item.
+test_list_setting_names_bad_item() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github" 'GH_OWNERS = ["ok", "Bad_X"]'
+  secrets github_pat github_pat_ok
+  ab_run --
+  assert_skipped github
+  assert_out "config\\.toml:2: GH_OWNERS: 'bad_x': not a name: .* \\(name\\)"
+  # A control character of the item becomes ?. The message shows at most
+  # 40 characters of the item.
+  ab_run "GH_OWNERS=ok,b"$'\e]0;x\a' --
+  assert_skipped github
+  assert_out "environment: GH_OWNERS: 'b\\?]0;x\\?': not a name"
+  grep -q $'\e' "$T/out" && fail "an escape character in the output"
+  ab_run "GH_OWNERS=ok,$(printf 'x_%.0s' {1..30})" --
+  assert_skipped github
+  assert_out "environment: GH_OWNERS: '(x_){20}\\.\\.\\.': not a name"
+  : > "$CFG/config.toml"
+  config "AB_MCP=grafana" 'GRAFANA_URL = "ftp://x"'
+  secrets grafana_sa
+  ab_run --
+  assert_skipped grafana
+  assert_out "config\\.toml:2: GRAFANA_URL: not an http:// or https:// URL"
+}
+
 # GH_TOOLSETS goes into a header of nginx: a toolset with a character other
 # than a-z and _ is refused (mcp_check). A string from the environment is a
 # list: nginx gets its toolsets joined with a comma.
