@@ -572,7 +572,7 @@ A source that you disable is removed at the next start of pi. agentbox does not 
 
 The auto memory of Claude Code is **off by default** in the box. `run.sh` sets `autoMemoryEnabled: false` in `~/.claude/settings.json` only when that key is not set yet, so it keeps an explicit choice there. To use auto memory in one project, set `"autoMemoryEnabled": true` in the `.claude/settings.json` of that repo.
 
-Put the instructions for all repos in `~/.config/agentbox/AGENTS.md`. Start from the template. It has the rules that this box needs (ask before you commit, the services of the box, where to find library documentation):
+Put the instructions for all repos in `~/.config/agentbox/AGENTS.md`. Start from the template. It has the rules that this box needs (ask before you commit, the limits of the box, the services of the box, where to find library documentation):
 
 ```bash
 cp agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md

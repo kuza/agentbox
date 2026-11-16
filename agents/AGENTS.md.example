@@ -1,15 +1,46 @@
 # Personal instructions for coding agents in agentbox
 
 <!--
-Copy to agents/AGENTS.md and adjust:
-  cp agents/AGENTS.md.example agents/AGENTS.md
-agents/AGENTS.md is ignored by git. Both agents read it in every repo:
+Copy to ~/.config/agentbox/AGENTS.md and adjust:
+  cp agents/AGENTS.md.example ~/.config/agentbox/AGENTS.md
+Both agents read it in every repo:
 Claude Code as ~/.claude/CLAUDE.md, pi as ~/.pi/agent/AGENTS.md.
 Keep it agent-neutral; name an agent only where a rule is specific to it.
 -->
 
 - Ask the user explicitly before every commit, and commit only after a clear yes to that question. A request to change files, approval of an earlier commit, or a mode that runs tools without confirmation (such as Claude Code's auto mode) is not permission to commit.
 - When a reply asks the user a question or presents a plan for approval, end the turn there and wait for the answer. Do not start the work in the same reply.
+
+## Limits of the box
+
+Some commands fail in the box on purpose. Use the alternative below, or
+ask the user:
+
+- **No push.** The box has no SSH key and no git credentials. The user
+  pushes from the host. To publish commits, ask the user to push them, and
+  wait for the answer. Do not copy commits or files to a remote through
+  MCP tools (for example `push_files` or `create_or_update_file` of the
+  GitHub MCP server).
+- **No root.** `sudo` is not there, and `apt-get install` and
+  `npm install -g` fail. To run a Python tool, use `uvx <tool>`. To run a
+  Node tool, use `npx <tool>`. `go install` works: `~/go/bin` is in
+  `PATH`. If a tool needs a system package, ask the user to add it to the
+  image.
+- **`.git/config` and `.git/hooks` are read-only.** `git config` and hook
+  installers (for example `pre-commit install`) fail. For one command, use
+  `git -c <key>=<value> ...`; this setting stays in that command only. Do
+  not use `git config --global`: it writes your home volume, and the
+  setting then applies in every later session. The user installs hooks on
+  the host. `git submodule update` fails, because `.git/modules` is
+  read-only. If git fails in a worktree or a submodule, ask the user to
+  start the session in the main repository.
+- **Your personal instructions and skills are read-only.** This file and
+  your personal skills come from the host. Edits fail, also the user
+  memory of the Claude Code `/memory` command. To change them, give the
+  user the text. The instructions and skills in the repo stay writable.
+- **No `podman`, `docker`, `gh` or `journalctl`.** For GitHub, use the
+  tools of the GitHub MCP server. If these tools are missing, ask the
+  user. For containers and logs of the host, ask the user.
 
 ## Services and forwards
 
