@@ -571,7 +571,8 @@ test_mcp_missing_setting() {
 }
 
 # The url check of the manifest (v0.2.1): a bad URL leaves the module out
-# and names the place of the value.
+# and names the place of the value. A query gives a hint (v0.2.3): the part
+# to remove.
 test_mcp_grafana_bad_url() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example/?orgId=1"
@@ -579,6 +580,7 @@ test_mcp_grafana_bad_url() {
   ab_run --
   assert_skipped grafana
   assert_out "grafana' left out of this session: $CFG/config.toml:[0-9]+: GRAFANA_URL: .* \(url\)$"
+  assert_out 'GRAFANA_URL: .*, query or fragment; remove the part from "\?": "\?orgId=1" \(url\)$'
   run_line ab-mcp-grafana && fail "grafana's sidecar started with a bad URL"
   return 0
 }
@@ -592,6 +594,53 @@ test_mcp_graylog_bad_url() {
   assert_out "graylog' left out of this session: environment: GRAYLOG_URL: .* \(url\)$"
   run_line ab-mcp-graylog && fail "graylog's sidecar started with a bad URL"
   return 0
+}
+
+# A fragment gives the hint too (v0.2.3), from the first ? or #.
+test_mcp_graylog_url_fragment() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog"
+  secrets graylog_basic
+  ab_run 'GRAYLOG_URL=https://graylog.example/#/search?q=1' --
+  assert_skipped graylog
+  assert_out 'GRAYLOG_URL: .*, query or fragment; remove the part from "#": "#/search\?q=1" \(url\)$'
+  run_line ab-mcp-graylog && fail "graylog's sidecar started with a bad URL"
+  return 0
+}
+
+# The hint shows at most 40 characters of the part (v0.2.3): a query can
+# hold a token.
+test_mcp_url_hint_cut() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog"
+  secrets graylog_basic
+  ab_run "GRAYLOG_URL=https://graylog.example/?token=$(printf 'x%.0s' {1..50})" --
+  assert_skipped graylog
+  assert_out 'remove the part from "\?": "\?token=x{33}\.\.\." \(url\)$'
+  return 0
+}
+
+# A control character from the environment becomes ? in the hint (v0.2.3),
+# so the message stays on one line.
+test_mcp_url_hint_control_char() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog"
+  secrets graylog_basic
+  ab_run $'GRAYLOG_URL=https://graylog.example/?a\nb' --
+  assert_skipped graylog
+  assert_out 'remove the part from "\?": "\?a\?b" \(url\)$'
+  return 0
+}
+
+# graylog removes each / at the end, also the / that comes before /api.
+test_mcp_graylog_url_slashes_before_api() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example/foo//api"
+  secrets graylog_basic
+  ab_run --
+  assert_rc 0
+  run_line ab-mcp-graylog | grep -q 'GRAYLOG_URL=https://graylog.example/foo ' \
+    || fail "GRAYLOG_URL keeps a / at the end: $(run_line ab-mcp-graylog)"
 }
 
 test_mcp_unknown_module() {
@@ -2133,14 +2182,14 @@ test_golden_context7() {
 
 test_golden_grafana() {
   golden_setup "${FUNCNAME[0]}"
-  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example.internal/"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example.internal//"
   secrets grafana_sa
   golden_check grafana
 }
 
 test_golden_graylog() {
   golden_setup "${FUNCNAME[0]}"
-  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example.internal/graylog/api/"
+  config "AB_MCP=graylog" "GRAYLOG_URL=https://graylog.example.internal/graylog/api//"
   secrets graylog_basic
   golden_check graylog
 }

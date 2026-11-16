@@ -273,10 +273,19 @@ declare -gA MCP_CHECKS=([url]="scheme host port hostport base" [url-base]="schem
 # declares why and fld as locals.
 # shortcut: no IPv6 address and no IDN host in a URL, add them when a module needs one.
 mcp_valid_url() {  # <value> [base: no path]
-  local label='[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?' path re
+  local label='[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?' path re head part
   re='^(https?)://('"$label(\\.$label)*"')(:([1-9][0-9]{0,4}))?(/[A-Za-z0-9._~:/%+=,!*-]*)?$'
   if [[ ! "$1" =~ $re ]] || (( 10#${BASH_REMATCH[7]:-1} > 65535 )); then
     why="not an http:// or https:// URL: a host, an optional port from 1 to 65535 and an optional path, with no user@, query or fragment"
+    # A URL from the browser often has a query, such as ?orgId=1: name the part to remove.
+    # The hint shows at most 40 characters, because a query can hold a token.
+    # A control character becomes ?, so that the message stays on one line.
+    head="${1%%[?#]*}"
+    if [[ "$head" != "$1" ]]; then
+      part="${1:${#head}}"; part="${part//[[:cntrl:]]/?}"
+      (( ${#part} > 40 )) && part="${part:0:40}..."
+      why+="; remove the part from \"${part:0:1}\": \"$part\""
+    fi
     return 1
   fi
   path="${BASH_REMATCH[8]}"

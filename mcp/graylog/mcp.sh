@@ -6,13 +6,14 @@ mcp_secret_value() {  # <secret> <typed>
   printf '%s:token' "$2" | base64 -w0
 }
 
-#   GRAYLOG_URL     base URL; nginx appends /api/mcp. A trailing slash, /api or
-#                   /api/mcp in the setting is stripped.
+#   GRAYLOG_URL     base URL; nginx appends /api/mcp. mcp_start removes each /
+#                   at the end, and then /api or /api/mcp.
 #   GRAYLOG_BASIC   base64("<api-token>:token"), from the podman secret
 mcp_start() {
-  local url="${GRAYLOG_URL%/}"
+  local url="${MCP_FIELD[GRAYLOG_URL.base]}"
   url="${url%/api/mcp}"
   url="${url%/api}"
+  while [[ "$url" == */ ]]; do url="${url%/}"; done
   start_sidecar ab-mcp-graylog \
     --network ab-internal --network ab-egress \
     -e GRAYLOG_URL="$url" \

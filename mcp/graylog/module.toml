@@ -5,7 +5,7 @@
 format = 1
 description = "Search and analyse logs in Graylog (read-only)"
 
-# mcp_start removes a / at the end, and /api or /api/mcp.
+# mcp_start removes each / at the end, and then /api or /api/mcp.
 [settings.GRAYLOG_URL]
 required = true
 check = "url"

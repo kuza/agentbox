@@ -4,6 +4,14 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.2.3
+
+- A URL setting with a query or a fragment, such as a Grafana URL from the
+  browser with `?orgId=1`, stays refused. Now the message also names the
+  part to remove, for example `remove the part from "?": "?orgId=1"`.
+  grafana and graylog now remove each `/` at the end of the URL, not
+  only one.
+
 ## v0.2.2
 
 - An agent that stops or crashes can keep terminal modes on, for example

@@ -9,7 +9,7 @@
 mcp_start() {
   start_sidecar ab-mcp-grafana \
     --network ab-internal --network ab-egress \
-    -e GRAFANA_URL="${GRAFANA_URL%/}" \
+    -e GRAFANA_URL="${MCP_FIELD[GRAFANA_URL.base]}" \
     -e GRAFANA_USAGE_STATS=disabled \
     --secret "${MCP_SECRET[sa]},type=env,target=GRAFANA_SERVICE_ACCOUNT_TOKEN" \
     --secret "${MCP_SECRET[mcp_caller]},type=env,target=MCP_GRAFANA_SERVER_TOKEN" \
