@@ -15,7 +15,9 @@
 # line. Returns 0; 2 for a bad file, with "file:line: reason (code)" on
 # stderr; 3 when there is no
 # Python 3.11 or newer. It never exits and never reads the settings from
-# the environment: each caller decides what to do.
+# the environment: each caller decides what to do. TOML_SHA gets the
+# sha256 (hex) of <file>, or empty when toml_load cannot read it. It also
+# holds the hash when the file is bad.
 #
 #   lib/toml-schema/<kind>.toml   the keys of a kind: type and required; nested tables for manifest
 #   lib/toml-reader.py            the parser (Python, tomllib)
@@ -30,6 +32,7 @@
 
 TOML_PYTHON=""   # the interpreter, found at the first need; "-" for none
 TOML_VERSION=""  # the reader version
+TOML_SHA=""      # the sha256 of the file that toml_load read last
 
 # The first of python3, python3.13, python3.12, python3.11 that is 3.11 or
 # newer, into TOML_PYTHON. 1 if there is none.
@@ -68,6 +71,7 @@ toml_load() {  # <kind> <file> <values> [<lines>]
   local _tl_kind="$1" _tl_file="$2" _tl_lib="$SCRIPT_DIR/lib" _tl_hash _tl_cache _tl_out _tl_rc=0 _tl_f _tl_at _tl_rec=()
   local -n _tl_values="$3"
   local -A _tl_none=()
+  TOML_SHA=""
   if [[ -n "${4:-}" ]]; then local -n _tl_lines="$4"; else local -n _tl_lines=_tl_none; fi
   if [[ ! -f "$_tl_lib/toml-schema/$_tl_kind.toml" ]]; then
     echo "error: toml_load: no kind '$_tl_kind'" >&2
@@ -78,6 +82,7 @@ toml_load() {  # <kind> <file> <values> [<lines>]
     echo "error: cannot read $_tl_file" >&2
     return 2
   fi
+  TOML_SHA="${_tl_hash%% *}"
   _tl_cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/toml/$TOML_VERSION/$_tl_kind-${_tl_hash%% *}"
   _tl_out="$_tl_cache"
   if [[ ! -f "$_tl_cache" ]]; then

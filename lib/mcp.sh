@@ -132,7 +132,7 @@ mcp_load_again() {  # <name>
 mcp_load() {  # <name> [--declared]
   local h
   unset -f mcp_start mcp_secret_value mcp_check
-  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MISSING=(); MCP_FAILED=(); MCP_LIST_CONFIG=(); MCP_FOR_EACH_SECRETS=()
+  MCP_PROBLEM=""; MCP_ONE_SERVER=""; MCP_FORMAT=""; MCP_MANIFEST_SHA=""; MCP_MISSING=(); MCP_FAILED=(); MCP_LIST_CONFIG=(); MCP_FOR_EACH_SECRETS=()
   MCP_URL=""; MCP_DESCRIPTION=""; MCP_CALLER_SECRET=""; MCP_SERVERS=(); MCP_SECRETS_BY_SETTING=()
   MCP_CONFIG=(); MCP_REQUIRED_CONFIG=(); MCP_SECRETS=(); MCP_SECRET_HELP=(); MCP_OWN_SECRETS=(); MCP_EGRESS=(); MCP_IMAGES=()
   declare -gA MCP_SECRET_HELP_OF=() MCP_SETTING_HELP=() MCP_IMAGE=() MCP_SECRET=() MCP_VALUE=() MCP_FIELD=() MCP_ITEMS=()
@@ -403,20 +403,20 @@ mcp_manifest_items() {  # <path>
 }
 
 # The manifest adapter of mcp_load: reads $MCP_DIR/module.toml and runs no
-# module code. A broken manifest gives status 2, and MCP_PROBLEM is
-# "<file>:<line>: <reason> (<code>)" (tests/manifest/README lists the
-# codes). MCP_LIST_CONFIG has the keys with list = true. Without
+# module code. MCP_MANIFEST_SHA gets the sha256 of module.toml (for
+# mcp_index) when toml_load reads it. A broken manifest gives status 2, and
+# MCP_PROBLEM is "<file>:<line>: <reason> (<code>)" (tests/manifest/README
+# lists the codes). MCP_LIST_CONFIG has the keys with list = true. Without
 # --declared, also the resolved part: MCP_VALUE (the setting values after
-# the defaults, lowercase and the split of the lists), MCP_FIELD,
-# MCP_ITEMS, the for_each secrets (also in MCP_FOR_EACH_SECRETS),
-# MCP_SERVERS and MCP_EGRESS. A setting that fails its check or is missing
-# gives status 1. The for_each secrets of each list setting that passed
-# its check are still set. MCP_FAILED has "<KEY>: <code>" for each failed
-# setting, and MCP_PROBLEM the first reason,
-# "<place>: <KEY>: <reason> (<check>)". For a list setting, the reason
-# names the first item that fails: "<place>: <KEY>: '<item>': <reason>
-# (<check>)". The place is SETTING_AT (lib/config.sh), "environment", or
-# the line of the manifest for a default.
+# the defaults, lowercase and the split of the lists), MCP_FIELD, MCP_ITEMS,
+# the for_each secrets (also in MCP_FOR_EACH_SECRETS), MCP_SERVERS and
+# MCP_EGRESS. A setting that fails its check or is missing gives status 1.
+# The for_each secrets of each list setting that passed its check are still
+# set. MCP_FAILED has "<KEY>: <code>" for each failed setting, and
+# MCP_PROBLEM the first reason, "<place>: <KEY>: <reason> (<check>)". For a
+# list setting, the reason names the first item that fails: "<place>: <KEY>:
+# '<item>': <reason> (<check>)". The place is SETTING_AT (lib/config.sh),
+# "environment", or the line of the manifest for a default.
 mcp_load_manifest() {  # <name> [--declared]
   local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" " nfailed
   local -a items=() all=() each=()
@@ -432,6 +432,7 @@ mcp_load_manifest() {  # <name> [--declared]
     MCP_PROBLEM="$(toml_load manifest "$f" v 2>&1 >/dev/null | head -1)" || true
     return 2
   fi
+  MCP_MANIFEST_SHA="$TOML_SHA"
   # The reader accepts 0 and lower; the first format is 1.
   if (( v[format] < 1 )); then
     MCP_PROBLEM="$(mcp_manifest_at format): format: ${v[format]} is not a format; the first format is 1 (bad-format)"
@@ -747,14 +748,15 @@ mcp_init() {
               "convert the module to module.toml (README, \"Converting a module\")"
     fi
   done
-  # The settings of each module that this version has (bb4 configured,
-  # then removed from AB_MCP): config.toml may keep them, and the second
-  # pass ignores them without a warning. Each manifest module that loads
-  # also gets its cache index. Each name once, as mcp_find finds
-  # it: a module of yours replaces the shared one of that name. A key that
-  # no module has still warns. The keys come from the [settings] of a
-  # manifest (none when it cannot be read), and from the mcp.sh of a module
-  # of the old format as text: it is not sourced.
+  # The settings of each module that this version has (bb4 configured, then
+  # removed from AB_MCP): config.toml may keep them, and the second pass
+  # ignores them without a warning. Each manifest module that loads also
+  # gets its cache index: mcp_index_save writes it when it changed. Each
+  # name once, as mcp_find finds it: a module of yours replaces the shared
+  # one of that name. A key that no module has still warns. The keys come
+  # from the [settings] of a manifest (none when it cannot be read), and
+  # from the mcp.sh of a module of the old format as text: it is not
+  # sourced.
   MCP_QUIET_KEYS=()
   while IFS= read -r name; do
     [[ "$name" =~ $AB_NAME_RE ]] || continue
@@ -789,24 +791,39 @@ mcp_init() {
 # does not know. A file that agentbox setup made before the first start
 # has index.format and secrets.for_each only. The places:
 #   <cache>/agentbox/modules/<name>   mcp_init, mcp_check_secrets and
-#                                     agentbox setup write it
+#                                     agentbox setup write it when it
+#                                     changed (mcp_index_save)
 #   mcp/<name>/module.index           in git, for each shared manifest;
 #                                     release.sh --index writes it, with
 #                                     no for_each names
 # The index of the module that mcp_load --declared loaded, with the given
-# for_each names, on stdout.
+# for_each names, on stdout. Status 1 when the load gave no hash of
+# module.toml.
 mcp_index() {  # [<for_each name>...]
-  local sha
-  sha="$(sha256sum < "$MCP_DIR/module.toml")"
-  printf '%s\0' index.format 1 manifest.sha "${sha%% *}" images "${MCP_IMAGES[*]-}" secrets "${MCP_SECRETS[*]-}" \
-    own_secrets "${MCP_OWN_SECRETS[*]-}" caller_secret "$MCP_CALLER_SECRET" secrets.for_each "$(mcp_index_names "$@")"
+  local -a pairs=()
+  mcp_index_fields pairs "$(mcp_index_names "$@")" || return 1
+  printf '%s\0' "${pairs[@]}"
+}
+
+# The fields of mcp_index in the array <array>, with <for_each>, the
+# for_each names as mcp_index_names gives them. The hash comes from the
+# load (MCP_MANIFEST_SHA): this runs no sha256sum.
+mcp_index_fields() {  # <array> <for_each>
+  local -n _mif_out="$1"
+  if [[ -z "$MCP_MANIFEST_SHA" ]]; then
+    echo "error: $MCP_DIR/module.toml: no hash for the index" >&2
+    return 1
+  fi
+  _mif_out=(index.format 1 manifest.sha "$MCP_MANIFEST_SHA" images "${MCP_IMAGES[*]-}" secrets "${MCP_SECRETS[*]-}"
+    own_secrets "${MCP_OWN_SECRETS[*]-}" caller_secret "$MCP_CALLER_SECRET" secrets.for_each "$2")
 }
 
 mcp_index_names() {  # [<for_each name>...]: sorted, each once, on one line
   printf '%s\n' "$@" | sed '/^$/d' | LC_ALL=C sort -u | paste -sd' ' -
 }
 
-# Writes the cache index of module <name>. It keeps the for_each names of
+# Writes the cache index of module <name> when it changed: a file that is
+# current (mcp_index_current) stays as it is. It keeps the for_each names of
 # the earlier file. Without --add, the other pairs come from the module
 # that mcp_load --declared loaded. With --add, it adds the given for_each
 # names and copies each other pair of the earlier file, also a pair that
@@ -814,20 +831,25 @@ mcp_index_names() {  # [<for_each name>...]: sorted, each once, on one line
 # from losing names. Status 1 when it cannot write the file: the caller
 # warns and continues, because only uninstall needs the index.
 mcp_index_save() {  # <name> [--add <for_each name>...]
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules" f k v lock tmp rc=0
-  local -a names=() order=()
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules" f k i lock tmp rc=0
+  local -a names=() order=() pairs=()
   local -A old=()
   f="$dir/$1"
+  ! mcp_index_current "$f" "${@:2}" || return 0
   { mkdir -p "$dir" && exec {lock}>> "$dir.lock"; } 2>/dev/null || return 1
   if ! flock "$lock" || ! tmp="$(mktemp "$f.XXXXXX" 2>/dev/null)"; then
     exec {lock}>&-
     return 1
   fi
   if [[ -f "$f" ]]; then
-    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+    # A damaged file (status 1) gives the pairs that it has.
+    mcp_index_read "$f" pairs || (( $? == 1 )) || rc=1
+    for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+      k="${pairs[i]}"
+      [[ -n "$k" ]] || continue
       [[ -n "${old[$k]+x}" ]] || order+=("$k")
-      old[$k]="$v"
-    done < "$f" || rc=1
+      old[$k]="${pairs[i+1]}"
+    done
   fi
   read -ra names <<<"${old[secrets.for_each]-}"
   if (( rc )); then
@@ -845,6 +867,56 @@ mcp_index_save() {  # <name> [--add <for_each name>...]
   (( ! rc )) || rm -f -- "$tmp"
   exec {lock}>&-
   return "$rc"
+}
+
+# The fields of the index file <file> in the array <array>, as pairs: a
+# key with no value at the end goes away. Status 2 when it cannot read
+# the file. Status 1 when the file is damaged: the last field has no NUL
+# at the end, the last key has no value, or a key is empty. A field with
+# no NUL at the end stays in the array.
+mcp_index_read() {  # <file> <array>
+  local -n _mir_out="$2"
+  local _mir_x="" _mir_i _mir_rc=0
+  _mir_out=()
+  { while IFS= read -r -d '' _mir_x; do _mir_out+=("$_mir_x"); done < "$1"; } 2>/dev/null || return 2
+  if [[ -n "$_mir_x" ]]; then _mir_out+=("$_mir_x"); _mir_rc=1; fi
+  if (( ${#_mir_out[@]} % 2 )); then
+    _mir_out=("${_mir_out[@]:0:${#_mir_out[@]}-1}")
+    _mir_rc=1
+  fi
+  for (( _mir_i = 0; _mir_i < ${#_mir_out[@]}; _mir_i += 2 )); do
+    [[ -n "${_mir_out[_mir_i]}" ]] || _mir_rc=1
+  done
+  return "$_mir_rc"
+}
+
+# 0 when the cache index file <file> needs no write. Without --add, the
+# file is byte-equal to mcp_index with the for_each names of the file.
+# With --add, the file has index.format and each given for_each name.
+# It takes no lock and makes no file: a skip writes nothing, so it cannot
+# lose a name. Any doubt gives 1, and mcp_index_save writes.
+mcp_index_current() {  # <file> [--add <for_each name>...]
+  local fe n i
+  local -a got=() want=() names=()
+  local -A old=()
+  [[ -f "$1" ]] && mcp_index_read "$1" got || return 1
+  for (( i = 0; i < ${#got[@]}; i += 2 )); do old[${got[i]}]="${got[i+1]}"; done
+  fe="${old[secrets.for_each]-}"
+  read -ra names <<<"$fe"
+  if [[ "${2:-}" == --add ]]; then
+    [[ -n "${old[index.format]+x}" ]] || return 1
+    for n in "${@:3}"; do
+      [[ " $fe " == *" $n "* ]] || return 1
+    done
+    return 0
+  fi
+  # The names as mcp_index_names gives them. One name or none needs no sort.
+  if (( ${#names[@]} < 2 )); then fe="${names[*]-}"; else fe="$(mcp_index_names "${names[@]}")"; fi
+  mcp_index_fields want "$fe" 2>/dev/null || return 1
+  (( ${#got[@]} == ${#want[@]} )) || return 1
+  for (( i = 0; i < ${#got[@]}; i++ )); do
+    [[ "${got[i]}" == "${want[i]}" ]] || return 1
+  done
 }
 
 # The index files of the shared modules in <tree>: mcp/<name>/module.index
@@ -873,8 +945,14 @@ mcp_index_tree() {  # <tree> [--check]
       echo "error: MCP module '$name': $MCP_PROBLEM" >&2
       rc=1
     elif [[ "${2:-}" != --check ]]; then
-      mcp_index > "$d/module.index"
+      if ! mcp_index > "$d/module.index"; then
+        rm -f -- "$d/module.index"
+        rc=1
+        continue
+      fi
       echo "wrote mcp/$name/module.index"
+    elif ! mcp_index > /dev/null; then
+      rc=1
     elif ! cmp -s <(mcp_index) "$d/module.index"; then
       echo "error: mcp/$name/module.index is missing or is not the index of its module.toml: run release.sh --index" >&2
       rc=1

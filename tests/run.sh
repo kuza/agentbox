@@ -5086,19 +5086,101 @@ test_mcp_index_cache() {
   assert_eq "$(index_of ix)" "index.format|1|secrets.for_each|ix_team_d|" "the index that setup made"
   ab_run --
   assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_d|" "the index after the start"
-  # A cache directory that is not writable: the start and setup warn and go on.
-  chmod a-w "$(cache modules)"
+  # A start with no change and a setup that stores a recorded name write
+  # nothing: the time and the inode of each index file stay. The start
+  # also adds ix_team_d (mcp_check_secrets --add), which is in the file.
+  local f stamp
+  for f in "$(cache modules)"/*; do touch -d @1000000000 "$f"; done
+  stamp="$(index_stamps)"
   ab_run --
   assert_rc 0
-  assert_out "warning: cannot write the index of MCP module 'ix'"
+  assert_eq "$(index_stamps)" "$stamp" "the index files after a start with no change"
   setup_run "e $(setup_entry ix)\nd\n\nt\ns\n"
   assert_rc 0
   assert_out "stored the Podman secret ix_team_d"
-  assert_out "warning: cannot write the index of MCP module 'ix': agentbox uninstall can leave ix_team_d"
+  assert_eq "$(index_stamps)" "$stamp" "the index files after a setup of a recorded name"
+  # A cache directory that is not writable: a start with no change writes
+  # nothing and does not warn. A start or a setup that must write warns
+  # and goes on.
+  chmod a-w "$(cache modules)"
+  ab_run --
+  assert_rc 0
+  assert_no_out "cannot write the index"
+  assert_eq "$(index_stamps)" "$stamp" "the index files after a read-only start with no change"
+  sed -i 's/^IX_TEAMS = .*/IX_TEAMS = "d,f"/' "$CFG/config.toml"
+  ab_run --
+  assert_rc 0
+  assert_out "warning: cannot write the index of MCP module 'ix'"
+  setup_run "e $(setup_entry ix)\ne\n\nt\ns\n"
+  assert_rc 0
+  assert_out "stored the Podman secret ix_team_e"
+  assert_out "warning: cannot write the index of MCP module 'ix': agentbox uninstall can leave ix_team_e"
   chmod u+w "$(cache modules)"
   assert_eq "$(index_of ix)" "$head|secrets.for_each|ix_team_d|" "the index after the failed writes"
   [[ -z "$(find "$(cache modules)" -name 'ix.*')" ]] || fail "a temporary index file left behind"
+  # A changed module.toml writes the index: uninstall reads the new pairs.
+  sed -i 's|docker.io/x/app:1|docker.io/x/app:2|' "$CFG/mcp.local/ix/module.toml"
+  sha="$(sha256sum < "$CFG/mcp.local/ix/module.toml" | cut -d' ' -f1)"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(index_of ix)" "index.format|1|manifest.sha|$sha|images|docker.io/x/app:2|secrets|ix_tok|own_secrets|ix_db|caller_secret|ix_mcp_caller|secrets.for_each|ix_team_d ix_team_e|" \
+    "the index after a change of module.toml"
+  # A comment changes only manifest.sha: the start writes the new hash.
+  echo '# a comment' >> "$CFG/mcp.local/ix/module.toml"
+  sha="$(sha256sum < "$CFG/mcp.local/ix/module.toml" | cut -d' ' -f1)"
+  ab_run --
+  assert_rc 0
+  assert_eq "$(index_of ix)" "index.format|1|manifest.sha|$sha|images|docker.io/x/app:2|secrets|ix_tok|own_secrets|ix_db|caller_secret|ix_mcp_caller|secrets.for_each|ix_team_d ix_team_e|" \
+    "the index after a change of a comment in module.toml"
 }
+
+# A damaged cache index file gets a write, also when the fields that it
+# has are equal to the index: a last field with no NUL at the end, a
+# missing last pair, and for --add a key with no value or no index.format.
+test_mcp_index_damaged() {
+  setup "${FUNCNAME[0]}"
+  manifest_module ix 'format = 1' '[settings.IX_TEAMS]' 'list = true' 'check = "name"' \
+    '[secrets."team_{item}"]' 'for_each = "IX_TEAMS"' '[[servers]]' 'name = "ix"' 'url = "https://ix.example/mcp"'
+  local out sha
+  sha="$(sha256sum < "$CFG/mcp.local/ix/module.toml" | cut -d' ' -f1)"
+  (
+    SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
+    f="$XDG_CACHE_HOME/agentbox/modules/ix"
+    mkdir -p "${f%/*}"
+    mcp_load ix --declared || { echo "load: $MCP_PROBLEM"; exit 1; }
+    # save <what> <file content> [--add <name>]: the time and the index after the save.
+    save() {
+      printf "$2" > "$f"
+      touch -d @1000000000 "$f"
+      mcp_index_save ix "${@:3}" || echo "$1: status $?"
+      echo "$1 $(stat -c %Y "$f") $(tr '\0' '|' < "$f")"
+    }
+    full="index.format\0001\000manifest.sha\000$sha\000images\000\000secrets\000\000own_secrets\000\000caller_secret\000\000secrets.for_each\000ix_team_a"
+    save current "$full\000"
+    save no-nul "$full"
+    save no-last-pair "${full%\\000secrets.for_each*}\000"
+    save add-current "index.format\0001\000secrets.for_each\000ix_team_a\000" --add ix_team_a
+    save add-no-nul "index.format\0001\000secrets.for_each\000ix_team_a" --add ix_team_a
+    save add-lone-key "index.format\0001\000secrets.for_each\000ix_team_a\000x\000" --add ix_team_a
+    save add-no-format "secrets.for_each\000ix_team_a\000" --add ix_team_a
+    save add-empty-key "index.format\0001\000\000v\000secrets.for_each\000ix_team_a\000" --add ix_team_a
+  ) > "$T/out" 2>&1
+  out="$(cat "$T/out")"
+  local head="index.format|1|manifest.sha|$sha|images||secrets||own_secrets||caller_secret||secrets.for_each|"
+  assert_eq "$(sed -n 1p <<<"$out")" "current 1000000000 ${head}ix_team_a|" "a current file"
+  assert_eq "$(sed -n 2p <<<"$out" | sed 's/ [0-9]* / NEW /')" "no-nul NEW ${head}ix_team_a|" "a file with no NUL at the end"
+  assert_eq "$(sed -n 3p <<<"$out" | sed 's/ [0-9]* / NEW /')" "no-last-pair NEW ${head}|" "a file without the last pair"
+  assert_eq "$(sed -n 4p <<<"$out")" "add-current 1000000000 index.format|1|secrets.for_each|ix_team_a|" "--add, a current file"
+  assert_eq "$(sed -n 5p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-no-nul NEW index.format|1|secrets.for_each|ix_team_a|" "--add, a file with no NUL at the end"
+  assert_eq "$(sed -n 6p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-lone-key NEW index.format|1|secrets.for_each|ix_team_a|" "--add, a key with no value"
+  assert_eq "$(sed -n 7p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-no-format NEW index.format|1|secrets.for_each|ix_team_a|" "--add, a file without index.format"
+  assert_eq "$(sed -n 8p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-empty-key NEW index.format|1|secrets.for_each|ix_team_a|" "--add, an empty key"
+  [[ "$(sed -n '2,3p;5,8p' <<<"$out")" != *" 1000000000 "* ]] || fail "a damaged file without a write"$'\n'"$out"
+}
+# index_stamps: the name, the time and the inode of each cache index file.
+index_stamps() { stat -c '%n %Y %i' "$(cache modules)"/* | sed "s|^$T/||"; }
 
 # index_check <tree>: the drift check of <tree>; output in $T/out.
 index_check() {
@@ -5298,6 +5380,13 @@ test_uninstall_github_owner_tokens() {
   ab_run --
   sed -i 's/^GH_OWNERS = .*/GH_OWNERS = ["b", "c"]/' "$CFG/config.toml"
   ab_run --
+  # A start with no change: it writes no index, and uninstall still finds
+  # each name. The github index has more than one for_each name.
+  local f stamp
+  for f in "$(cache modules)"/*; do touch -d @1000000000 "$f"; done
+  stamp="$(index_stamps)"
+  ab_run --
+  assert_eq "$(index_stamps)" "$stamp" "the index files after a start with no change"
   setup_run "e $(setup_entry github)\n\nd\n\nghp_d\ns\n"
   assert_rc 0
   assert_out "stored the Podman secret github_pat_d"
