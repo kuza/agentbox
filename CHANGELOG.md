@@ -44,6 +44,11 @@ the steps a release needs from you, such as a rebuild.
     gets the message of the check, for example `not a port: ... (port)`.
     A port below 1024 gets `TABULARIS_PORT must be 1024 or more, got
     '<port>'`.
+- For developers: `tests/run.sh` now counts the skipped tests, for
+  example `197 passed, 0 failed, 2 skipped`. Under the summary, it shows
+  each skipped test and the reason, for example a missing `script`. An
+  exported setting of an MCP module, such as `TABULARIS_PORT` or
+  `GH_OWNERS`, no longer changes the tests.
 
 ## v0.2.2
 

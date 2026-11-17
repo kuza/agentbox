@@ -20,6 +20,9 @@ set -uo pipefail
 while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(AB_|SKILLS_|XDG_|GIT_CONFIG)')
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Nor the settings of the MCP modules: an exported TABULARIS_PORT or
+# GH_OWNERS would change what the tests of that module get.
+while IFS= read -r v; do unset "$v"; done < <(sed -n 's/^\[settings\.\([A-Za-z0-9_]*\)\].*/\1/p' "$ROOT"/mcp/*/module.toml)
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/agentbox-tests.XXXXXX")"
 # Installed versions are read-only (releases tests): writable again first.
 trap 'chmod -R u+w -- "${WORK:?}" 2>/dev/null; rm -rf -- "${WORK:?}"' EXIT
@@ -45,7 +48,7 @@ for p in python3 python3.13 python3.12 python3.11; do
     TEST_PYTHON="$p"; break
   fi
 done
-PASSED=0; FAILED=0; FAILURES=()
+PASSED=0; FAILED=0; FAILURES=(); SKIPPED=0; SKIPS=()
 
 # --- harness ----------------------------------------------------------------
 
@@ -140,6 +143,9 @@ cache() { echo "$T/home/.cache/agentbox/$1"; }
 source_value() { sed -n "s/^$2=//p" "$1" | tail -n1; }
 
 fail() { CURRENT_OK=0; echo "    FAIL: $*"; }
+# skip <reason>: the test does not check the rest. The test returns by itself
+# after it (skip "<reason>"; return 0). run_test counts it as skipped.
+skip() { echo "    SKIP: $*"; }
 assert_rc() { [[ "$RC" == "$1" ]] || fail "exit status $RC, expected $1"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
 assert_out() { grep -qE -- "$1" "$T/out" || fail "output lacks /$1/"$'\n'"$(sed 's/^/      | /' "$T/out")"; }
 assert_no_out() { ! grep -qE -- "$1" "$T/out" || fail "output has /$1/"; }
@@ -171,6 +177,8 @@ run_test() {
   cat "$WORK/$name.log"
   if grep -q '^    FAIL' "$WORK/$name.log"; then
     FAILED=$((FAILED + 1)); FAILURES+=("$name")
+  elif grep -q '^    SKIP: ' "$WORK/$name.log"; then
+    SKIPPED=$((SKIPPED + 1)); SKIPS+=("$name: $(sed -n 's/^    SKIP: //p' "$WORK/$name.log" | head -n1)")
   else
     PASSED=$((PASSED + 1))
   fi
@@ -311,7 +319,7 @@ test_mcp_podman_error_is_the_reason() {
 }
 
 test_warnings_named_again_at_a_terminal() {
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   setup "${FUNCNAME[0]}"
   config "AB_MCP=grafana"
   secrets grafana_sa
@@ -1674,7 +1682,7 @@ test_sidecar_copy_name() {
 
 test_mcp_dbhub() {
   # config.py parses with tomllib (Python 3.11+), here as in the image.
-  python3 -c 'import tomllib' 2>/dev/null || { echo "  (skipped: needs Python 3.11+ for tomllib)"; return 0; }
+  python3 -c 'import tomllib' 2>/dev/null || { skip "python3 has no tomllib (needs Python 3.11 or newer)"; return 0; }
   setup "${FUNCNAME[0]}"
   config "AB_MCP=dbhub"
   # No dbhub.toml: the session starts without dbhub and says where it goes.
@@ -2051,6 +2059,7 @@ test_tabularis_defaults() {
   if [[ "$(free_port 47821)" != 47821 ]]; then
     ab_run AB_TABULARIS_WAIT=0 --
     assert_out "TABULARIS_PORT 47821 on 127.0.0.1 is in use by another program"
+    skip "port 47821 is in use, so the test does not start with the default port"
     return 0
   fi
   ab_run AB_TABULARIS_WAIT=0 --
@@ -2199,7 +2208,7 @@ test_tabularis_key_file_mode() {
 
 # Another program on the port: no bridge, no sidecars, an error.
 test_tabularis_port_taken() {
-  [[ -n "$TEST_PYTHON" ]] || return 0
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11 or newer to hold a port"; return 0; }
   tab_setup "${FUNCNAME[0]}"
   "$TEST_PYTHON" -I -c '
 import socket, sys, time
@@ -2373,7 +2382,7 @@ test_golden_github() {
 
 test_golden_dbhub() {
   # The stub runs config.py with the python3 of the host (tomllib: 3.11+).
-  python3 -c 'import tomllib' 2>/dev/null || { echo "  (skipped: needs Python 3.11+ for tomllib)"; return 0; }
+  python3 -c 'import tomllib' 2>/dev/null || { skip "python3 has no tomllib (needs Python 3.11 or newer)"; return 0; }
   golden_setup "${FUNCNAME[0]}"
   config "AB_MCP=dbhub"
   printf '%s\n' '[[sources]]' 'id = "billing"' 'dsn = "postgres://ro:secret@db.example.internal:5432/billing"' > "$CFG/dbhub.toml"
@@ -3198,6 +3207,42 @@ test_uninstall_reads_unconverted_config_env() {
   assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_ci" "secrets after --all"
 }
 
+# A bad GH_OWNERS item in an unconverted config.env: the message names
+# config.env without a line, because the lines of the converted copy are not
+# the lines of the file. The secrets of the owners stay. At a terminal,
+# uninstall can remove the secrets and keep the files: config.env does not
+# change.
+test_uninstall_bad_owner_in_unconverted_config_env() {
+  rel_setup "${FUNCNAME[0]}"
+  make_release v1.0.0
+  rm -f "$CFG/config.toml"
+  echo 'GH_OWNERS="MyOrg, bad_x"' > "$CFG/config.env"
+  cp -- "$CFG/config.env" "$T/config.env.before"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  assert_rc 0
+  printf '%s\n' github_pat_myorg github_pat_ci > "$STUB_DIR/secrets"
+  ab_cmd env PATH="$T/bin:$T/sysbin:$PATH" "$T/home/.local/bin/agentbox" uninstall --yes --all
+  assert_rc 0
+  assert_out "config\\.env: GH_OWNERS: .*\\(name\\), so it removes only the secrets"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg github_pat_ci" "secrets after --all"
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
+  mkdir -p "$CFG"
+  cp -- "$T/config.env.before" "$CFG/config.env"
+  ab_cmd bash "$T/rel/agentbox-v1.0.0/install.sh"
+  assert_rc 0
+  printf '%s\n' github_pat_myorg github_pat_ci > "$STUB_DIR/secrets"
+  # Remove all this: yes. Also the secrets: yes. Also your files: no.
+  printf 'y\ny\nn\n' | timeout 60 script -qec "$(printf '%q ' env HOME="$T/home" PATH="$T/bin:$T/sysbin:$PATH" \
+      "$T/home/.local/bin/agentbox" uninstall)" /dev/null > "$T/out" 2>&1
+  RC=$?
+  assert_rc 0
+  assert_out "config\\.env: GH_OWNERS: .*\\(name\\), so it removes only the secrets"
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "github_pat_myorg github_pat_ci" "secrets at a terminal"
+  cmp -s -- "$T/config.env.before" "$CFG/config.env" || fail "config.env changed"
+  [[ -e "$CFG/config.toml" ]] && fail "uninstall wrote config.toml"
+  return 0
+}
+
 # A config.env that the writer cannot convert: the secrets stay, and the
 # line is named.
 test_uninstall_broken_unconverted_config_env() {
@@ -3251,7 +3296,7 @@ tty_run() {
 }
 
 test_login() {
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   setup "${FUNCNAME[0]}"
   : > "$STUB_DIR/secrets"
   tty_run 'sk-ant-oat01-abc123\n' AB_LOGIN=1 --
@@ -3298,7 +3343,7 @@ test_session_resets_terminal() {
   assert_rc 3
   grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start"
   grep -qF -- "$TEST_TERM_RESET" "$T/out" && fail "a reset without a terminal"
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   tty_run '' AB_WARNINGS_ASK=0 STUB_SESSION_RC=3 --
   assert_rc 3
   local end="STUB-SESSION-END$TEST_TERM_RESET"
@@ -3384,7 +3429,7 @@ test_session_log() {
   [[ "$(cat "$log")" == *" exit=0 $T/a?b" ]] || fail "a newline in the path is not ?: $(cat "$log")"
 
   # At a terminal, the message comes after the reset of the terminal.
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   tty_run '' AB_WARNINGS_ASK=0 STUB_SESSION_RC=139 --
   assert_rc 139
   [[ "$(cat "$T/out")" == *"STUB-SESSION-END$TEST_TERM_RESET"*"the agent crashed"* ]] ||
@@ -3393,7 +3438,7 @@ test_session_log() {
 }
 
 test_first_start_offers_login() {
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   setup "${FUNCNAME[0]}"
   : > "$STUB_DIR/secrets"
   # No question before the session (AB_WARNINGS_ASK=0): a line within 0.5 s
@@ -4274,7 +4319,7 @@ test_updates_registry_down_warns() {
 # A failed update is in the start's list (warnings_review): answered at a
 # terminal, the pull fails.
 test_updates_failed_pull_in_warnings() {
-  command -v script >/dev/null || return 0
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
   cu_setup "${FUNCNAME[0]}"
   echo bbb > "$T/remote_digest"
   : > "$T/warnings"
@@ -5520,8 +5565,13 @@ for t in $(declare -F | awk '{ print $3 }' | grep '^test_'); do
   run_test "$t"
 done
 echo
-echo "$PASSED passed, $FAILED failed"
+echo "$PASSED passed, $FAILED failed, $SKIPPED skipped"
+if (( SKIPPED )); then
+  echo "skipped:"
+  printf '  %s\n' "${SKIPS[@]}"
+fi
 if (( FAILED )); then
+  echo "failed:"
   printf '  %s\n' "${FAILURES[@]}"
   exit 1
 fi
