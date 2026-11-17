@@ -387,7 +387,14 @@ test_mcp_bb4() {
   rm -f "$AB/mcp/bb4/devtools/package-lock.json"
   ab_run --
   assert_skipped bb4
-  assert_out "package-lock.json is missing: in a clone, run"
+  assert_out "error: $AB/mcp/bb4/devtools/package-lock.json is missing: run \\(cd '$AB/mcp/bb4/devtools' && npm install"
+  # A copy in mcp.local/ names its own path.
+  mkdir -p "$CFG/mcp.local"
+  cp -R "$AB/mcp/bb4" "$CFG/mcp.local/bb4"
+  ab_run --
+  assert_skipped bb4
+  assert_out "error: $CFG/mcp.local/bb4/devtools/package-lock.json is missing: run \\(cd '$CFG/mcp.local/bb4/devtools' && npm install"
+  rm -rf -- "$CFG/mcp.local/bb4"
   echo '{"lockfileVersion": 3}' > "$AB/mcp/bb4/devtools/package-lock.json"
   # An image from another lock file: built anew.
   echo "localhost/agentbox-bb4-devtools old" >> "$STUB_DIR/image_labels"
@@ -752,6 +759,39 @@ test_mcp_manifest_module_starts() {
   ab_run --
   assert_skipped tracker
   assert_out "tracker' left out of this session: missing podman secrets tracker_team_blue"
+}
+
+# The messages for the author of a module. A copy of a module.toml with
+# [images] and no mcp.sh starts no sidecar: a warning, one time for each
+# start. The module stays in the start. own_secrets has two forms of
+# duplicate-secret.
+test_mcp_manifest_module_author_messages() {
+  setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/mcp.local/github"
+  cp "$AB/mcp/github/module.toml" "$CFG/mcp.local/github/"
+  config "AB_MCP=github"
+  secrets github_pat
+  ab_run --
+  assert_rc 0
+  local w="warning: MCP module 'github' has \\[images\\] in $CFG/mcp.local/github/module.toml and no mcp.sh, so no sidecar starts: copy the full directory of the module \\(README, Writing a module\\)$"
+  assert_out "$w"
+  assert_eq "$(grep -cE -- "$w" "$T/out")" 1 "the warnings for one start"
+  assert_file_has "$(cache mcp-claude.json)" '"github"'
+  assert_no_out "'context7' has \\[images\\]"
+  # The full copy: no warning.
+  cp "$AB/mcp/github/"* "$CFG/mcp.local/github/"
+  ab_run --
+  assert_rc 0
+  assert_no_out "has \\[images\\]"
+  manifest_module a 'format = 1' 'own_secrets = ["db"]' '[secrets.db]' '[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"'
+  : > "$CFG/config.toml"; config "AB_MCP=a"
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:2: own_secrets: 'db' is also in \\[secrets\\]: keep it in one place \\(duplicate-secret\\)$"
+  manifest_module a 'format = 1' 'own_secrets = ["db", "db"]' '[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"'
+  ab_run --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*/a/module.toml:2: own_secrets: 'db' is two times in own_secrets: keep it one time \\(duplicate-secret\\)$"
 }
 
 # A program that the top level of mcp.sh starts in the background does not
@@ -2055,6 +2095,16 @@ test_tabularis_bridge_install() {
   return 0
 }
 
+# A copy of the module in mcp.local/ names the lock file of the copy.
+test_tabularis_local_copy() {
+  tab_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/mcp.local"
+  cp -R "$AB/mcp/tabularis" "$CFG/mcp.local/tabularis"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_rc 0
+  assert_out "installing the tabularis bridge \\(supergateway, from $CFG/mcp.local/tabularis/bridge/package-lock.json\\)"
+}
+
 test_tabularis_bridge_files_missing() {
   tab_setup "${FUNCNAME[0]}"
   rm "$AB/mcp/tabularis/bridge/package-lock.json"
@@ -2176,11 +2226,17 @@ test_tabularis_errors() {
   assert_skipped tabularis
   assert_out "TABULARIS_CMD may hold only"
   local p
-  for p in 80 08080 70000; do
+  # The port check of module.toml refuses what is not a port. mcp_check
+  # refuses a port below 1024.
+  : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_PORT=80"
+  ab_run AB_TABULARIS_WAIT=0 --
+  assert_skipped tabularis
+  assert_out "TABULARIS_PORT must be 1024 or more, got '80'"
+  for p in 08080 70000; do
     : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_PORT=$p"
     ab_run AB_TABULARIS_WAIT=0 --
     assert_skipped tabularis
-    assert_out "TABULARIS_PORT must be a port from 1024 to 65535, got '$p'"
+    assert_out "left out of this session: $CFG/config.toml:2: TABULARIS_PORT: not a port: .* \\(port\\)$"
   done
   : > "$CFG/config.toml"; config "AB_MCP=tabularis" "TABULARIS_CMD=./bin/tabularis"
   ab_run AB_TABULARIS_WAIT=0 --

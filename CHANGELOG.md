@@ -30,6 +30,20 @@ the steps a release needs from you, such as a rebuild.
   old copy stays in `~/.cache/agentbox/sidecars/ab-mcp-woodpecker/` until
   agentbox removes the module, for example when you disable it. The old
   copy does no harm.
+- Better messages for a module that you write or copy:
+  - A module with `[images]` in its `module.toml` and no `mcp.sh` starts
+    no sidecar. Now agentbox shows a warning: copy the full directory of
+    the module.
+  - The messages of bb4 about a missing `package-lock.json` and of the
+    tabularis bridge install name the directory of the module. A copy in
+    `mcp.local/` shows its own path.
+  - The `duplicate-secret` message has two texts: one for a name in
+    `[secrets]` and in `own_secrets`, one for a name two times in
+    `own_secrets`.
+  - `TABULARIS_PORT` now has the `port` check. A value that is not a port
+    gets the message of the check, for example `not a port: ... (port)`.
+    A port below 1024 gets `TABULARIS_PORT must be 1024 or more, got
+    '<port>'`.
 
 ## v0.2.2
 

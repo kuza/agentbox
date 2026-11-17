@@ -45,8 +45,9 @@ mcp_check() {
   elif [[ "${cmd%% *}" == */* && "${cmd%% *}" != /* ]]; then
     echo "TABULARIS_CMD: give the command by name or as an absolute path, got '${cmd%% *}'"
   fi
-  if [[ ! "$port" =~ ^[1-9][0-9]{0,4}$ ]] || (( port < 1024 || port > 65535 )); then
-    echo "TABULARIS_PORT must be a port from 1024 to 65535, got '$port'"
+  # The port check of module.toml passed before: only the lower limit stays.
+  if (( port < 1024 )); then
+    echo "TABULARIS_PORT must be 1024 or more, got '$port'"
   fi
   if [[ ! "${AB_TABULARIS_WAIT:-60}" =~ ^[0-9]+$ ]]; then
     echo "AB_TABULARIS_WAIT must be a number of seconds, got '${AB_TABULARIS_WAIT:-}'"
@@ -167,7 +168,7 @@ tabularis_bridge_dir() {
 # after an hour.
 tabularis_install_bridge() {  # <npm> <dir>
   local base="${2%/*}" tmp
-  echo "agentbox: installing the tabularis bridge (supergateway, from mcp/tabularis/bridge/package-lock.json)" >&2
+  echo "agentbox: installing the tabularis bridge (supergateway, from $MCP_DIR/bridge/package-lock.json)" >&2
   mkdir -p "$base" || return 1
   find "$base" -maxdepth 1 -name '.install.*' -mmin +60 -exec rm -rf {} + 2>/dev/null
   tmp="$(mktemp -d "$base/.install.XXXXXX")" || return 1   # not bridge-*

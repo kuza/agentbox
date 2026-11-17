@@ -24,8 +24,8 @@ mcp_start() {
   ws="$ws://${MCP_FIELD[BB4_URL.host]}:$BB4_DEVTOOLS_PORT/u/$BB4_USER/devtools/browser"
 
   if [[ ! -f "$MCP_DIR/devtools/package-lock.json" ]]; then
-    ab_error "mcp/bb4/devtools/package-lock.json is missing: in a clone, run" \
-             "(cd mcp/bb4/devtools && npm install --package-lock-only --ignore-scripts)" \
+    ab_error "$MCP_DIR/devtools/package-lock.json is missing: run" \
+             "(cd '$MCP_DIR/devtools' && npm install --package-lock-only --ignore-scripts)" \
              "on the host (README, Remote browser (bb4))"
     exit 1
   fi

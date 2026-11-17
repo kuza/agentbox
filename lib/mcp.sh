@@ -185,7 +185,12 @@ MCP_OLD_VARS=(MCP_URL MCP_DESCRIPTION MCP_CALLER_SECRET MCP_SERVERS MCP_SECRETS_
 mcp_bind() {  # <name> [--check]
   # Names that the top level of mcp.sh does not use: it sees these locals.
   local _mcp_k _mcp_why _mcp_old
-  [[ -f "$MCP_DIR/mcp.sh" ]] || return 0
+  if [[ ! -f "$MCP_DIR/mcp.sh" ]]; then
+    # Only the code of a module starts its sidecars, with its images.
+    (( ! ${#MCP_IMAGES[@]} )) ||
+      ab_warn "MCP module '$1' has [images] in $MCP_DIR/module.toml and no mcp.sh, so no sidecar starts: copy the full directory of the module (README, Writing a module)"
+    return 0
+  fi
   if ! mcp_parses "$MCP_DIR"; then
     echo "its mcp.sh does not parse (bash -n $MCP_DIR/mcp.sh)"
     return 2
@@ -478,8 +483,11 @@ mcp_load_manifest() {  # <name> [--declared]
     if [[ "$k" == mcp_caller ]]; then
       MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: agentbox makes mcp_caller for a server with caller = true; remove it (reserved-secret)"
       return 2
+    elif [[ " ${MCP_OWN_SECRETS[*]-} " == *" $1_$k "* ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: '$k' is two times in own_secrets: keep it one time (duplicate-secret)"
+      return 2
     elif [[ -n "${MCP_SECRET[$k]+x}" ]]; then
-      MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: '$k' is in [secrets] or two times in own_secrets: keep it one time (duplicate-secret)"
+      MCP_PROBLEM="$(mcp_manifest_at own_secrets): own_secrets: '$k' is also in [secrets]: keep it in one place (duplicate-secret)"
       return 2
     fi
     MCP_SECRET[$k]="$1_$k"

@@ -16,6 +16,7 @@ help = "the command that runs Tabularis: a name or an absolute path, with only l
 
 [settings.TABULARIS_PORT]
 default = "47821"
+check = "port"
 help = "the port of supergateway on 127.0.0.1, from 1024 to 65535"
 
 [[servers]]
