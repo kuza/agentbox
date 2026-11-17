@@ -23,6 +23,13 @@ the steps a release needs from you, such as a rebuild.
   `~/.cache/agentbox/modules/`. agentbox writes the index only when it
   changed. With the eight shared modules, this makes each start about
   90 ms faster. `agentbox uninstall` finds the same images and secrets.
+- woodpecker: the copy of `WOODPECKER_CA` now has the fixed name
+  `woodpecker-ca.pem`. Before, the copy kept the name of your file. A CA
+  file named `.module` or `nginx.conf.template` replaced a file of the
+  sidecar, and nginx did not start. A name with `:` broke the mount. The
+  old copy stays in `~/.cache/agentbox/sidecars/ab-mcp-woodpecker/` until
+  agentbox removes the module, for example when you disable it. The old
+  copy does no harm.
 
 ## v0.2.2
 

@@ -53,12 +53,14 @@
 #                        Code outside the functions runs without set -e.
 #   mcp_start()          starts the module's sidecars with start_sidecar, if
 #                        it has any. MCP_DIR is the module's directory. Mount
-#                        its files through sidecar_copy, never directly. Name
-#                        the sidecars ab-mcp-<name> or ab-mcp-<name>-<part>
-#                        (<name> the module's): run.sh removes such
-#                        containers that no enabled module started, except
-#                        a skipped module's (mcp_skip). A program that must
-#                        run on the host goes through start_host_unit
+#                        its files through sidecar_copy <container> <file>
+#                        [name], never directly. Give a file of the user a
+#                        fixed [name]. Name the sidecars ab-mcp-<name> or
+#                        ab-mcp-<name>-<part> (<name> the module's): run.sh
+#                        removes such containers that no enabled module
+#                        started, except a skipped module's (mcp_skip). A
+#                        program that must run on the host goes through
+#                        start_host_unit
 #                        (lib/sidecars.sh), named agentbox-mcp-<name>[-*]. It runs
 #                        in a subshell: on an error it says why with
 #                        ab_error (the reason the warning gives) and exits

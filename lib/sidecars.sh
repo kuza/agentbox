@@ -198,10 +198,19 @@ module_remove() {  # <module>
 # Config files reach sidecars as copies in the cache, never from the repo:
 # a sidecar mounts its files with ":Z", a label private to that container,
 # which on the repo's own file would lock out agent sessions and git in them
-# (README, Troubleshooting). Each container gets a copy of its own.
-sidecar_copy() {  # <container> <file>: prints the path of a fresh copy
+# (README, Troubleshooting). Each container gets a copy of its own. The copy
+# keeps the base name of <file>, or gets [name]. Give a file of the user a
+# fixed name: its own name can be .module or the name of a template, or hold
+# a ":" that breaks the -v mount. [name] has only letters, digits, ".", "_"
+# and "-", and no "." at the start: it cannot leave the directory or replace
+# the owner mark (.module).
+sidecar_copy() {  # <container> <file> [name]: prints the path of a fresh copy
+  if [[ -n "${3:-}" && ! "$3" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*$ ]]; then
+    ab_error "sidecar_copy: bad name of the copy: '$3' (use letters, digits, '.', '_' and '-', with no '.' at the start)"
+    return 1
+  fi
   sidecar_dir "$1" >/dev/null || return 1
-  cache_copy "sidecars/$1" "$2"
+  cache_copy "sidecars/$1" "$2" "${3:-}"
 }
 
 # The directory of <container>'s copies in the cache, marked with the module

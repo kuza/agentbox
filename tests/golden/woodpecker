@@ -23,7 +23,7 @@ podman network exists ab-mcp-woodpecker
 podman network inspect ab-mcp-woodpecker --format {{.Internal}}
 podman rm -f -v ab-mcp-woodpecker
 podman rm -f -v ab-mcp-woodpecker-srv
-podman run -d --replace --name ab-mcp-woodpecker --label agentbox.config=<hash> --label agentbox.module=woodpecker --network ab-internal --network ab-egress --network ab-mcp-woodpecker --label agentbox.upstream=ab-mcp-woodpecker-srv-1 -e WOODPECKER_URL=https://ci.example.internal -e WOODPECKER_CA_FILE=/etc/nginx/woodpecker-ca.pem --secret woodpecker_token,type=env,target=WP_TOKEN --secret woodpecker_bridge_key,type=env,target=WP_BRIDGE_KEY --secret woodpecker_mcp_caller,type=env,target=WP_CALLER_TOKEN -v <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/ca.pem:/etc/nginx/woodpecker-ca.pem:ro,Z -v <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
+podman run -d --replace --name ab-mcp-woodpecker --label agentbox.config=<hash> --label agentbox.module=woodpecker --network ab-internal --network ab-egress --network ab-mcp-woodpecker --label agentbox.upstream=ab-mcp-woodpecker-srv-1 -e WOODPECKER_URL=https://ci.example.internal -e WOODPECKER_CA_FILE=/etc/nginx/woodpecker-ca.pem --secret woodpecker_token,type=env,target=WP_TOKEN --secret woodpecker_bridge_key,type=env,target=WP_BRIDGE_KEY --secret woodpecker_mcp_caller,type=env,target=WP_CALLER_TOKEN -v <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/woodpecker-ca.pem:/etc/nginx/woodpecker-ca.pem:ro,Z -v <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro,Z docker.io/library/nginx:alpine
 podman run -d --replace --name ab-mcp-woodpecker-srv --label agentbox.config=<hash> --label agentbox.module=woodpecker --network ab-mcp-woodpecker --dns 127.0.0.1 -e WOODPECKER_SERVER=http://ab-mcp-woodpecker:8081 -e WOODPECKER_MCP_READ_ONLY=true -e PORT=8000 ghcr.io/rtuszik/woodpecker-mcp:0.5.3
 podman secret create woodpecker_bridge_key -
 podman secret create woodpecker_mcp_caller -
@@ -31,10 +31,6 @@ woodpecker http://ab-mcp-woodpecker:8080/mcp
 == session
 NO_PROXY=ab-mcp-woodpecker,ab-llm-openai
 woodpecker_mcp_caller,type=env,target=AB_MCP_TOKEN_WOODPECKER
-== <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/ca.pem
------BEGIN CERTIFICATE-----
-golden
------END CERTIFICATE-----
 == <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/nginx.conf.template
 # nginx template, rendered by the official nginx image's envsubst entrypoint.
 # Only variables defined in the environment are substituted:
@@ -92,3 +88,7 @@ server {
 
     location / { return 404; }
 }
+== <T>/home/.cache/agentbox/sidecars/ab-mcp-woodpecker/woodpecker-ca.pem
+-----BEGIN CERTIFICATE-----
+golden
+-----END CERTIFICATE-----

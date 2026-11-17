@@ -1592,6 +1592,46 @@ test_mcp_woodpecker() {
   return 0
 }
 
+# The copy of WOODPECKER_CA has a fixed name. With the name of the user, a
+# CA named .module or nginx.conf.template replaced the owner mark or the
+# template, and a name with : broke the -v mount.
+test_mcp_woodpecker_ca_name() {
+  setup "${FUNCNAME[0]}"
+  secrets woodpecker_token
+  local name dir="$T/home/.cache/agentbox/sidecars/ab-mcp-woodpecker" want
+  for name in .module nginx.conf.template a:b.pem; do
+    mkdir -p "$T/ca"
+    printf '%s\n' "-----BEGIN CERTIFICATE-----" "$name" > "$T/ca/$name"
+    : > "$CFG/config.toml"; config "AB_MCP=woodpecker" "WOODPECKER_URL=https://ci.example" "WOODPECKER_CA=$T/ca/$name"
+    ab_run --
+    assert_rc 0
+    want=" -v $dir/woodpecker-ca.pem:/etc/nginx/woodpecker-ca.pem:ro,Z "
+    [[ "$(run_line ab-mcp-woodpecker)" == *"$want"* ]] || fail "$name: CA mount: $(run_line ab-mcp-woodpecker)"
+    assert_eq "$(cat "$dir/woodpecker-ca.pem")" "$(cat "$T/ca/$name")" "$name: CA copy"
+    assert_eq "$(cat "$dir/.module")" woodpecker "$name: owner mark"
+    cmp -s "$dir/nginx.conf.template" "$ROOT/mcp/woodpecker/nginx.conf.template" || fail "$name: the template is not the template of the module"
+  done
+}
+
+# sidecar_copy with [name]: a file of the user named .module keeps the owner
+# mark, and a bad [name] (.module, ../x, a:b) is refused with no copy.
+test_sidecar_copy_name() {
+  setup "${FUNCNAME[0]}"
+  local dir="$T/cache/agentbox/sidecars/ab-mcp-x" name
+  mkdir -p "$T/user"; echo "the CA" > "$T/user/.module"
+  sc() { XDG_CACHE_HOME="$T/cache" bash -c \
+    'source "$1/lib/config.sh"; source "$1/lib/sidecars.sh"; AB_CURRENT_MODULE=x; sidecar_copy ab-mcp-x "$2" "$3"' _ "$ROOT" "$@" 2>"$T/err"; }
+  assert_eq "$(sc "$T/user/.module" x-ca.pem)" "$dir/x-ca.pem" "path of the copy"
+  assert_eq "$(cat "$dir/.module")" x "owner mark after a copy of .module"
+  assert_eq "$(cat "$dir/x-ca.pem")" "the CA" "content of the copy"
+  for name in .module ../x a:b 'a b'; do
+    sc "$T/user/.module" "$name" >/dev/null && fail "$name: name accepted"
+    grep -q "^error: sidecar_copy: bad name of the copy: '$name'" "$T/err" || fail "$name: no error: $(cat "$T/err")"
+    assert_eq "$(cat "$dir/.module")" x "$name: owner mark"
+  done
+  [[ ! -e "$T/cache/agentbox/sidecars/x" && ! -e "$dir/a:b" ]] || fail "a refused name made a copy"
+}
+
 test_mcp_dbhub() {
   # config.py parses with tomllib (Python 3.11+), here as in the image.
   python3 -c 'import tomllib' 2>/dev/null || { echo "  (skipped: needs Python 3.11+ for tomllib)"; return 0; }

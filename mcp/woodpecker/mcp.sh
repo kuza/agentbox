@@ -36,7 +36,8 @@ mcp_start() {
   fi
   if [[ -n "${WOODPECKER_CA:-}" ]]; then
     ca=/etc/nginx/woodpecker-ca.pem
-    f="$(sidecar_copy ab-mcp-woodpecker "$WOODPECKER_CA")" || exit 1
+    # A fixed name: the name of the user can replace a file of the sidecar.
+    f="$(sidecar_copy ab-mcp-woodpecker "$WOODPECKER_CA" woodpecker-ca.pem)" || exit 1
     ca_mount=(-v "$f:$ca:ro,Z")
   fi
   # A random key between nginx and the server, made once.
