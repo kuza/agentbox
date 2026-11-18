@@ -49,6 +49,11 @@ the steps a release needs from you, such as a rebuild.
   each skipped test and the reason, for example a missing `script`. An
   exported setting of an MCP module, such as `TABULARIS_PORT` or
   `GH_OWNERS`, no longer changes the tests.
+- A new shared pi extension source, `pi-idle` (ZoRDoK/pi-idle). It shows
+  the state of pi in the title of the terminal tab: a spinner while pi
+  works, and `✓` when pi waits for you. Enable it with `AB_PI_EXTENSIONS`
+  or in `agentbox setup`. In tmux, add `set -g set-titles on` to
+  `~/.tmux.conf`.
 
 ## v0.2.2
 

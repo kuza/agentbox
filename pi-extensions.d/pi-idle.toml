@@ -1,0 +1,7 @@
+# ZoRDoK/pi-idle: the state of pi in the title of the terminal tab. A
+# spinner shows while pi works, and a check mark shows when pi waits for
+# you. Above 50% of the context, the title also shows the percentage. It
+# only sets the title: no network, no file writes, no npm dependencies.
+# In tmux, the title shows only with "set -g set-titles on".
+# Enable with AB_PI_EXTENSIONS=pi-idle (README, pi extensions).
+url = "https://github.com/ZoRDoK/pi-idle"
