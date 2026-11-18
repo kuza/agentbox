@@ -65,6 +65,9 @@ the steps a release needs from you, such as a rebuild.
   works, and `✓` when pi waits for you. Enable it with `AB_PI_EXTENSIONS`
   or in `agentbox setup`. In tmux, add `set -g set-titles on` to
   `~/.tmux.conf`.
+- With `GH_OWNERS`, the `NO_PROXY` of the session now has `ab-mcp-github`
+  one time. Before, it had the host one time for each server. Nothing else
+  changes.
 
 ## v0.2.2
 

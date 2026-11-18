@@ -1168,7 +1168,11 @@ mcp_collect() {
       # the module lists in MCP_EGRESS is a remote server: through squid,
       # also when its name has no dot.
       host="${url#*://}"; host="${host%%[:/]*}"
-      if [[ "$host" != *.* ]] && ! mcp_egress_has "$host"; then MCP_NO_PROXY+=("$host"); fi
+      # Each host one time: the servers of a module can share a host (the
+      # server github and each owner server).
+      if [[ "$host" != *.* && " ${MCP_NO_PROXY[*]-} " != *" $host "* ]] && ! mcp_egress_has "$host"; then
+        MCP_NO_PROXY+=("$host")
+      fi
       MCP_MANAGED+="$server $url"$'\n'
     done < <(mcp_servers)
   done

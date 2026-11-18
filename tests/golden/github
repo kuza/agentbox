@@ -32,7 +32,7 @@ podman run -d --replace --name ab-mcp-github --label agentbox.config=<hash> --la
 podman run -d --replace --name ab-mcp-github-srv --label agentbox.config=<hash> --label agentbox.module=github --network ab-egress ghcr.io/github/github-mcp-server:latest http
 podman secret create github_mcp_caller -
 == session
-NO_PROXY=ab-mcp-github,ab-mcp-github,ab-mcp-github,ab-llm-openai
+NO_PROXY=ab-mcp-github,ab-llm-openai
 github_mcp_caller,type=env,target=AB_MCP_TOKEN_GITHUB
 == <T>/home/.cache/agentbox/sidecars/ab-mcp-github/default.conf.template
 # nginx template, rendered by the official nginx image's envsubst entrypoint.

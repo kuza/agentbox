@@ -1877,6 +1877,8 @@ test_github_more_owners() {
   grep -q '"github-myorg": { "type": "http", "url": "http://ab-mcp-github:8080/o/myorg/mcp"' "$j" || fail "github-myorg missing"
   grep -q '"github-other-org": .*/o/other-org/mcp"' "$j" || fail "github-other-org missing"
   assert_eq "$(grep -c '"github' "$j")" 3 "servers"
+  # The three servers share one host: it is one time in NO_PROXY.
+  session_args | grep -qx 'NO_PROXY=ab-mcp-github,ab-llm-openai' || fail "NO_PROXY: $(session_args | grep NO_PROXY)"
   # nginx gets each PAT under a numbered name, and a location for each.
   run_line ab-mcp-github | grep -q -- '--secret github_pat_myorg,type=env,target=GH_PAT_1 ' || fail "PAT of myorg not GH_PAT_1"
   run_line ab-mcp-github | grep -q -- '--secret github_pat_other-org,type=env,target=GH_PAT_2 ' || fail "PAT of other-org not GH_PAT_2"
