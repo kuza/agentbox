@@ -888,9 +888,13 @@ url = "http://ab-mcp-graylog:8080/mcp"
 caller = true
 ```
 
-The new `mcp/graylog/mcp.sh` keeps `mcp_secret_value` as it was. In `mcp_start`, only the names of the secrets change:
+The new `mcp/graylog/mcp.sh` keeps `mcp_secret_value` as it was. In `mcp_start`, the URL comes from `${MCP_FIELD[GRAYLOG_URL.base]}`, and the names of the secrets change:
 
 ```bash
+  local url="${MCP_FIELD[GRAYLOG_URL.base]}"
+  url="${url%/api/mcp}"
+  url="${url%/api}"
+  while [[ "$url" == */ ]]; do url="${url%/}"; done
     --secret "${MCP_SECRET[basic]},type=env,target=GRAYLOG_BASIC" \
     --secret "${MCP_SECRET[mcp_caller]},type=env,target=GRAYLOG_CALLER_TOKEN" \
 ```
