@@ -23,6 +23,17 @@ the steps a release needs from you, such as a rebuild.
   `~/.cache/agentbox/modules/`. agentbox writes the index only when it
   changed. With the eight shared modules, this makes each start about
   90 ms faster. `agentbox uninstall` finds the same images and secrets.
+- `agentbox uninstall` reads a damaged index file of an MCP module in
+  `~/.cache/agentbox/modules/` better:
+  - It keeps the last names of a file with no NUL at the end. Before, it
+    lost them, and their secrets stayed.
+  - A new line in a list of the index now separates names, also at a start
+    and in `agentbox setup`. Before, agentbox used only the first line.
+    agentbox writes no new line there, but a file from outside agentbox
+    can have one.
+  - For an index file that it cannot read, it shows
+    `agentbox: cannot read <file>, so its secrets stay: ...`, and the same
+    line for the images. Before, bash showed its own error.
 - woodpecker: the copy of `WOODPECKER_CA` now has the fixed name
   `woodpecker-ca.pem`. Before, the copy kept the name of your file. A CA
   file named `.module` or `nginx.conf.template` replaced a file of the

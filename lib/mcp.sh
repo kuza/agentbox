@@ -861,7 +861,7 @@ mcp_index_save() {  # <name> [--add <for_each name>...]
       old[$k]="${pairs[i+1]}"
     done
   fi
-  read -ra names <<<"${old[secrets.for_each]-}"
+  mcp_index_list names "${old[secrets.for_each]-}"
   if (( rc )); then
     :
   elif [[ "${2:-}" == --add ]]; then
@@ -900,6 +900,16 @@ mcp_index_read() {  # <file> <array>
   return "$_mir_rc"
 }
 
+# The names of the list value <value> of an index field in the array
+# <array>. Each white space separates names, also a new line: agentbox
+# writes one line, but a file from outside agentbox can have more.
+mcp_index_list() {  # <array> <value>
+  local -n _mil_out="$1"
+  _mil_out=()
+  # read returns 1 at the end of the input.
+  read -rd '' -a _mil_out <<<"$2" || true
+}
+
 # 0 when the cache index file <file> needs no write. Without --add, the
 # file is byte-equal to mcp_index with the for_each names of the file.
 # With --add, the file has index.format and each given for_each name.
@@ -911,12 +921,11 @@ mcp_index_current() {  # <file> [--add <for_each name>...]
   local -A old=()
   [[ -f "$1" ]] && mcp_index_read "$1" got || return 1
   for (( i = 0; i < ${#got[@]}; i += 2 )); do old[${got[i]}]="${got[i+1]}"; done
-  fe="${old[secrets.for_each]-}"
-  read -ra names <<<"$fe"
+  mcp_index_list names "${old[secrets.for_each]-}"
   if [[ "${2:-}" == --add ]]; then
     [[ -n "${old[index.format]+x}" ]] || return 1
     for n in "${@:3}"; do
-      [[ " $fe " == *" $n "* ]] || return 1
+      [[ " ${names[*]-} " == *" $n "* ]] || return 1
     done
     return 0
   fi
@@ -983,15 +992,22 @@ mcp_uninstall_names() {  # images|secrets [<values>]
   local fields=images d f k v name cache="${XDG_CACHE_HOME:-$HOME/.cache}/agentbox/modules"
   # <the reason>, <the module>: for_each secrets that can stay.
   local keep="agentbox: %s, so it removes only the secrets of the list settings of MCP module '%s' that its index has. If you have other such secrets, remove them yourself (podman secret ls).\n"
-  local -a dirs=("${MCP_DIRS[@]}") MCP_DIRS=() names=() w=()
+  local -a dirs=("${MCP_DIRS[@]}") MCP_DIRS=() names=() pairs=() w=()
+  local i
   [[ "$1" == images ]] || fields="secrets own_secrets caller_secret secrets.for_each"
   for f in "$SCRIPT_DIR"/mcp/*/module.index "$cache"/*; do
     name="${f%/module.index}"; name="${name##*/}"
     # A name with a dot is a temporary file of mcp_index_save.
     [[ -f "$f" && "$name" =~ $AB_NAME_RE ]] || continue
-    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
-      [[ " $fields " != *" $k "* ]] || { read -ra w <<<"$v"; names+=(${w[@]+"${w[@]}"}); }
-    done < "$f"
+    # A damaged file (status 1) gives the pairs that it has.
+    mcp_index_read "$f" pairs || (( $? == 1 )) || {
+      echo "agentbox: cannot read $f, so its $1 stay: if they are on this host, remove them yourself (podman ${1/secrets/secret ls})." >&2
+      continue
+    }
+    for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+      k="${pairs[i]}" v="${pairs[i+1]}"
+      [[ " $fields " != *" $k "* ]] || { mcp_index_list w "$v"; names+=(${w[@]+"${w[@]}"}); }
+    done
   done
   for d in "${dirs[@]}"; do
     # One directory at a time: a module of yours and the shared one of that

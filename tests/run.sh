@@ -5296,8 +5296,16 @@ test_mcp_index_damaged() {
       printf "$2" > "$f"
       touch -d @1000000000 "$f"
       mcp_index_save ix "${@:3}" || echo "$1: status $?"
-      echo "$1 $(stat -c %Y "$f") $(tr '\0' '|' < "$f")"
+      echo "$1 $(stat -c %Y "$f") $(tr '\0\n' '|~' < "$f")"
     }
+    # names <what> <file content>: the secrets that uninstall finds in the
+    # cache index, with no other index and no manifest.
+    names() {
+      printf "$2" > "$f"
+      echo "$1 $(SCRIPT_DIR="$T/no-tree"; MCP_DIRS=(); mcp_uninstall_names secrets | paste -sd' ' -)"
+    }
+    mkdir -p "$T/no-tree/mcp" "$T/glob"
+    touch "$T/glob/ix_team_x" "$T/glob/ix_team_y"
     full="index.format\0001\000manifest.sha\000$sha\000images\000\000secrets\000\000own_secrets\000\000caller_secret\000\000secrets.for_each\000ix_team_a"
     save current "$full\000"
     save no-nul "$full"
@@ -5307,6 +5315,18 @@ test_mcp_index_damaged() {
     save add-lone-key "index.format\0001\000secrets.for_each\000ix_team_a\000x\000" --add ix_team_a
     save add-no-format "secrets.for_each\000ix_team_a\000" --add ix_team_a
     save add-empty-key "index.format\0001\000\000v\000secrets.for_each\000ix_team_a\000" --add ix_team_a
+    # A list value with a new line: each line gives names.
+    lf="${full%ix_team_a}ix_team_a\nix_team_b"
+    save lf "$lf\000"
+    save add-lf "index.format\0001\000secrets.for_each\000ix_team_a\nix_team_b\000" --add ix_team_c
+    save add-lf-current "index.format\0001\000secrets.for_each\000ix_team_a\nix_team_b\000" --add ix_team_b
+    names names-no-nul "index.format\0001\000secrets.for_each\000ix_team_a ix_team_b"
+    names names-lf "index.format\0001\000secrets.for_each\000ix_team_a\nix_team_b\000"
+    # A "*" in a name does not expand as a glob, also in a directory with
+    # files that match. The name filter of uninstall then refuses it.
+    cd "$T/glob"
+    names names-glob "index.format\0001\000secrets.for_each\000ix_team_a ix_team_*\000"
+    save add-glob "index.format\0001\000secrets.for_each\000ix_team_a ix_team_*\000" --add ix_team_c
   ) > "$T/out" 2>&1
   out="$(cat "$T/out")"
   local head="index.format|1|manifest.sha|$sha|images||secrets||own_secrets||caller_secret||secrets.for_each|"
@@ -5318,7 +5338,18 @@ test_mcp_index_damaged() {
   assert_eq "$(sed -n 6p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-lone-key NEW index.format|1|secrets.for_each|ix_team_a|" "--add, a key with no value"
   assert_eq "$(sed -n 7p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-no-format NEW index.format|1|secrets.for_each|ix_team_a|" "--add, a file without index.format"
   assert_eq "$(sed -n 8p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-empty-key NEW index.format|1|secrets.for_each|ix_team_a|" "--add, an empty key"
-  [[ "$(sed -n '2,3p;5,8p' <<<"$out")" != *" 1000000000 "* ]] || fail "a damaged file without a write"$'\n'"$out"
+  assert_eq "$(sed -n 9p <<<"$out" | sed 's/ [0-9]* / NEW /')" "lf NEW ${head}ix_team_a ix_team_b|" "a list value with a new line"
+  assert_eq "$(sed -n 10p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-lf NEW index.format|1|secrets.for_each|ix_team_a ix_team_b ix_team_c|" \
+    "--add, a list value with a new line"
+  assert_eq "$(sed -n 11p <<<"$out")" "add-lf-current 1000000000 index.format|1|secrets.for_each|ix_team_a~ix_team_b|" \
+    "--add, a name after a new line"
+  assert_eq "$(sed -n 12p <<<"$out")" "names-no-nul ix_team_a ix_team_b" "uninstall, a file with no NUL at the end"
+  assert_eq "$(sed -n 13p <<<"$out")" "names-lf ix_team_a ix_team_b" "uninstall, a list value with a new line"
+  assert_eq "$(sed -n 14p <<<"$out")" "names-glob ix_team_a" "uninstall, a name with a glob"
+  assert_eq "$(sed -n 15p <<<"$out" | sed 's/ [0-9]* / NEW /')" "add-glob NEW index.format|1|secrets.for_each|ix_team_* ix_team_a ix_team_c|" \
+    "--add, a name with a glob"
+  assert_eq "$(sed -n '16,$p' <<<"$out")" "" "more output"
+  [[ "$(sed -n '2,3p;5,10p' <<<"$out")" != *" 1000000000 "* ]] || fail "a damaged file without a write"$'\n'"$out"
 }
 # index_stamps: the name, the time and the inode of each cache index file.
 index_stamps() { stat -c '%n %Y %i' "$(cache modules)"/* | sed "s|^$T/||"; }
@@ -5486,6 +5517,24 @@ test_uninstall_manifest_without_python() {
   grep -qx 'podman rmi docker.io/x/ix:1' "$STUB_DIR/calls" || fail "the image of ix left behind"
   assert_out "no index of MCP module 'yours' .*keeps its images"
   assert_out "no index of MCP module 'yours' .*keeps its secrets.*podman secret ls"
+}
+
+# Uninstall skips a cache index file that agentbox cannot read, and tells
+# you that its names stay. Root can read the file.
+test_uninstall_index_unreadable() {
+  setup "${FUNCNAME[0]}"
+  if (( ! EUID )); then skip "root can read each file"; return 0; fi
+  index_tree
+  mkdir -p "$(cache modules)"
+  printf '%s\0' index.format 1 images docker.io/x/iz:1 secrets.for_each iz_team_a > "$(cache modules/iz)"
+  chmod 000 "$(cache modules/iz)"
+  secrets iz_team_a
+  uninstall_all
+  assert_rc 0
+  assert_eq "$(paste -sd' ' "$STUB_DIR/secrets")" "iz_team_a" "secrets after --all"
+  assert_out "^agentbox: cannot read $(cache modules/iz), so its images stay: .*\(podman images\)"
+  assert_out "^agentbox: cannot read $(cache modules/iz), so its secrets stay: .*\(podman secret ls\)"
+  assert_no_out "Permission denied"
 }
 
 # After a rollback, uninstall without Python reads the index of the
