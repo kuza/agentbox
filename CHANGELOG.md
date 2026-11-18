@@ -16,9 +16,10 @@ the steps a release needs from you, such as a rebuild.
   `<place>: <KEY>: '<item>': <reason> (<check>)`. The v0.2.1 notes said
   that the message does not name the item. The message shows at most 40
   characters of the item, and a control character becomes `?`.
-- A new line in the value of a list setting from the environment now
-  separates items, for example `AB_MCP=$'grafana\ngithub'` or
-  `GH_OWNERS=$'a\nb'`. Before, agentbox used only the first line.
+- A new line or a carriage return in the value of a list setting from
+  the environment now separates items, for example
+  `AB_MCP=$'grafana\ngithub'` or `GH_OWNERS=$'a\nb'`. Before, agentbox
+  used only the first line.
 - A start with no change writes no index file of an MCP module in
   `~/.cache/agentbox/modules/`. agentbox writes the index only when it
   changed. With the eight shared modules, this makes each start about

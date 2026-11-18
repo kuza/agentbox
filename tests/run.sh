@@ -1930,6 +1930,38 @@ test_core_list_new_line() {
   done
 }
 
+# The same with no config.toml: the two passes split the lists also
+# without a settings file.
+test_core_list_new_line_no_config() {
+  setup "${FUNCNAME[0]}"
+  rm -f -- "$CFG/config.toml"
+  secrets grafana_sa github_pat
+  local j nl
+  j="$(cache mcp-claude.json)"
+  for nl in $'\n' $'\r\n'; do
+    rm -f -- "$j"
+    ab_run "AB_MCP=grafana${nl}github" GRAFANA_URL=https://g.example --
+    assert_rc 0
+    grep -q '"grafana": ' "$j" || fail "grafana missing ($(printf %q "$nl"))"
+    grep -q '"github": ' "$j" || fail "github missing ($(printf %q "$nl"))"
+  done
+}
+
+# AB_SERVICES and AB_FORWARD with no config.toml: a new line (also with a
+# carriage return) separates the items, and NO_PROXY has each item.
+test_services_forward_new_line_no_config() {
+  setup "${FUNCNAME[0]}"
+  rm -f -- "$CFG/config.toml"
+  local nl np
+  for nl in $'\n' $'\r\n'; do
+    ab_run "AB_SERVICES=redis${nl}minio" "AB_FORWARD=db=db.test.example:5432${nl}mq=mq.test.example:5672" --
+    assert_rc 0
+    np="$(session_args | grep '^NO_PROXY=')"
+    [[ ",${np#NO_PROXY=}," == *,redis,minio,* ]] || fail "AB_SERVICES ($(printf %q "$nl")): $np"
+    [[ ",${np#NO_PROXY=}," == *,db,mq,* ]] || fail "AB_FORWARD ($(printf %q "$nl")): $np"
+  done
+}
+
 # The message of a failed list item names the item, after lowercase. The
 # message of a setting that is not a list has no item.
 test_list_setting_names_bad_item() {

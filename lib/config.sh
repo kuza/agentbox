@@ -76,14 +76,18 @@ CONFIG_OLD_FILE="${CONFIG_FILE%.toml}.env"
 # Reads the settings in <file> (TOML, the kind config) into variables of
 # the same names, for <keys> only. A variable in the environment wins over
 # the file. For a key of CONFIG_LIST_KEYS, this function splits the value at
-# spaces, commas and new lines, and joins the items with a space. With <warn> 1, a key of the file that is not in <keys> or <quiet
-# keys> gets a warning. Returns the status of toml_load. This is the only
-# place that reads the settings from the environment. SETTING_AT[<key>]
-# keeps the place of a value, for the message of a failed check:
-# "<file>:<line>", or "environment" for a value from the environment.
+# spaces, commas and new lines (settings_split_lists). With <warn> 1, a key
+# of the file that is not in <keys> or <quiet keys> gets a warning. Returns
+# the status of toml_load. This is the only place that reads the settings
+# from the environment, together with settings_split_lists: without a
+# settings file, the two passes call only settings_split_lists. Thus put a
+# new rule for a value from the environment in both places, or in
+# settings_split_lists. SETTING_AT[<key>] keeps the place of a value, for
+# the message of a failed check: "<file>:<line>", or "environment" for a
+# value from the environment.
 declare -gA SETTING_AT=()
 settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
-  local file="$1" warn="$2" key val items keys=" "
+  local file="$1" warn="$2" key keys=" "
   local -A values=() lines=()
   shift 2
   while (( $# )) && [[ "$1" != -- ]]; do keys+="$1 "; shift; done
@@ -101,6 +105,15 @@ settings_load() {  # <file> <warn: 0|1> <keys...> [-- <quiet keys...>]
       SETTING_AT[$key]="$file:${lines[$key]%% *}"
     fi
   done
+  settings_split_lists "$keys"
+}
+
+# Splits the value of each key of CONFIG_LIST_KEYS that is in <keys> at
+# spaces, commas and new lines, and joins the items with a space.
+# settings_load calls it, and the two passes call it when there is no
+# settings file.
+settings_split_lists() {  # <keys: one string, with a space before and after each key>
+  local keys="$1" key val items
   for key in "${CONFIG_LIST_KEYS[@]}"; do
     if [[ "$keys" == *" $key "* && -n "${!key:-}" ]]; then
       # A new line or a carriage return (only the environment gives them)
@@ -241,6 +254,8 @@ config_first_pass() {
   elif [[ -n "${AB_CONFIG:-}" ]]; then
     echo "error: AB_CONFIG: $CONFIG_FILE does not exist" >&2
     exit 2
+  else
+    settings_split_lists " ${CONFIG_KEYS[*]} "
   fi
   return 0
 }
@@ -248,6 +263,8 @@ config_first_pass() {
 config_second_pass() {  # <module keys...> -- <quiet keys: the keys of the modules that are not enabled>
   if [[ -f "$CONFIG_FILE" ]]; then
     settings_load "$CONFIG_FILE" 1 "${CONFIG_KEYS[@]}" "$@" || exit 2
+  else
+    settings_split_lists " ${CONFIG_KEYS[*]} "
   fi
   return 0
 }
