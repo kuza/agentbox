@@ -1589,10 +1589,6 @@ test_mcp_woodpecker() {
   ids="$(PATH="$T/bin:$PATH" bash -c 'source "$1/lib/sidecars.sh"; secret_ids_load; secret_ids --secret woodpecker_token,type=env --secret=woodpecker_bridge_key,type=env' _ "$ROOT")"
   assert_eq "$(cut -d' ' -f2 <<<"$ids" | paste -sd' ')" "woodpecker_token woodpecker_bridge_key" "secret_ids"
   assert_eq "$(cut -d' ' -f3 <<<"$ids" | grep -c '^id-[0-9]')" 2 "secret IDs"
-  # The daily scan covers the pinned image.
-  local image; image="$(sed -n 's/^server = "\(.*\)"$/\1/p' "$ROOT/mcp/woodpecker/module.toml")"
-  [[ -n "$image" ]] || fail "no server image in module.toml"
-  grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
   # The template: bridge key towards the server, GET and HEAD only and the token
   # towards Woodpecker, its certificate verified.
   assert_file_has "$t" 'proxy_set_header Authorization "Bearer \$\{WP_BRIDGE_KEY\}";'
@@ -1799,10 +1795,6 @@ TOML
   ab_run --
   assert_skipped dbhub
   assert_out "dbhub.toml: no \[\[sources\]\] entry"
-  # The daily scan covers the pinned image.
-  local image; image="$(sed -n 's/^server = "\(.*\)"$/\1/p' "$ROOT/mcp/dbhub/module.toml")"
-  [[ -n "$image" ]] || fail "no server image in module.toml"
-  grep -qF -- "$image" "$ROOT/.github/workflows/scan.yml" || fail "scan.yml does not scan $image"
   # Turned off: the sidecar and the copy with the passwords go.
   printf '[[sources]]\nid = "a"\n' > "$CFG/dbhub.toml"
   ab_run --
@@ -5426,6 +5418,79 @@ test_mcp_index_drift() {
   setup "${FUNCNAME[0]}"
   index_check "$ROOT"
   assert_rc 0
+}
+
+# The daily scan reads the module images from each mcp/*/module.index and
+# IMG_NGINX, and has no copy of a module image. test_mcp_index_drift checks
+# that each index is current.
+test_mcp_index_scan_reads_the_index() {
+  local y="$ROOT/.github/workflows/scan.yml" f i image fields names n=0
+  assert_file_has "$y" 'for f in mcp/\*/module\.index; do'
+  assert_file_has "$y" 's/\^IMG_NGINX='
+  for f in "$ROOT"/mcp/*/module.index; do
+    mapfile -d '' -t fields < "$f"
+    for (( i = 0; i + 1 < ${#fields[@]}; i += 2 )); do
+      [[ "${fields[i]}" == images ]] || continue
+      names=()
+      read -rd '' -a names <<<"${fields[i + 1]}" || true
+      for image in ${names[@]+"${names[@]}"}; do
+        n=$((n + 1))
+        grep -qF -- "$image" "$y" && fail "scan.yml has the image $image of ${f#"$ROOT"/}"
+      done
+    done
+  done
+  (( n > 0 )) || fail "no mcp/*/module.index gives an image"
+}
+
+# scan_step <dir>: run the script of the "Scan" step of scan.yml in <dir>,
+# as GitHub runs a run: step with no shell: (bash -e). The stub trivy prints
+# its last argument. The output is in $T/out, the summary in $T/summary.
+scan_step() {
+  mkdir -p "$T/rt"
+  printf '%s\n' '#!/bin/bash' 'echo "scanned ${!#}"' > "$T/rt/trivy"
+  chmod +x "$T/rt/trivy"
+  awk '/^      - name: Scan$/ { s = 1; next }
+       s && /^        run: \|$/ { r = 1; next }
+       r && /^          / { print substr($0, 11); next }
+       r && /^$/ { print; next }
+       r { exit }' "$ROOT/.github/workflows/scan.yml" > "$T/step.sh"
+  : > "$T/summary"
+  (cd "$1" && RUNNER_TEMP="$T/rt" GITHUB_STEP_SUMMARY="$T/summary" bash -e "$T/step.sh") > "$T/out" 2>&1
+  RC=$?
+}
+scan_step_images() { sed -n 's/^scanned //p' "$T/out" | paste -sd' '; }
+
+# The Scan step scans the three built images, then IMG_NGINX and the images
+# of each mcp/*/module.index, each one time and sorted. If it finds no
+# IMG_NGINX or no image of an index, it scans the images that it found, then
+# fails with a message in the summary.
+test_mcp_index_scan_step() {
+  setup "${FUNCNAME[0]}"
+  local built="$T/rt/agentbox.tar $T/rt/squid.tar $T/rt/bb4-devtools.tar" m
+  scan_step "$ROOT"
+  assert_rc 0
+  assert_eq "$(scan_step_images)" "$built docker.io/bytebase/dbhub:1.5.0 docker.io/grafana/mcp-grafana:latest docker.io/library/nginx:alpine ghcr.io/github/github-mcp-server:latest ghcr.io/rtuszik/woodpecker-mcp:0.5.3" "the scans of the real files"
+  grep -q 'not complete' "$T/summary" && fail "an error in the summary of the real files"
+  # No IMG_NGINX. A second module has the dbhub image and one more image, in
+  # a last field with no NUL at the end.
+  mkdir -p "$T/tree/lib" "$T/tree/mcp/zz"
+  grep -v '^IMG_NGINX=' "$ROOT/lib/config.sh" > "$T/tree/lib/config.sh"
+  for m in "$ROOT"/mcp/*/module.index; do
+    mkdir -p "$T/tree/mcp/$(basename "$(dirname "$m")")"
+    cp "$m" "$T/tree/mcp/$(basename "$(dirname "$m")")/"
+  done
+  printf 'index.format\0001\0images\0docker.io/bytebase/dbhub:1.5.0 example.org/zz:1' > "$T/tree/mcp/zz/module.index"
+  scan_step "$T/tree"
+  assert_rc 1
+  assert_eq "$(scan_step_images)" "$built docker.io/bytebase/dbhub:1.5.0 docker.io/grafana/mcp-grafana:latest example.org/zz:1 ghcr.io/github/github-mcp-server:latest ghcr.io/rtuszik/woodpecker-mcp:0.5.3" "the scans with no IMG_NGINX"
+  assert_file_has "$T/summary" 'image list is not complete: lib/config.sh gives no image in its IMG_NGINX= line'
+  # No index file: nginx only.
+  cp "$ROOT/lib/config.sh" "$T/tree/lib/config.sh"
+  rm -r "$T/tree/mcp"
+  scan_step "$T/tree"
+  assert_rc 1
+  assert_eq "$(scan_step_images)" "$built docker.io/library/nginx:alpine" "the scans with no index"
+  assert_file_has "$T/summary" 'image list is not complete: no mcp/\*/module\.index gives an image'
 }
 
 test_mcp_index_drift_missing() {

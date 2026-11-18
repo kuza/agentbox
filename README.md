@@ -1268,7 +1268,7 @@ AB_UPGRADE=1 agentbox
 - **The database stays outside the session.** Trivy downloads its vulnerability database as an image from `mirror.gcr.io` or `ghcr.io`. The session cannot reach those registries, because a registry also accepts uploads. `run.sh` gets the database the same way as the agent update: in a short-lived container, at most every 6 hours (`AB_UPDATE=1` forces it). It puts the database into the `ab-trivy` volume, which the session mounts read-only.
 - **No downloads in the session**: `TRIVY_SKIP_DB_UPDATE`, `TRIVY_SKIP_JAVA_DB_UPDATE`, `TRIVY_SKIP_CHECK_UPDATE`, `TRIVY_SKIP_VERSION_CHECK`, `TRIVY_SKIP_VEX_REPO_UPDATE` and `TRIVY_DISABLE_TELEMETRY` are set (the database update also runs with telemetry off). The scan cache stays in memory (`TRIVY_CACHE_BACKEND=memory`). The misconfiguration checks are the ones built into the Trivy binary. The Java database is not used, so Trivy does not check Java artifacts for vulnerabilities.
 - **Version**: `TRIVY_VERSION` in the `Containerfile` pins it. The build installs it from the release archive after a checksum check.
-- CI scans the images of agentbox with Trivy every day (`.github/workflows/scan.yml`). The run summary shows a report of fixable HIGH and CRITICAL issues, so that you can decide when to rebuild. The scan never fails the build.
+- CI scans the images of agentbox with Trivy every day (`.github/workflows/scan.yml`). The run summary shows a report of fixable HIGH and CRITICAL issues, so that you can decide when to rebuild. A CVE never fails the scan. The scan fails only when it cannot find the list of the pulled images.
 
 ## Your projects
 

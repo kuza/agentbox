@@ -1,9 +1,10 @@
 # A report of known vulnerabilities in agentbox's images: the agentbox image
 # built from the Containerfile (with Trivy, as AB_TRIVY=1 builds it), the
 # squid image from Containerfile.squid, and the pulled sidecar images. Only HIGH and CRITICAL ones that have a fix, since those are
-# what a rebuild (AB_UPGRADE=1) or a newer image can remove. It never fails:
-# a base image nearly always has some CVE, and the table in the run summary
-# is for deciding when to upgrade.
+# what a rebuild (AB_UPGRADE=1) or a newer image can remove. A CVE never fails
+# the run: a base image nearly always has some CVE, and the table in the run
+# summary is for deciding when to upgrade. The run fails when it cannot find
+# the list of the pulled images (see the Scan step).
 name: Scan
 
 on:
@@ -65,8 +66,41 @@ jobs:
           scan "agentbox (from the Containerfile)" --input "$RUNNER_TEMP/agentbox.tar"
           scan "agentbox-squid (from Containerfile.squid)" --input "$RUNNER_TEMP/squid.tar"
           scan "agentbox-bb4-devtools (from mcp/bb4/devtools)" --input "$RUNNER_TEMP/bb4-devtools.tar"
-          for img in docker.io/library/nginx:alpine \
-                     docker.io/grafana/mcp-grafana:latest ghcr.io/github/github-mcp-server:latest \
-                     ghcr.io/rtuszik/woodpecker-mcp:0.5.3 docker.io/bytebase/dbhub:1.5.0; do
+          # The pulled images: IMG_NGINX of lib/config.sh (the shared nginx of
+          # the modules), and the images field of each mcp/*/module.index. An
+          # index is a list of NUL-separated key and value pairs (mcp_index in
+          # lib/mcp.sh). The step runs with bash -e: a failed command before
+          # the scans must not stop the step, thus the "|| true".
+          problems=()
+          nginx="$(sed -n 's/^IMG_NGINX="\([^"]*\)"$/\1/p' lib/config.sh)" || true
+          [[ -n "$nginx" ]] || problems+=("lib/config.sh gives no image in its IMG_NGINX= line")
+          images=()
+          for f in mcp/*/module.index; do
+            fields=()
+            x=""
+            while IFS= read -r -d '' x; do fields+=("$x"); done < "$f" || true
+            # A last field with no NUL at the end stays, as in mcp_index_read.
+            [[ -z "$x" ]] || fields+=("$x")
+            for (( i = 0; i + 1 < ${#fields[@]}; i += 2 )); do
+              [[ "${fields[i]}" == images ]] || continue
+              names=()
+              read -rd '' -a names <<<"${fields[i + 1]}" || true
+              images+=(${names[@]+"${names[@]}"})
+            done
+          done
+          (( ${#images[@]} )) || problems+=("no mcp/*/module.index gives an image in its images field")
+          # Each image one time, in the same order each day.
+          all=(${nginx:+"$nginx"} ${images[@]+"${images[@]}"})
+          list=()
+          (( ${#all[@]} == 0 )) || mapfile -t list < <(printf '%s\n' "${all[@]}" | LC_ALL=C sort -u)
+          for img in ${list[@]+"${list[@]}"}; do
             scan "$img" "$img"
           done
+          # Fail after the scans, so that the report has each image found.
+          if (( ${#problems[@]} )); then
+            for p in "${problems[@]}"; do
+              echo "::error::The image list is not complete: $p."
+              echo "**Error:** the image list is not complete: $p." >> "$GITHUB_STEP_SUMMARY"
+            done
+            exit 1
+          fi
