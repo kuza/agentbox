@@ -50,14 +50,23 @@ similar service, find out what the box already has:
 
 1. Read `NO_PROXY`. It lists the names that the session reaches directly:
    the user's local services (`AB_SERVICES`), the forwards to test servers
-   (`AB_FORWARD`), and the MCP sidecars (`ab-mcp-*`).
-2. To check one name, run `getent hosts <name>`.
-3. Connect by the name and the usual port of the service, for example
-   `postgres:5432`, `redis:6379` or `rabbitmq:5672`.
+   (`AB_FORWARD`), and the sidecars of agentbox (names that start with `ab-`).
+2. Read the environment variables and the config of the project. If they
+   give a host and a port for the service, use them.
+3. A name does not show the kind of the service. For example, `tm` can be
+   a PostgreSQL server. Thus try each name that does not start with `ab-`
+   on the usual port of the service, for example
+   `timeout 2 bash -c '</dev/tcp/<name>/5432'` for PostgreSQL.
+4. If one name answers, connect by that name and port. If more than one
+   name answers, ask the user which one to use.
+5. If no name answers, ask the user. Until the user answers, do not say
+   that the service is missing, and do not skip a task because of it.
 
-If the service that you need is not there, ask the user. Do not install a
-copy in the box. These services hold real data: before a command that
-writes or deletes data, ask the user.
+Do not install a copy of the service in the box. These services are test
+environments. You can run the tests, the migrations and the seed scripts
+of the project against them, also when they create, change or delete data,
+tables or databases. Before your own SQL command writes or deletes data,
+and before you delete a database or a schema, ask the user.
 
 ## Documentation
 
