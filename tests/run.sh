@@ -358,33 +358,32 @@ test_warnings_named_again_at_a_terminal() {
 
 test_mcp_take_away_finds_its_own_by_mark() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$CFG/mcp.local/git" "$CFG/mcp.local/git-lab"
-  cat > "$CFG/mcp.local/git/mcp.sh" <<'MOD'
-MCP_URL="http://ab-mcp-git:8080/mcp"
+  manifest_module tool 'format = 1' '[[servers]]' 'name = "tool"' 'url = "http://ab-mcp-tool:8080/mcp"'
+  cat > "$CFG/mcp.local/tool/mcp.sh" <<'MOD'
 mcp_start() {
-  [[ -f "$AB_HOME_DIR/git.off" ]] && { ab_error "access taken away"; exit "$MCP_TAKE_AWAY"; }
-  start_sidecar ab-mcp-git docker.io/library/nginx:alpine
+  [[ -f "$AB_HOME_DIR/tool.off" ]] && { ab_error "access taken away"; exit "$MCP_TAKE_AWAY"; }
+  start_sidecar ab-mcp-tool docker.io/library/nginx:alpine
 }
 MOD
-  cat > "$CFG/mcp.local/git-lab/mcp.sh" <<'MOD'
-MCP_URL="http://ab-mcp-git-lab:8080/mcp"
+  manifest_module tool-lab 'format = 1' '[[servers]]' 'name = "tool-lab"' 'url = "http://ab-mcp-tool-lab:8080/mcp"'
+  cat > "$CFG/mcp.local/tool-lab/mcp.sh" <<'MOD'
 mcp_start() {
-  start_sidecar ab-mcp-git-lab -v "$(sidecar_copy ab-mcp-git-lab "$MCP_DIR/mcp.sh"):/x:ro,Z" docker.io/library/nginx:alpine
+  start_sidecar ab-mcp-tool-lab -v "$(sidecar_copy ab-mcp-tool-lab "$MCP_DIR/mcp.sh"):/x:ro,Z" docker.io/library/nginx:alpine
 }
 MOD
-  config "AB_MCP=git-lab git"
+  config "AB_MCP=tool-lab tool"
   ab_run --
   assert_rc 0
-  assert_eq "$(started)" "ab-egress ab-mcp-git ab-mcp-git-lab" "sidecars"
-  run_line ab-mcp-git | grep -q -- '--label agentbox.module=git ' || fail "git's sidecar not marked"
-  touch "$CFG/git.off"
+  assert_eq "$(started)" "ab-egress ab-mcp-tool ab-mcp-tool-lab" "sidecars"
+  run_line ab-mcp-tool | grep -q -- '--label agentbox.module=tool ' || fail "tool's sidecar not marked"
+  touch "$CFG/tool.off"
   ab_run --
-  assert_skipped git
-  assert_out "MCP module 'git' left out of this session: access taken away"
-  grep -qx 'podman rm -f -v ab-mcp-git' "$STUB_DIR/calls" || fail "git's sidecar kept"
-  grep -q 'podman rm -f -v ab-mcp-git-lab' "$STUB_DIR/calls" && fail "git-lab's sidecar removed for git"
-  [[ -d "$T/home/.cache/agentbox/sidecars/ab-mcp-git-lab" ]] || fail "git-lab's copies removed for git"
-  grep -q '"git-lab"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "git-lab left out"
+  assert_skipped tool
+  assert_out "MCP module 'tool' left out of this session: access taken away"
+  grep -qx 'podman rm -f -v ab-mcp-tool' "$STUB_DIR/calls" || fail "tool's sidecar kept"
+  grep -q 'podman rm -f -v ab-mcp-tool-lab' "$STUB_DIR/calls" && fail "tool-lab's sidecar removed for tool"
+  [[ -d "$T/home/.cache/agentbox/sidecars/ab-mcp-tool-lab" ]] || fail "tool-lab's copies removed for tool"
+  grep -q '"tool-lab"' "$T/home/.cache/agentbox/mcp-claude.json" || fail "tool-lab left out"
   return 0
 }
 
@@ -467,60 +466,38 @@ test_mcp_bb4() {
 
 test_mcp_server_names_and_urls_checked() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$CFG/mcp.local/a" "$CFG/mcp.local/b" "$CFG/mcp.local/c"
-  printf 'MCP_URL=https://a.example/mcp\nMCP_SERVERS=("shared|https://a.example/mcp|-|A")\n' > "$CFG/mcp.local/a/mcp.sh"
-  printf 'MCP_URL=https://b.example/mcp\nMCP_SERVERS=("shared|https://b.example/mcp|-|B")\n' > "$CFG/mcp.local/b/mcp.sh"
+  manifest_module a 'format = 1' '[[servers]]' 'name = "shared"' 'url = "https://a.example/mcp"' 'description = "A"'
+  manifest_module b 'format = 1' '[[servers]]' 'name = "shared"' 'url = "https://b.example/mcp"' 'description = "B"'
   config "AB_MCP=a b"
   ab_run --
   assert_skipped b
   assert_out "MCP module 'b' left out of this session: its server 'shared' has the name of one of module 'a'"
   grep -q 'a.example' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a left out"
   # A name is taken only by a module that is not left out for another
-  # reason: b gets it once a lacks its setting.
-  printf 'MCP_URL=https://a.example/mcp\nMCP_CONFIG=(A_URL)\nMCP_REQUIRED_CONFIG=(A_URL)\nMCP_SERVERS=("shared|https://a.example/mcp|-|A")\n' > "$CFG/mcp.local/a/mcp.sh"
+  # reason: b gets it once a lacks its secret. a keeps its servers.
+  manifest_module a 'format = 1' '[secrets.tok]' \
+    '[[servers]]' 'name = "shared"' 'url = "https://a.example/mcp"' 'description = "A"'
   ab_run --
   assert_skipped a
+  assert_out "a' left out of this session: missing podman secrets a_tok"
   grep -q 'b.example' "$T/home/.cache/agentbox/mcp-claude.json" || fail "b left out for a skipped a"
   # A sidecar of a module of yours without a caller token: still reached
   # without the proxy.
-  printf 'MCP_URL=http://ab-mcp-d:8080/mcp\n' > "$CFG/mcp.local/b/mcp.sh"
+  manifest_module b 'format = 1' '[[servers]]' 'name = "b"' 'url = "http://ab-mcp-d:8080/mcp"'
   ab_run --
   session_args | grep -q 'NO_PROXY=.*ab-mcp-d' || fail "own sidecar without a caller token sent through squid"
-  # A malformed module is left out, not the whole start.
-  printf 'MCP_URL="https://c.example/x|y"\n' > "$CFG/mcp.local/c/mcp.sh"
+  # A problem from mcp_check counts also when it returns non-zero.
+  manifest_module c 'format = 1' '[[servers]]' 'name = "c"' 'url = "https://c.example/mcp"'
+  printf '%s\n' 'mcp_check() { echo "C is bad"; return 1; }' > "$CFG/mcp.local/c/mcp.sh"
   : > "$CFG/config.toml"; config "AB_MCP=c"
   ab_run --
   assert_skipped c
-  assert_out "c' left out of this session: its MCP_URL has a |"
-  printf 'MCP_SERVERS=("s|http://ab-mcp-c:8080/mcp|caller|C")\n' > "$CFG/mcp.local/c/mcp.sh"
-  ab_run --
-  assert_skipped c
-  assert_out "its server 's' is marked caller, but its mcp.sh sets no MCP_CALLER_SECRET"
-  printf 'MCP_SERVERS=("s|https://c.example/1|-|C" "s|https://c.example/2|-|C")\n' > "$CFG/mcp.local/c/mcp.sh"
-  ab_run --
-  assert_skipped c
-  assert_out "its MCP_SERVERS has the server 's' twice"
-  # One that does not parse is left out; its settings are no unknown keys.
-  printf 'MCP_URL=https://c.example/mcp\nMCP_CONFIG=(C_URL C_X)\nif\n' > "$CFG/mcp.local/c/mcp.sh"
-  config "C_X=1"
-  ab_run --
-  assert_skipped c
-  assert_out "c' left out of this session: its mcp.sh does not parse"
-  assert_no_out "unknown key 'C_X'"
-  sed -i '/^C_X =/d' "$CFG/config.toml"
-  # A problem from mcp_check counts also when it returns non-zero.
-  printf 'MCP_URL=https://c.example/mcp\nmcp_check() { echo "C is bad"; return 1; }\n' > "$CFG/mcp.local/c/mcp.sh"
-  ab_run --
-  assert_skipped c
   assert_out "c' left out of this session: C is bad"
-  # A module whose last line is false still loads.
-  printf 'MCP_URL=https://c.example/mcp\nMCP_EGRESS=(c.example)\n[[ -n "${NOPE:-}" ]] && X=1\n' > "$CFG/mcp.local/c/mcp.sh"
-  ab_run --
-  assert_rc 0
-  grep -q 'c.example/mcp' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a module ending in a false && left out"
+  rm "$CFG/mcp.local/c/mcp.sh"
   # A URL from the module's settings counts once they are read; emptied, its
   # sidecars go.
-  printf 'MCP_CONFIG=(C_URL)\nMCP_URL="${C_URL:-}"\nMCP_EGRESS=(c.example)\n' > "$CFG/mcp.local/c/mcp.sh"
+  manifest_module c 'format = 1' 'egress = ["{C_URL.host}"]' '[settings.C_URL]' 'check = "url"' \
+    '[[servers]]' 'name = "c"' 'url = "{C_URL}"'
   config "C_URL=https://c.example/mcp"
   ab_run --
   assert_rc 0
@@ -529,25 +506,19 @@ test_mcp_server_names_and_urls_checked() {
   printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
   ab_run --
   assert_skipped c
+  assert_out "c' left out of this session: it needs C_URL"
   grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its URL setting emptied"
-  # The same for a server line of MCP_SERVERS.
-  printf 'MCP_CONFIG=(C_URL)\nMCP_SERVERS=("s|${C_URL:-}|-|C")\n' > "$CFG/mcp.local/c/mcp.sh"
-  printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
-  ab_run --
-  assert_skipped c
-  assert_out "no URL for its server 's'"
-  grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its server's URL setting emptied"
 }
 
 # mcp_load on its own: the status codes, the normalized variables, and
 # mcp_names (each module once, yours first).
 test_mcp_load_status() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$CFG/mcp.local/a" "$CFG/mcp.local/broken" "$CFG/mcp.local/grafana"
-  printf '%s\n' 'MCP_URL=https://a.example/mcp' 'MCP_DESCRIPTION=A' 'MCP_CALLER_SECRET=a_caller' \
-    'MCP_SECRET_HELP=("a_tok: what to type: a token")' > "$CFG/mcp.local/a/mcp.sh"
+  manifest_module a 'format = 1' 'description = "A"' '[secrets.tok]' 'help = "what to type: a token"' \
+    '[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"' 'caller = true'
+  manifest_module grafana 'format = 1' '[[servers]]' 'name = "grafana"' 'url = "https://g.example/mcp"'
+  mkdir -p "$CFG/mcp.local/broken"
   printf 'MCP_URL=https://a.example/mcp\nif\n' > "$CFG/mcp.local/broken/mcp.sh"
-  printf 'MCP_URL=https://g.example/mcp\n' > "$CFG/mcp.local/grafana/mcp.sh"
   local out
   out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
     set -euo pipefail
@@ -557,21 +528,14 @@ test_mcp_load_status() {
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
     rc=0; mcp_load grafana || rc=$?; echo "grafana $rc ${MCP_SERVERS[*]} ${#MCP_SECRET_HELP_OF[@]}"
     rc=0; mcp_load github || rc=$?; echo "github $rc ${MCP_SERVERS[0]%%|*}"
-    echo "names $(mcp_names | tr '\n' ' ')"
-    # The old adapter checks the required settings too, not with --declared.
-    printf '%s\n' 'MCP_URL=https://a.example/mcp' 'MCP_REQUIRED_CONFIG=(REQ_A REQ_B REQ_C)' > "$CFG/mcp.local/a/mcp.sh"
-    REQ_B=x
-    rc=0; mcp_load a --declared || rc=$?; echo "declared $rc"
-    rc=0; mcp_load a || rc=$?; echo "required $rc ${MCP_MISSING[*]}: $MCP_PROBLEM" )"
+    echo "names $(mcp_names | tr '\n' ' ')" )"
   assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for module.toml or mcp.sh in $CFG/mcp.local/nope and mcp/nope)"
   assert_eq "$(sed -n 2p <<<"$out")" "broken 2 its mcp.sh does not parse (bash -n $CFG/mcp.local/broken/mcp.sh)"
   assert_eq "$(sed -n 3p <<<"$out")" "a 0 a|https://a.example/mcp|caller|A what to type: a token"
-  assert_eq "$(sed -n 4p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|| 0" "yours wins"
+  assert_eq "$(sed -n 4p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|-| 0" "yours wins"
   assert_eq "$(sed -n 5p <<<"$out")" "github 0 github"
   local names; names="$(sed -n 6p <<<"$out")"
   [[ "$names" == "names a broken grafana "* ]] || fail "yours not first: $names"
-  assert_eq "$(sed -n 7p <<<"$out")" "declared 0"
-  assert_eq "$(sed -n 8p <<<"$out")" "required 1 REQ_A REQ_C: it needs REQ_A in $CFG/config.toml (agentbox setup)"
   [[ "$names" == *" context7 "* ]] || fail "no shared module: $names"
   (( $(grep -o ' grafana ' <<<"$names" | wc -l) == 1 )) || fail "grafana not once: $names"
 }
@@ -687,18 +651,14 @@ test_mcp_invalid_name() {
 
 test_mcp_local_module_and_override() {
   setup "${FUNCNAME[0]}"
-  mkdir -p "$CFG/mcp.local/tracker" "$CFG/mcp.local/context7"
-  printf '%s\n' 'MCP_DESCRIPTION="Tracker"' 'MCP_URL="https://mcp.tracker.example/mcp"' \
-    'MCP_EGRESS=(mcp.tracker.example)' 'MCP_CONFIG=(TRACKER_SITE)' > "$CFG/mcp.local/tracker/mcp.sh"
-  printf '%s\n' 'MCP_DESCRIPTION="Docs mirror"' 'MCP_URL="https://docs.internal.example/mcp"' \
-    'MCP_EGRESS=(docs.internal.example)' > "$CFG/mcp.local/context7/mcp.sh"
+  manifest_module tracker 'format = 1' 'description = "Tracker"' 'egress = ["mcp.tracker.example"]' \
+    '[settings.TRACKER_SITE]' '[[servers]]' 'name = "tracker"' 'url = "https://mcp.tracker.example/mcp"'
+  manifest_module context7 'format = 1' 'description = "Docs mirror"' 'egress = ["docs.internal.example"]' \
+    '[[servers]]' 'name = "context7"' 'url = "https://docs.internal.example/mcp"'
   config "AB_MCP=tracker" "TRACKER_SITE=acme"
   ab_run --
   assert_rc 0
   assert_no_out "unknown key 'TRACKER_SITE'"
-  # Enabled modules of yours of the old format warn, once each.
-  assert_eq "$(grep -c "MCP module 'tracker' has the old format .*README, \"Converting a module\"" "$T/out")" 1 "old-format warnings of tracker"
-  assert_out "MCP module 'context7' has the old format"
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.tracker.example$'
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain docs.internal.example$'
   assert_file_lacks "$(cache squid-allow.conf)" 'mcp.context7.com'
@@ -732,18 +692,13 @@ test_mcp_manifest_module_starts() {
     "  } > '$T/vars'" \
     '  start_sidecar ab-mcp-tracker "${MCP_IMAGE[app]}"' \
     '}' > "$CFG/mcp.local/tracker/mcp.sh"
-  # An old module after it sees none of its functions.
-  mkdir -p "$CFG/mcp.local/legacy"
-  printf '%s\n' 'MCP_URL=http://ab-mcp-legacy:8080/mcp' "mcp_check() { echo legacy >> '$T/checked-legacy'; }" \
-    "mcp_start() { echo legacy >> '$T/started-legacy'; }" > "$CFG/mcp.local/legacy/mcp.sh"
-  config "AB_MCP=tracker legacy" "TRACKER_SITE=acme" "TRACKER_URL=https://mcp.tracker.example/" "TRACKER_TEAMS=Red,blue,red"
+  config "AB_MCP=tracker" "TRACKER_SITE=acme" "TRACKER_URL=https://mcp.tracker.example/" "TRACKER_TEAMS=Red,blue,red"
   secrets tracker_tok tracker_team_red tracker_team_blue
   ab_run --
   assert_rc 0
   assert_no_out "tracker' left out|unknown key 'TRACKER_SITE'|tracker' has the old format"
   assert_eq "$(cat "$T/sourced" 2>/dev/null)" $'sourced\nsourced' "the sources of its mcp.sh"
   assert_eq "$(cat "$T/checked" 2>/dev/null)" checked "the runs of its mcp_check"
-  assert_eq "$(cat "$T/checked-legacy" "$T/started-legacy" 2>/dev/null)" $'legacy\nlegacy' "the runs of the old module"
   assert_eq "$(cat "$T/vars" 2>/dev/null)" "site=acme mode=fast dir=$CFG/mcp.local/tracker app=docker.io/x/app:1"$'\n'\
 "teams=red,blue items=red blue base=https://mcp.tracker.example"$'\n'\
 "db=tracker_db"$'\n'"mcp_caller=tracker_mcp_caller"$'\n'"team_blue=tracker_team_blue"$'\n'"team_red=tracker_team_red"$'\n'\
@@ -929,6 +884,13 @@ test_mcp_manifest_module_code_left_out() {
   assert_out "a' left out of this session: .*/a/mcp.sh sets MCP_CONFIG of the old format.*keep one"
   grep -qx 'podman rm -f -v ab-mcp-a' "$STUB_DIR/calls" && fail "sidecar removed for an old MCP_* variable"
   run_line ab-mcp-a && fail "a sidecar of a module with an old MCP_* variable started"
+  # An mcp.sh that bash cannot parse leaves the module out. The sidecar stays.
+  printf '%s\n' 'if' > "$CFG/mcp.local/a/mcp.sh"
+  printf 'ab-mcp-a x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped a
+  assert_out "a' left out of this session: its mcp.sh does not parse"
+  grep -qx 'podman rm -f -v ab-mcp-a' "$STUB_DIR/calls" && fail "sidecar removed for an mcp.sh that does not parse"
   # "declare -g" goes past the locals of mcp_bind: it is refused too.
   printf '%s\n' 'declare -g MCP_URL=x' > "$CFG/mcp.local/a/mcp.sh"
   ab_run --
@@ -1033,8 +995,7 @@ test_mcp_egress_recreated_only_on_change() {
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" || fail "egress not started"
   ab_run --
   grep -q '^podman run -d --replace --name ab-egress' "$STUB_DIR/calls" && fail "egress recreated without a change"
-  mkdir -p "$CFG/mcp.local/extra"
-  printf '%s\n' 'MCP_URL="https://extra.example/mcp"' 'MCP_EGRESS=(extra.example)' > "$CFG/mcp.local/extra/mcp.sh"
+  manifest_module extra 'format = 1' 'egress = ["extra.example"]' '[[servers]]' 'name = "extra"' 'url = "https://extra.example/mcp"'
   config "AB_MCP=extra"
   ab_run --
   grep -q '^podman rm -f -v ab-egress' "$STUB_DIR/calls" || fail "egress not recreated after the host list changed"
@@ -1112,8 +1073,7 @@ test_egress_empty_list_mcp_hosts_only() {
   assert_file_lacks "$(cache squid-allow.conf)" 'pypi.org|anthropic'
   assert_file_has "$(cache squid-allow.conf)" 'dstdomain mcp.context7.com$'
   # squid.conf refers to "allowed": it must be defined even with no hosts.
-  mkdir -p "$CFG/mcp.local/context7"
-  printf '%s\n' 'MCP_URL="http://docs-mirror:8080/mcp"' > "$CFG/mcp.local/context7/mcp.sh"
+  manifest_module context7 'format = 1' '[[servers]]' 'name = "context7"' 'url = "http://docs-mirror:8080/mcp"'
   ab_run AB_AGENT=pi --
   assert_rc 0
   assert_eq "$(grep -c '^acl allowed ' "$(cache squid-allow.conf)")" 1 "allowed acl lines"
@@ -3867,24 +3827,21 @@ test_setup_values_names_input() {
   # A file name with a space is one name, and cannot be used; a module that
   # cannot be read cannot be turned on.
   echo 'hosts = ["x"]' > "$CFG/egress.local.d/my group.toml"
-  mkdir -p "$CFG/mcp.local/broken"; echo 'MCP_DESCRIPTION=x; if' > "$CFG/mcp.local/broken/mcp.sh"
+  manifest_module broken 'format = 1' 'colour = "red"' '[[servers]]' 'name = "broken"' 'url = "https://broken.example/mcp"'
   local broken; broken="$(setup_entry broken)"
   setup_run "$broken\ns\n"
   assert_out "my group .*cannot be used"
   assert_out "module broken cannot be read"
   assert_out "nothing to save"
-  # A module run.sh would leave out: its own check (mcp_check) or a
-  # malformed server line, shown in the menu and when it is turned on.
-  rm "$CFG/mcp.local/broken/mcp.sh"
-  mkdir -p "$CFG/mcp.local/odd"
-  printf 'MCP_CONFIG=(ODD_PORT)\nMCP_URL=https://odd.example/mcp\nmcp_check() { [[ "${ODD_PORT:-1}" == 1 ]] || echo "ODD_PORT must be 1"; }\n' > "$CFG/mcp.local/odd/mcp.sh"
+  # A module run.sh would leave out for its own check (mcp_check): shown
+  # in the menu and when it is turned on.
+  rm -r "$CFG/mcp.local/broken"
+  manifest_module odd 'format = 1' '[settings.ODD_PORT]' '[[servers]]' 'name = "odd"' 'url = "https://odd.example/mcp"'
+  printf '%s\n' 'mcp_check() { [[ "${ODD_PORT:-1}" == 1 ]] || echo "ODD_PORT must be 1"; }' > "$CFG/mcp.local/odd/mcp.sh"
   local odd; odd="$(setup_entry odd)"
   setup_run "$odd\n2\nq\ny\n"
   assert_out "note: agentbox leaves odd out of the start until this is fixed: ODD_PORT must be 1"
   assert_out "NOT USABLE: ODD_PORT must be 1"
-  printf 'MCP_SERVERS=("a|https://odd.example/1|caller|A")\n' > "$CFG/mcp.local/odd/mcp.sh"
-  setup_run "q\n"
-  assert_out "NOT USABLE: its server 'a' is marked caller"
   rm -r "$CFG/mcp.local/odd"
   # The mcp_check of a manifest module runs through mcp_bind.
   manifest_module chk 'format = 1' '[[servers]]' 'name = "chk"' 'url = "https://chk.example/mcp"'
