@@ -47,6 +47,16 @@ agent only the secrets that it needs to work: its login token and the
 caller tokens. The others stay in the sidecars.
 _Avoid_: credential (for the stored item), password (unless it is one)
 
+**Old file**:
+A settings file of agentbox v0.1.x (`config.env`, `env/<repo>.conf`, a
+`.conf` file in a `.local.d/` directory) that agentbox converts to TOML.
+_Avoid_: legacy file, v1 file
+
+**Old-format module**:
+A module with an `mcp.sh` and no manifest. agentbox v0.3.0 and later do
+not load it.
+_Avoid_: legacy module, module of the old format
+
 **Source**:
 A git repository that agentbox installs from, named by a file in
 `skills.d/` or `pi-extensions.d/` (or your `.local.d/`), or in your

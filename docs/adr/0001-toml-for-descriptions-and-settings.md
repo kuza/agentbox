@@ -67,3 +67,18 @@ The goals:
   module manifests in v0.2.x; removal of the old formats in v0.3.0;
   modules from git sources after v0.3.0. The Go core comes after these
   steps.
+
+## Changed in v0.3.0
+
+- v0.3.0 keeps the conversion of the old files. A user of v0.1.x can
+  update to v0.3.0 directly, and the first start converts the files.
+  Reason: a step through v0.2.3 had problems with `agentbox rollback` and
+  with a start that has no terminal.
+- v0.3.0 removes no old file by itself. An item of `agentbox setup`
+  removes the converted old files after a yes.
+- v0.3.0 does not load an old-format module. Two places still read its
+  `mcp.sh` as text, until the Go core. `agentbox uninstall` reads it to
+  find the secrets and images of the module. The start reads it to find
+  the setting names of the module, so that these settings give no
+  warning. This is a known exception to the goal "no more parsing of
+  module code as text".
