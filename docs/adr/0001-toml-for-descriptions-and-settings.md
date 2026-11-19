@@ -64,5 +64,6 @@ The goals:
 - The old settings files stay until v0.3.0, so a rollback to v0.1.x
   works.
 - The change comes in steps: settings and simple descriptions in v0.2.0;
-  module manifests in v0.2.x; modules from git sources later; removal of
-  the old formats in v0.3.0. The Go core comes after these steps.
+  module manifests in v0.2.x; removal of the old formats in v0.3.0;
+  modules from git sources after v0.3.0. The Go core comes after these
+  steps.

@@ -49,8 +49,15 @@ _Avoid_: credential (for the stored item), password (unless it is one)
 
 **Source**:
 A git repository that agentbox installs from, named by a file in
-`skills.d/`, `pi-extensions.d/` or `mcp-modules.d/` (or your `.local.d/`).
+`skills.d/` or `pi-extensions.d/` (or your `.local.d/`), or in your
+`mcp-modules.local.d/`.
 _Avoid_: repo (for the configured item), feed
+
+**Consent**:
+Your yes to one content of a module from git: its URL, its directory and
+the git id of that directory. Until a consent matches the content,
+agentbox activates nothing of that module.
+_Avoid_: approval, trust, permission (for this yes)
 
 **Egress group**:
 A named list of hosts that the agent may reach through the proxy.
