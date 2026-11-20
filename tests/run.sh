@@ -3831,7 +3831,7 @@ test_setup_values_names_input() {
   local broken; broken="$(setup_entry broken)"
   setup_run "$broken\ns\n"
   assert_out "my group .*cannot be used"
-  assert_out "module broken cannot be read"
+  assert_out "module broken: .*colour.*; not turned on"
   assert_out "nothing to save"
   # A module run.sh would leave out for its own check (mcp_check): shown
   # in the menu and when it is turned on.
@@ -3857,6 +3857,50 @@ test_setup_values_names_input() {
   chmod u+w "$CFG"
   assert_out "could not write"
   [[ -e "$CFG/config.toml" ]] && fail "config.toml left by a failed save"
+  return 0
+}
+
+# A module that cannot be read (mcp_load gives status 2): the menu shows
+# the reason of the start in its line, at e <number> and at the toggle. It
+# shows no note of setup_module_warn for it.
+test_setup_unreadable_module_reason() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  local case why n value=()
+  # A bad format (not TOML), an unknown key, and a bad value of a setting.
+  # The menu reads the bad value only at its second mcp_load, with the
+  # settings of config.toml: a file name with a space (bad-value).
+  printf 'ca\n' > "$T/a b"
+  for case in format key value; do
+    rm -rf "$CFG/mcp.local/bad"
+    value=()
+    case "$case" in
+      format) manifest_module bad 'format = 1' 'description = "Bad' '[[servers]]' 'name = "bad"' 'url = "https://bad.example/mcp"' ;;
+      key) manifest_module bad 'format = 1' 'colour = "red"' '[[servers]]' 'name = "bad"' 'url = "https://bad.example/mcp"' ;;
+      value) manifest_module bad 'format = 1' '[settings.BAD_CA]' 'check = "file"' \
+               '[[servers]]' 'name = "bad"' 'url = "https://bad.example/{BAD_CA}"'
+             value=("BAD_CA = \"$T/a b\"") ;;
+    esac
+    # The reason of the start.
+    : > "$CFG/config.toml"; config "AB_MCP=bad" ${value[@]+"${value[@]}"}
+    ab_run --
+    why="$(sed -n "s/.*MCP module 'bad' left out of this session: //p" "$T/out" | head -1)"
+    [[ -n "$why" ]] || { fail "$case: the start gives no reason"; continue; }
+    [[ "$case" == key ]] && [[ "$why" != *colour* ]] && fail "$case: the reason does not name the key: $why"
+    [[ "$case" == value ]] && [[ "$why" != *bad-value* ]] && fail "$case: the reason is not bad-value: $why"
+    # The menu shows the same reason, with the module turned off.
+    : > "$CFG/config.toml"; config ${value[@]+"${value[@]}"}
+    n="$(setup_entry bad)"
+    setup_run "e $n
+$n
+s
+"
+    grep -qF -- "$(printf '%3d [ ] %-14s (%s)' "$n" bad "$why")" "$T/out" || fail "$case: the line lacks the reason: $why"
+    grep -F -- "module bad: $why" "$T/out" | grep -qvF "not turned on" || fail "$case: e $n lacks the reason: $why"
+    grep -qF -- "module bad: $why; not turned on" "$T/out" || fail "$case: the toggle lacks the reason: $why"
+    assert_no_out "cannot be read|note: agentbox leaves bad out"
+    assert_out "nothing to save"
+  done
   return 0
 }
 
@@ -3932,7 +3976,7 @@ test_setup_manifest_only_module() {
   assert_rc 0
   assert_out '^MCP servers \(AB_MCP; context7 is always on\)$'
   assert_out '\[ \] docs +\(yours\) Current library documentation and code examples, by library and version$'
-  assert_no_out 'cannot be read|NOT USABLE|error'
+  assert_no_out 'cannot be read|module.toml:[0-9]+:|NOT USABLE|error'
 }
 
 # --- run.sh: other parts ---

@@ -37,9 +37,10 @@ SETUP_OTHER=(
 # Pending changes: SETUP_NEW[key]="set <value>" or "unset"; secrets to store
 # in SETUP_SECRETS[name]=value. The other variables are caches. A save
 # empties them, and setup_prime fills them again: the values and places of
-# config.toml (SETUP_FILE, SETUP_AT), the module info, the secrets, the list
-# settings of the modules and the error of config.toml.
-declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_AT=() SETUP_INFO=() SETUP_HAS=() SETUP_PROBLEM=()
+# config.toml (SETUP_FILE, SETUP_AT), the module info (SETUP_INFO,
+# SETUP_REASON), the secrets, the list settings of the modules and the
+# error of config.toml.
+declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_AT=() SETUP_INFO=() SETUP_REASON=() SETUP_HAS=() SETUP_PROBLEM=()
 SETUP_ERROR="" SETUP_LISTS=" "
 
 # The value of <key> in config.toml, as run.sh reads it: "set <value>" or
@@ -81,7 +82,7 @@ setup_prime() {
   rm -f -- "$err"
   # Again, now with the values of config.toml: a module's secrets can follow
   # a setting there (github: GH_OWNERS).
-  SETUP_INFO=()
+  SETUP_INFO=(); SETUP_REASON=()
   while IFS= read -r n; do setup_module_info "$n" >/dev/null || true; done < <(mcp_names | sort)
   # Read anew after each save: a secret stored in a pipeline (setup_save)
   # does not reach this shell's list. A failed listing marks none, and the
@@ -112,7 +113,7 @@ setup_record() {  # <key> <"set <value>" | unset>
   local f; f="$(setup_file_value "$1")"
   # A setting changed: the module info (its secrets can follow a setting)
   # and setup_module_problem are made again.
-  SETUP_PROBLEM=(); SETUP_INFO=()
+  SETUP_PROBLEM=(); SETUP_INFO=(); SETUP_REASON=()
   if [[ "$2" == "$f" ]] || { in_list "$1" "$SETUP_LISTS" && [[ "$2" == set* && "$f" == set* ]] && same_set "${2#set }" "${f#set }"; }; then
     unset "SETUP_NEW[$1]"
   else
@@ -188,17 +189,18 @@ setup_names() {  # <extension> <dirs: yours, then shared>
 #   8. the list settings (MCP_LIST_CONFIG)
 #   9. the for_each secrets (MCP_FOR_EACH_SECRETS)
 # A subshell reads the module, so a broken module of yours does not stop
-# the menu. Status 1 if mcp_load gives status 2 or more.
+# the menu. Status 1 if mcp_load gives status 2 or more. Then the cache
+# holds "!", and SETUP_REASON[<name>] holds the first line of MCP_PROBLEM
+# for status 2 (setup_module_reason).
 setup_module_info() {  # <name>
+  local info
   if [[ -z "${SETUP_INFO[$1]+x}" ]]; then
-    SETUP_INFO[$1]="$(
-      rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
-      (( rc <= 1 )) || exit 1
+    if info="$(
+      setup_load_or_exit "$1"
       # Its settings as they are now in the menu, then again: secrets and
       # servers can follow a setting (github: GH_OWNERS).
       setup_apply_settings ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}
-      rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
-      (( rc <= 1 )) || exit 1
+      setup_load_or_exit "$1"
       echo "${MCP_DESCRIPTION:-}"
       echo "${MCP_CONFIG[*]-}"
       echo "${MCP_REQUIRED_CONFIG[*]-}"
@@ -210,9 +212,34 @@ setup_module_info() {  # <name>
       echo "${MCP_MISSING[*]-}"
       echo "${MCP_LIST_CONFIG[*]-}"
       echo "${MCP_FOR_EACH_SECRETS[*]-}"
-    )" 2>/dev/null || SETUP_INFO[$1]="!"
+    )" 2>/dev/null; then
+      SETUP_INFO[$1]="$info"
+    else
+      SETUP_INFO[$1]="!"; SETUP_REASON[$1]="$info"
+    fi
   fi
   [[ "${SETUP_INFO[$1]}" != "!" ]] && echo "${SETUP_INFO[$1]}"
+}
+
+# For the subshell of setup_module_info: runs mcp_load <name>. If the
+# status is 2 or more, it exits 1. For status 2, it prints the first line
+# of MCP_PROBLEM first.
+setup_load_or_exit() {  # <name>
+  local rc=0
+  mcp_load "$1" >/dev/null 2>&1 || rc=$?
+  (( rc <= 1 )) && return 0
+  (( rc == 2 )) && echo "${MCP_PROBLEM%%$'\n'*}"
+  exit 1
+}
+
+# Why module <name> cannot be read: the reason of mcp_load, or a general
+# text when there is none. Status 1 if the module can be read. It reads the
+# module if the cache does not have it.
+setup_module_reason() {  # <name>
+  local why
+  setup_module_info "$1" >/dev/null && return 1
+  why="${SETUP_REASON[$1]:-}"
+  echo "${why:-cannot be read (run agentbox to see why)}"
 }
 
 # Line <n> of the module info (setup_module_info gives the lines).
@@ -320,7 +347,7 @@ setup_ask_secret() {  # <secret> <module> [replace]
 # Settings and secrets of module <name>; with "all", existing secrets too.
 setup_module_settings() {  # <name> [all]
   local keys req missing k s h
-  if ! setup_module_info "$1" >/dev/null; then echo "  module $1 cannot be read"; return; fi
+  if ! setup_module_info "$1" >/dev/null; then echo "  module $1: $(setup_module_reason "$1")"; return; fi
   keys="$(setup_module_line "$1" 2)"; req="$(setup_module_line "$1" 3)"
   for k in $keys; do
     # In this shell: a changed setting empties the cache, and $(...) would
@@ -396,7 +423,7 @@ setup_module_forget() {  # <name>
   for k in $(setup_module_line "$1" 4); do unset "SETUP_SECRETS[$k]"; done
   for k in $(setup_module_line "$1" 2); do unset "SETUP_NEW[$k]"; done
   # Its settings changed: its info (secrets from a setting) is made again.
-  SETUP_INFO=(); SETUP_PROBLEM=()
+  SETUP_INFO=(); SETUP_REASON=(); SETUP_PROBLEM=()
 }
 
 # The status line under module <name>, number <n>: its settings, whether
@@ -460,14 +487,17 @@ setup_show() {
     fi
     case "$kind" in
       mcp) in_list "$name" "$mcp" && mark="[x]" || mark="[ ]"
-           if text="$(setup_module_line "$name" 1)" && setup_module_info "$name" >/dev/null; then
+           # In this shell first: the cache keeps the result, also for a
+           # module that cannot be read.
+           if setup_module_info "$name" >/dev/null; then
+             text="$(setup_module_line "$name" 1)"
              [[ "$(mcp_find "$name")" == "$USER_MCP_DIR/"* ]] && text="(yours) $text"
              setup_module_problem "$name"
              status="$(setup_module_status "$name" "$i")"
              read -ra more <<<"$(setup_module_line "$name" 2)"
              keys+=(${more[@]+"${more[@]}"})
            else
-             text="(cannot be read)"
+             text="($(setup_module_reason "$name"))"
            fi ;;
       skill) in_list "$name" "$skills" && mark="[x]" || mark="[ ]"
              text="$(setup_describe skill "$(convert_toml_find "$name" "${SKILLS_SOURCE_DIRS[@]}")")" ;;
@@ -512,9 +542,9 @@ setup_act() {  # <number> [e]
     mcp)
       if [[ -n "${2:-}" ]]; then setup_module_settings "$name" all; setup_module_warn "$name"; return; fi
       list="$(setup_get AB_MCP)"; list="${list//,/ }"
-      # One that cannot be read can only go: run.sh would stop on it.
+      # One that cannot be read can only go: the start would leave it out.
       if ! in_list "$name" "$list" && ! setup_module_info "$name" >/dev/null; then
-        echo "  module $name cannot be read (run agentbox to see why); not turned on"; return
+        echo "  module $name: $(setup_module_reason "$name"); not turned on"; return
       fi
       setup_record_list AB_MCP "$(list_toggle "$name" "$list")"
       if in_list "$name" "$list"; then setup_module_forget "$name"; else setup_module_settings "$name"; setup_module_warn "$name"; fi ;;
