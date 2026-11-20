@@ -4,6 +4,81 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.3.0
+
+- The loader of the old-format modules is gone. An old-format module is
+  an `mcp.sh` with no `module.toml`. v0.2.1 to v0.2.3 loaded such a module
+  with a warning. Now the start leaves it out with
+  `MCP module '<name>' left out of this session: old format: see README, Converting a module`.
+  The other modules start. README, "Converting a module", shows how to
+  convert a module.
+- The start and `agentbox login` stop and remove the sidecars and the
+  host services of an old-format module in `AB_MCP`. agentbox does not
+  manage such a module. An old-format module that is not in `AB_MCP`
+  gives no warning.
+- For an old copy of a shared module in `mcp.local/`, the warning ends
+  with `; remove <path> to use the shared module`. agentbox does not use
+  the shared module in place of your copy.
+- `agentbox setup` shows the reason of the start in the line of a module
+  that it cannot read. The reason can be an old-format module or an error
+  in its `module.toml`. Before, it showed "(cannot be read)". `e <number>` and
+  the toggle of such a module show the reason too.
+- `agentbox uninstall` still removes the secrets and images of an
+  old-format module.
+- The old files of v0.1.x now stay until you remove them with the new
+  item `o` of `agentbox setup`. Before, the documents said that they stay
+  until v0.3.0. The first start of v0.3.0 still converts the old files,
+  so a user of v0.1.x can update directly.
+- Item `o` of `agentbox setup` removes the old files that the conversion
+  converted. It shows only when at least one old file can go. It shows
+  the files that go, each other old file with the reason that it stays,
+  and the rollback warning. After a yes, it removes the files at once.
+  It never removes `env/<repo>.env`. README, "Removing the old files",
+  gives the rules and the reasons.
+- While at least one old file can go, a start shows one line at most one
+  time a day: `agentbox: <N> old files of v0.1.x can go: agentbox setup, item o`.
+  The start does not ask "start the session?" for this line, and
+  `agentbox login` does not show it.
+- The conversion message and the save note of `agentbox setup` now say:
+  "The old files stay. To remove them, use agentbox setup, item o."
+- A setting of a module cannot have a reserved name. agentbox sets the
+  settings of a module as shell variables. Thus a setting `PATH`, `IFS`
+  or `AB_MCP` could change the shell or agentbox. The reserved names are:
+  - the prefixes `AB_`, `MCP_`, `GITMOD_`, `BASH`, `GIT_`, `LD_`, `XDG_`
+    and `LC_`;
+  - the names of the shell and of bash;
+  - the names of the code of agentbox.
+
+  README, "Reserved names", lists them. The settings of the shared modules
+  do not change.
+- A module with a setting that has a reserved name is left out with
+  `MCP module '<name>' left out of this session: <KEY> is a reserved name: rename this setting`.
+  What the module runs stays for open sessions. `agentbox setup` shows
+  "NOT USABLE" with the same reason. The menu does not set, show or save
+  such a setting.
+
+Action:
+
+- Stop your sessions of v0.2.x first. The first start of v0.3.0, or
+  `agentbox login`, stops the sidecars of your old-format modules.
+- If you have an old-format module in `mcp.local/`, convert it to
+  `module.toml`. README, "Converting a module", shows the steps.
+- If the start says that a setting has a reserved name, rename the
+  setting:
+  1. In `module.toml`, change the name in `[settings.<KEY>]`, in each
+     `for_each = "<KEY>"`, and in each substitution (`{<KEY>}`,
+     `{<KEY>.field}`).
+  2. In `mcp.sh`, change each `$<KEY>`, `${<KEY>...}`, `MCP_ITEMS[<KEY>]`
+     and `MCP_FIELD[<KEY>.<field>]`.
+  3. In `config.toml` (or the file of `AB_CONFIG`) and in each
+     `env/<repo>.toml`, change the key. If you export the setting, change
+     the name in your environment too.
+  4. Run `agentbox setup`.
+  5. Make sure that the module shows no "NOT USABLE".
+- If `agentbox setup` shows item `o`, read its list. After the removal,
+  `agentbox rollback` to v0.1.x does not find your settings. A rollback
+  to v0.2.x still works. Then remove the old files with a yes.
+
 ## v0.2.3
 
 - A URL setting with a query or a fragment, such as a Grafana URL from the

@@ -290,13 +290,16 @@ Other settings
 number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit
 ```
 
-The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet). If the start would leave the module out (a setting that is not correct, or a fault in its `module.toml` or `mcp.sh`), the menu shows "NOT USABLE" and the reason.
+The menu lists all MCP modules, skill sources and egress groups: the shared ones and yours (`mcp.local/`, `skills.local.d/`, `egress.local.d/`, marked "(yours)"). It shows which entries are enabled, and it also lists the other settings. Under each module, the menu shows the settings of the module with their values. A value shows "(default)" if the setting is not set, and "NEEDED" if the module cannot start without a value. A value shows "(environment)" if your environment sets the setting. The menu also shows the Podman secrets of the module: stored, MISSING, or new (typed, but not saved yet).
+
+If the start would leave the module out (a setting that is not correct, a setting with a [reserved name](#reserved-names), or a fault in its `mcp.sh`), the menu shows "NOT USABLE" and the reason. If agentbox cannot read the module, the line of the module shows the reason of the start. Examples: an error in its `module.toml`, or an [old-format module](#converting-a-module) (`(old format: see README, Converting a module)`).
 
 - A number enables or disables an entry, or asks for a value. For a value, Enter keeps the current value, and `-` unsets it. For a setting of a module, the prompt shows the help of the setting from the manifest of the module, if it has one.
 - When you enable a module, the menu asks for its settings. It also asks, with hidden input, for the secrets that the module does not have. The prompt tells what to type, and the module changes that input into the secret (the Graylog token becomes its basic-auth value). If you disable the module again before you save, the menu discards what you typed for it.
 - `e <number>` asks for all settings and secrets of a module, enabled or disabled. It does not enable or disable the module. For a stored secret, a new value replaces it, and Enter keeps it. Use this to enter a renewed token.
 - `s` saves. The menu keeps the previous file next to it, with `.bak` added, and stores the secrets. If `config.toml` is a link, it stays a link, and the menu edits the file that the link points to.
 - `q` quits. If some changes are not saved, `q` asks first.
+- `o` removes the old files of v0.1.x that the conversion converted. The menu shows the item `o  Remove the old files of v0.1.x (<N> files)` only when at least one old file can go. See [Removing the old files](#removing-the-old-files).
 
 The menu edits `config.toml` line by line, and keeps your comments and the order of its lines. It writes a list as an array, also a list setting of a module (`GH_OWNERS = ["myorg"]`). A flag that you enable gets `true`. A flag that you disable gets `false` if it is on by default. Otherwise, the menu puts a `#` before its line. For a key that is not set, the menu uses the `#KEY = ...` line from the example, if the file has one.
 
@@ -687,11 +690,13 @@ Each MCP server is a module: a directory with a manifest (`module.toml`) and, if
 | Directory | |
 |---|---|
 | `mcp/<name>/` | Shared modules, in git: `context7`, `grafana`, `graylog`, `github`, `woodpecker`, `tabularis`, `dbhub`, `bb4` |
-| `mcp.local/<name>/` | Your own modules, in [your files](#your-files). If a module has the same name as a module in `mcp/`, it replaces that module. A module of the old format (only `mcp.sh`) works until v0.3.0, with a warning: see [Converting a module](#converting-a-module) |
+| `mcp.local/<name>/` | Your own modules, in [your files](#your-files). If a module has the same name as a module in `mcp/`, it replaces that module. An old-format module (only `mcp.sh`, no `module.toml`) does not load: see [Converting a module](#converting-a-module) |
 
 `AB_MCP` in `config.toml` lists the enabled modules (`AB_MCP = ["grafana", "graylog"]`). The `context7` module is always enabled. At each start, `run.sh` checks the settings and secrets of the enabled modules and starts their sidecars. It writes one MCP config for both agents (Claude Code: `--mcp-config`, pi: `~/.pi/agent/mcp.json`). It also writes the remote hosts for squid (see [Egress](#egress)).
 
 A module can lack a setting or a secret, can be absent from this version, or can fail to start. Such a module is left out of that session with a warning that gives the reason (see [Daily usage](#daily-usage) for how agentbox shows warnings again). The other modules work. If the start of the module failed, what the module already runs stays for the sessions that use it. If a setting or a secret is gone, agentbox removes what the module runs, as for a module that you removed from `AB_MCP`. Nobody gets servers that they did not enable, and a new module does not change `run.sh`.
+
+An old-format module is also left out, and agentbox removes what it runs (see [Converting a module](#converting-a-module)). A module with a setting that has a reserved name is left out, and what it runs stays (see [Reserved names](#reserved-names)).
 
 #### Writing a module
 
@@ -782,6 +787,26 @@ If the manifest has an error, the start leaves the module out with `module.toml:
 
 A shared module also has `module.index`, the names of its images and secrets for `agentbox uninstall` without Python ([Uninstall](#uninstall)). After a change of `module.toml`, run `./release.sh --index`. The tests fail if a `module.index` is not the index of its manifest.
 
+###### Reserved names
+
+agentbox sets the settings of a module as shell variables. Thus a setting cannot have the name of a variable of agentbox, of bash or of the shell. `RESERVED_NAMES` in `lib/config.sh` has the full list of reserved names. A name is reserved if it matches one of these:
+
+- the prefixes `AB_*`, `MCP_*`, `GITMOD_*`, `BASH*`, `GIT_*`, `LD_*`, `XDG_*` and `LC_*`;
+- the shell names `HOME`, `PATH`, `IFS`, `PWD`, `OLDPWD`, `SHELL`, `USER`, `LOGNAME`, `TERM`, `TZ`, `LANG` and `TMPDIR`;
+- the special variables of bash 5.3, for example `FUNCNEST`, `POSIXLY_CORRECT`, `RANDOM` and `REPLY`, and the families `COMP_*`, `READLINE_*` and `COPROC_*`;
+- the families of the globals of agentbox: `AGENT_*`, `CONFIG_*`, `CONVERT_*`, `EGRESS_*`, `ENVIRONMENT_*`, `FORWARD_*`, `FWD_*`, `GRAPHIFY_*`, `HOST_*`, `IMG_*`, `OLD_*`, `PI_*`, `RELEASE_*`, `SECRET_*`, `SERVICE_*`, `SETUP_*`, `SKILLS_*`, `TOML_*`, `TRIVY_*` and `USER_*`;
+- the other upper-case names of the code of agentbox, for example `REPO`, `IMAGE`, `SOURCE` and `NO_PROXY`.
+
+If a setting of an enabled module has a reserved name, the start leaves the module out with `MCP module '<name>' left out of this session: <KEY> is a reserved name: rename this setting`. The warning names the first such setting of the manifest. What the module runs stays for open sessions. `agentbox setup` shows the module as "NOT USABLE" with the same reason. The menu does not set, show or save such a setting. The rule does not apply to the names of secrets.
+
+To rename a setting, do these steps:
+
+1. In `module.toml`, change the name in `[settings.<KEY>]`, in each `for_each = "<KEY>"`, and in each substitution `{<KEY>}` or `{<KEY>.field}`.
+2. In `mcp.sh`, change each `$<KEY>`, `${<KEY>...}`, `MCP_ITEMS[<KEY>]` and `MCP_FIELD[<KEY>.<field>]`.
+3. In `config.toml` (or the file of `AB_CONFIG`) and in each `env/<repo>.toml`, change the key. If you export the setting in your environment, change the name there too.
+4. Run `agentbox setup`.
+5. Make sure that the module shows no "NOT USABLE".
+
 ##### The code: `mcp.sh`
 
 agentbox runs `mcp.sh` only when it needs the code of the module: for `mcp_check`, `mcp_start` and `mcp_secret_value`. It runs the file in a subshell. First it sets these variables, then it sources `mcp.sh`:
@@ -805,7 +830,13 @@ Put the code in functions. The code outside the functions runs without `set -e`:
 
 #### Converting a module
 
-Before v0.2.1, a module was only an `mcp.sh` that set `MCP_*` variables (the old format). A module of the old format in `mcp.local/` still works in this version. Each start shows a warning for it while it is enabled. **v0.3.0 removes the old format.** Convert your modules before that version. v0.2.0 cannot run a converted module. Before `agentbox rollback` to v0.2.0, move the converted modules out of `mcp.local/`.
+Before v0.2.1, a module was only an `mcp.sh` that set `MCP_*` variables (an old-format module). **agentbox v0.3.0 and later do not load an old-format module.** Convert it with the steps below. agentbox has no command that converts a module.
+
+While an old-format module is in `AB_MCP`, each start leaves it out with `MCP module '<name>' left out of this session: old format: see README, Converting a module`. The start and `agentbox login` also stop and remove its sidecars and host services. The other modules start. `agentbox setup` shows the same reason in the line of the module. An old-format module that is not in `AB_MCP` gives no warning.
+
+If the old-format module is a copy of a shared module in `mcp.local/`, the warning ends with `; remove <path> to use the shared module`. agentbox does not use the shared module in place of your copy. Remove or convert the copy.
+
+`agentbox uninstall` still removes the secrets and images of an old-format module ([Uninstall](#uninstall)). v0.2.0 cannot run a converted module. Before `agentbox rollback` to v0.2.0, move the converted modules out of `mcp.local/`.
 
 Each variable of the old format becomes a key of the manifest:
 
@@ -834,7 +865,7 @@ Do these steps:
 2. In `mcp.sh`, remove each `MCP_*` variable of the table, and keep the functions.
 3. In the functions, use `${MCP_SECRET[<name>]}` and `${MCP_IMAGE[<name>]}` in place of the names of secrets and images.
 4. If `mcp.sh` now has no function, remove it.
-5. Run `agentbox setup`. It shows "NEEDED" or "NOT USABLE" with the reason if the module has a problem.
+5. Run `agentbox setup`. It shows "NEEDED" or "NOT USABLE" with the reason if the module has a problem. If a setting has a [reserved name](#reserved-names), rename it.
 6. Start a session, and check the servers with `/mcp`.
 
 The manifest gives each secret the Podman name `<module>_<name>`. If the old name of a secret does not start with `<module>_`, store the secret again under the new name (`agentbox setup` asks for it). Then remove the old secret with `podman secret rm`.
@@ -1471,7 +1502,7 @@ To find the images and secrets of the MCP modules, uninstall reads an index of e
 - `mcp/<name>/module.index` of the installed release, for each shared module;
 - `~/.cache/agentbox/modules/<name>`, which each start writes. `agentbox setup` adds to it the `for_each` secrets that it stores. Thus the file has each secret that agentbox made with `for_each`, for example `github_pat_<owner>` for each owner that a start or `agentbox setup` used. A file of a module that is gone still counts.
 
-With Python 3.11 or newer, uninstall also reads the manifest of each module. It also reads the values of the list settings in `config.toml`, for example `GH_OWNERS`, but not from the environment. If uninstall cannot read a manifest (for example, without Python), it uses only the index of that module. It removes each of these secrets that exists on the host. It removes no other secret with the prefix `github_pat_`. A module of the old format (only `mcp.sh`) in `mcp.local/` is read as text, as before.
+With Python 3.11 or newer, uninstall also reads the manifest of each module. It also reads the values of the list settings in `config.toml`, for example `GH_OWNERS`, but not from the environment. If uninstall cannot read a manifest (for example, without Python), it uses only the index of that module. It removes each of these secrets that exists on the host. It removes no other secret with the prefix `github_pat_`. For an old-format module in `mcp.local/`, uninstall reads its `mcp.sh` as text, as before. Thus it still finds the secrets and images of that module.
 
 If uninstall cannot find a name, it says so, and keeps what it cannot name. Remove those items yourself (`podman secret ls`, `podman images`). This happens in these cases:
 
@@ -1498,7 +1529,8 @@ podman stop ab-egress ab-mcp-grafana ab-mcp-graylog ab-mcp-github ab-mcp-github-
 | `agentbox needs Python 3.11 or newer` | Install it ([Requirements](#requirements)). `agentbox update`, `rollback` and `uninstall` work without it. |
 | `... was not converted to TOML` | agentbox could not read that old file. The warning above names the line. Correct the old file. Then start again. You can also write its `.toml` file yourself. See [Conversion to TOML](#conversion-to-toml). |
 | `missing podman secrets` | No Claude Code token yet: `agentbox login`. |
-| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. No URL: the setting that gives the URL is empty. A setting that is not correct: the reason names it, with its place and the check (`config.toml:12: GRAFANA_URL: ... (url)`); `agentbox setup` shows it too. An error in its `module.toml`: the reason gives `module.toml:<line>: <reason> (<code>)`; if it says that the file needs a newer agentbox, update agentbox. A server name that another module also has: rename one of the servers. For a module of the old format, a server in its `MCP_SERVERS` that does not have the correct form, or `caller` without `MCP_CALLER_SECRET`: fix the `mcp.sh` of the module, or convert it ([Converting a module](#converting-a-module)). The session starts without the module. |
+| `MCP module '...' left out of this session` | The reason follows. A missing setting or secret: `agentbox setup` adds them. A failed start: the error above shows the cause. No such module in this version: it is from another version, or `AB_MCP` has a typo. Its `mcp.sh` does not parse: `bash -n` on it shows where. `its server '<name>' has an empty URL`: the setting that gives the URL is empty. A setting that is not correct: the reason names it, with its place and the check (`config.toml:12: GRAFANA_URL: ... (url)`); `agentbox setup` shows it too. An error in its `module.toml`: the reason gives `module.toml:<line>: <reason> (<code>)`; if it says that the file needs a newer agentbox, update agentbox. A server name that another module also has: rename one of the servers. `old format: see README, Converting a module`: the module has an `mcp.sh` and no `module.toml`; convert it ([Converting a module](#converting-a-module)). `<KEY> is a reserved name: rename this setting`: rename the setting ([Reserved names](#reserved-names)). The session starts without the module. |
+| `agentbox: <N> old files of v0.1.x can go: agentbox setup, item o` | The conversion to TOML converted these old files. agentbox v0.2.0 and later read only the TOML files. After the removal, a rollback to v0.1.x does not find your settings. To remove the files, use item `o` of `agentbox setup` ([Removing the old files](#removing-the-old-files)). The line comes at most one time a day. |
 | Claude shows the login picker or says it is not logged in | See [Token not picked up](#token-not-picked-up). |
 | `Unable to connect to Anthropic services` / `ERR_PROXY_TUNNEL` | Squid blocked a necessary host. The error names it. Find `DENIED` in the squid log, and add the host to a group in `egress.local.d/` (see [Egress](#egress)). The next start recreates squid. |
 | Build or test commands fail to download dependencies | The package registry for your language is not in the allowlist. PyPI is allowed. Add other registries deliberately: each one makes egress wider. |
@@ -1677,7 +1709,8 @@ Your settings and data are apart from the code, in `~/.config/agentbox/` (`AB_HO
 | `pi-extensions.local.d/<name>.toml` | Your own pi extension sources |
 | `pi-extensions.sources/` | The records of the pi extensions that agentbox installed (URL, commit, pin) |
 | `converted.list` | The old files that the [conversion to TOML](#conversion-to-toml) converted |
-| `convert.lock` | The lock of the conversion: one process converts at a time |
+| `convert.lock` | The lock of the conversion: one process converts or removes old files at a time |
+| `.old-files-reminded` | The time of the last reminder about the old files ([Removing the old files](#removing-the-old-files)) |
 | `.setup-toml-noted` | `agentbox setup` said one time that it saves only in `config.toml` |
 
 `run.sh` refuses to mount a repo that is, contains or lies inside one of these: agentbox's code, any installed version (`~/.local/share/agentbox`; `agentbox rollback` would run it), git-guard (`~/.local/bin/git`), or the files above. Otherwise, a session could change code that runs on your host, or read your passwords. To work on agentbox itself, open a separate clone of it.
@@ -1686,7 +1719,7 @@ Older versions kept these files next to the code (`agents/AGENTS.md` for `AGENTS
 
 #### Conversion to TOML
 
-agentbox v0.1.x kept your settings, sources and egress groups in other formats. The first start of v0.2.0, or `agentbox setup`, converts these files to TOML one time:
+agentbox v0.1.x kept your settings, sources and egress groups in other formats. The first start of v0.2.0 or later, or `agentbox setup`, converts these files to TOML one time:
 
 | Old file | New file |
 |---|---|
@@ -1697,7 +1730,7 @@ agentbox v0.1.x kept your settings, sources and egress groups in other formats. 
 | `egress.local.d/<name>.conf` | `egress.local.d/<name>.toml` |
 
 - The start names each file that it converts. Read the new files.
-- The old files stay unchanged, so that `agentbox rollback` to v0.1.x works. They stay until v0.3.0.
+- The old files stay unchanged, so that `agentbox rollback` to v0.1.x works. They stay until you remove them with item `o` of `agentbox setup` ([Removing the old files](#removing-the-old-files)).
 - A list with spaces or commas becomes an array, and `0` and `1` of a flag become `false` and `true`. A version such as `AB_GO_VERSION=1.22` becomes the string `"1.22"`. The keys of a source become lowercase. A setting of a module becomes a string.
 - In a source, a key that the new format does not know goes into the TOML file as a comment, with a warning.
 - In `config.env` and `env/<repo>.conf`, each key stays a setting. These lines become a comment, with a warning: a flag or a number with a wrong value (`AB_TRIVY=yes`), a line that is not `KEY=VALUE`, and the second line of the same key.
@@ -1706,10 +1739,43 @@ agentbox v0.1.x kept your settings, sources and egress groups in other formats. 
 - `converted.list` in `AB_HOME` lists each converted old file. agentbox does not convert a file in this list again, also when you remove its TOML file. The next start converts a `.conf` file that you add later.
 - To convert a file again, remove its line from `converted.list`.
 - The conversion does not change your modules in `mcp.local/`.
-- If you change an old file after a rollback, the next start of v0.2.0 says that it is newer than its TOML file. agentbox reads only the TOML file: put the change there.
+- If you change an old file after a rollback, the next start of v0.2.0 or later says that it is newer than its TOML file. agentbox reads only the TOML file: put the change there.
 - If `AB_CONFIG` names a `.env` file, change `AB_CONFIG` to the `.toml` file next to it. The start tells you this.
 - If you changed `AB_CONFIG` to a `.toml` file, set it back to the `.env` file before a rollback. v0.1.x cannot read a TOML file.
 - If `AB_CONFIG` names a file of v0.1.x without `.env`, agentbox reads it as TOML and stops. Copy the file to a name with the `.env` extension. Set `AB_CONFIG` to the copy.
+
+##### Removing the old files
+
+agentbox removes no old file by itself. Item `o` of `agentbox setup` removes the old files that the conversion converted. The menu shows the item only when at least one old file can go. An old file can go only if all of these are true:
+
+- `converted.list` marks it as converted, not as `kept`;
+- its TOML file exists, and the old file is not newer than its TOML file;
+- `AB_CONFIG` does not name it;
+- its path in `converted.list` is absolute;
+- the conversion found it in a place of old files. A path that you add to `converted.list` by hand stays.
+
+The places of old files are the places of the table above: the settings file of v0.1.x (`config.env`, or the `.env` file of `AB_CONFIG`), the `.conf` files in `AB_ENV_DIR`, and the `.conf` files in `skills.local.d/`, `pi-extensions.local.d/` and `egress.local.d/`.
+
+The item never removes `env/<repo>.env`: this file has the passwords of a repository, and agentbox still reads it.
+
+The item shows the files that go, and a list "Not removed" with one reason for each other old file. Then it shows the rollback warning and asks `remove these files? [y/N]`. After a yes, it removes the files at once, and `q` does not restore them. The changes of the menu that are not saved stay. After the removal, `agentbox rollback` to v0.1.x does not find your settings. A rollback to v0.2.x still works: it reads the TOML files.
+
+The reasons of a file that stays, in the order that the item checks them:
+
+| Reason | What to do |
+|---|---|
+| `kept: your TOML file was there before the conversion` | Compare the two files. Then remove the old file yourself |
+| `did not convert: read the warning of the start` | Correct the old file, or remove it yourself |
+| `no TOML file: <toml file> is missing` | The old file has the only copy of these settings. To convert it again, remove its line from `converted.list` |
+| `changed after the conversion: move the change to <toml file>` | Move the change into the TOML file. agentbox reads only the TOML file |
+| `AB_CONFIG names it: change AB_CONFIG to the .toml file first` | Set `AB_CONFIG` to the `.toml` file next to it |
+| `relative path: remove it yourself` | agentbox does not know the directory of the path |
+| `the settings file cannot be read` | Correct the settings file that the warning of the start names. Until then, agentbox does not know all places of old files |
+| `not a place of old files: remove it yourself` | The file is not in one of the places of old files above. agentbox does not remove it |
+
+The item removes the line of each removed file from `converted.list`. It also removes the line of each file with an absolute path that is not on disk. Thus a new old file with the same path converts again. If `rm` cannot remove a file, the file and its line stay. The item takes the lock of the conversion. After your yes, it checks each file again. Thus a start at the same time does no harm.
+
+While at least one old file can go, a start shows `agentbox: <N> old files of v0.1.x can go: agentbox setup, item o` (`file` for one file). The line comes at most one time a day for each settings directory (`AB_HOME`). The start shows it near its end, before the summary of the warnings and the question `start the session?`. The line is not a warning, so the start does not ask the question for it. If you answer no to the question, the line counts as shown. A start that stops before its end, for example after an error, does not show it. `agentbox login` does not show it. The time of the last line is the time of `.old-files-reminded` in `AB_HOME`.
 
 ### Tests
 
