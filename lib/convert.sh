@@ -6,6 +6,7 @@
 #   old_files_list      the old files, and which of them can go (the item
 #                       o of agentbox setup)
 #   old_files_remove    removes old files that can go, under the lock
+#   old_files_remind    the reminder of the start, at most one time a day
 #
 # Each old file <name>.conf or <name>.env becomes <name>.toml next to it
 # (lib/toml-writer.py), and toml_load reads it back before it is used.
@@ -51,6 +52,9 @@ CONVERT_FOUND_PARTIAL=""
 CONVERT_ENV_DIR=""
 # From old_files_list.
 OLD_FILES_PATH=() OLD_FILES_CAN=() OLD_FILES_REASON=()
+# The time of the last reminder (old_files_remind) is the mtime of this
+# file. Each settings directory has its own stamp.
+OLD_FILES_STAMP="$AB_HOME_DIR/.old-files-reminded"
 
 # CONVERT_LIST into CONVERT_LISTED, one read for each process.
 convert_read_list() {
@@ -314,4 +318,23 @@ old_files_remove() {  # <old files...>
   convert_read_list
   exec {lock}>&-
   return "$rc"
+}
+
+# The reminder of the start: one line on stderr when at least one old file
+# can go, at most one time a day. A missing stamp is older than one day. A
+# stamp time in the future (a clock that was wrong) is also old. The stamp
+# changes only after the line. Always returns 0: a failed touch does not
+# stop the start. Call convert_old_files first.
+old_files_remind() {
+  local mark age count=0 text=files
+  if [[ -f "$OLD_FILES_STAMP" ]]; then
+    age=$(( $(date +%s) - $(stat -L -c %Y -- "$OLD_FILES_STAMP" 2>/dev/null || echo 0) ))
+    (( age >= 0 && age < 86400 )) && return 0
+  fi
+  old_files_list || return 0
+  for mark in "${OLD_FILES_CAN[@]}"; do count=$((count + mark)); done
+  (( count == 1 )) && text="file"
+  echo "agentbox: $count old $text of v0.1.x can go: agentbox setup, item o" >&2
+  touch -- "$OLD_FILES_STAMP" 2>/dev/null || true
+  return 0
 }

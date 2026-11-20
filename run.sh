@@ -222,5 +222,7 @@ session_tz
 session_git_mounts
 session_env_file
 session_agent_args
+# Late: a start that stops before this point does not use up the reminder.
+old_files_remind
 warnings_review "$@"
 session_exec "$@"

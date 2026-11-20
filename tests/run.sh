@@ -1915,6 +1915,148 @@ status 1" "old_files_remove"
   assert_eq "$(cat "$CFG/converted.list")" "$T/data/x.conf" "converted.list"
 }
 
+# --- the old files of v0.1.x: the reminder of the start ---
+
+REMIND_RE='^agentbox: [0-9]+ old files? of v0\.1\.x can go: agentbox setup, item o$'
+
+# The line comes at most one time a day, and again after one day. "file"
+# for one file, "files" for two.
+test_old_files_reminder_once_a_day() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  ab_run --
+  assert_rc 0
+  assert_out '^agentbox: 1 old file of v0\.1\.x can go: agentbox setup, item o$'
+  [[ -f "$CFG/.old-files-reminded" ]] || fail "no stamp after the reminder"
+  ab_run --
+  assert_rc 0
+  assert_no_out "$REMIND_RE"
+  touch -d '25 hours ago' "$CFG/.old-files-reminded"
+  printf '%s\n' 'corp.example' > "$CFG/egress.local.d/corp.conf"
+  ab_run --
+  assert_rc 0
+  assert_out '^agentbox: 2 old files of v0\.1\.x can go: agentbox setup, item o$'
+  # A stamp time in the future (a clock that was wrong) is old.
+  touch -d '+30 days' "$CFG/.old-files-reminded"
+  ab_run --
+  assert_rc 0
+  assert_out "$REMIND_RE"
+  ab_run --
+  assert_no_out "$REMIND_RE"
+}
+
+# The line goes to stderr, not to stdout.
+test_old_files_reminder_on_stderr() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" AB_CHECK_UPDATES=0 \
+      bash "$AB/run.sh" "$REPO" > "$T/stdout" 2> "$T/stderr" < /dev/null
+  assert_eq "$?" 0 "status"
+  grep -qE -- "$REMIND_RE" "$T/stderr" || fail "no reminder on stderr"
+  ! grep -qE -- "old files? of v0\.1\.x can go" "$T/stdout" || fail "the reminder is on stdout"
+}
+
+# A start that stops with an error before the session does not use up the
+# reminder.
+test_old_files_reminder_failed_start() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  ab_run AB_AGENT=nope --
+  assert_rc 2
+  assert_no_out "$REMIND_RE"
+  [[ ! -e "$CFG/.old-files-reminded" ]] || fail "a failed start wrote the stamp"
+  ab_run --
+  assert_rc 0
+  assert_out "$REMIND_RE"
+}
+
+# No line when no file can go. The stamp stays as it was.
+test_old_files_reminder_none_can_go() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  ab_run --
+  assert_rc 0
+  assert_no_out "$REMIND_RE"
+  old_pypi_group
+  ab_run --
+  touch -d '25 hours ago' "$CFG/.old-files-reminded"
+  touch -d '+1 minute' "$CFG/egress.local.d/pypi.conf"
+  ab_run --
+  assert_rc 0
+  assert_no_out "$REMIND_RE"
+  [[ -n "$(find "$CFG/.old-files-reminded" -mmin +1440)" ]] || fail "the stamp changed with no reminder"
+}
+
+# A failed touch of the stamp gives no error, and the start goes on.
+test_old_files_reminder_failed_touch() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  ab_run --
+  assert_rc 0
+  # A link to a directory that does not exist: touch fails.
+  rm -f "$CFG/.old-files-reminded"
+  ln -s "$T/none/stamp" "$CFG/.old-files-reminded"
+  ab_run --
+  assert_rc 0
+  assert_out "$REMIND_RE"
+  assert_no_out "touch: "
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start"
+  ab_run --
+  assert_out "$REMIND_RE"
+}
+
+# At a terminal, the line is not one of the warnings of the start.
+# agentbox login shows no line.
+test_old_files_reminder_terminal_and_login() {
+  command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  : > "$STUB_DIR/secrets"
+  tty_run 'sk-ant-oat01-abc123\n' AB_LOGIN=1 --
+  assert_rc 0
+  assert_out "token stored as the podman secret claude_oauth"
+  assert_no_out "old files? of v0\.1\.x can go"
+  [[ ! -e "$CFG/.old-files-reminded" ]] || fail "agentbox login wrote the stamp"
+  tty_run '\n' -- "$REPO"
+  assert_rc 0
+  assert_out '^agentbox: 1 old file of v0\.1\.x can go: agentbox setup, item o'
+  assert_out "agentbox: this start warned:"
+  assert_no_out "  - .*old files? of v0\.1\.x can go"
+  # A start with no warning: the line does not make it ask.
+  printf '%s\n' '#!/bin/sh' '# agentbox git-guard (a stand-in of the tests)' "exec \"$WORK/realgit/git\" \"\$@\"" > "$T/bin/git"
+  chmod +x "$T/bin/git"
+  touch -d '25 hours ago' "$CFG/.old-files-reminded"
+  tty_run '' STUB_GRAPHIFY=ok -- "$REPO"
+  assert_rc 0
+  assert_out '^agentbox: 1 old file of v0\.1\.x can go: agentbox setup, item o'
+  assert_no_out "this start warned:"
+  assert_no_out "start the session\?"
+  grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start"
+}
+
+# Each settings directory has its own stamp.
+test_old_files_reminder_two_settings_dirs() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  local other="$T/other"
+  mkdir -p "$other/egress.local.d"
+  : > "$other/config.toml"
+  printf '%s\n' 'other.example' > "$other/egress.local.d/other.conf"
+  ab_run --
+  assert_rc 0
+  assert_out "$REMIND_RE"
+  ab_run AB_HOME="$other" --
+  assert_rc 0
+  assert_out "$REMIND_RE"
+  [[ -f "$CFG/.old-files-reminded" && -f "$other/.old-files-reminded" ]] || fail "not one stamp for each directory"
+}
+
 # --- run.sh: forwards ---
 
 # The hash in tabularis_bridge_dir (mcp/tabularis/mcp.sh), for the tests.
