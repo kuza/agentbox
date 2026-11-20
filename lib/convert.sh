@@ -1,27 +1,38 @@
-# The conversion of your files from agentbox v0.1.x to TOML, one time.
+# The conversion of your files from agentbox v0.1.x to TOML, one time, and
+# the removal of the old files after the conversion.
 #
 #   convert_old_files   the entry point: run.sh and agentbox setup call it
 #                       before they read the settings
+#   old_files_list      the old files, and which of them can go (the item
+#                       o of agentbox setup)
+#   old_files_remove    removes old files that can go, under the lock
 #
 # Each old file <name>.conf or <name>.env becomes <name>.toml next to it
-# (lib/toml-writer.py), and toml_load reads it back before it is used. The
-# old file stays unchanged, for a rollback to v0.1.x. CONVERT_LIST has the
-# path of each converted old file, one on each line, or "kept <path>" when
-# a TOML file of yours was there first. A file in the list is not
+# (lib/toml-writer.py), and toml_load reads it back before it is used.
+# CONVERT_LIST has the path of each converted old file, one on each line,
+# or "kept <path>" when a TOML file of yours was there first. A file in the list is not
 # converted again, even when you remove its TOML file. To convert a file
 # again, remove its line from the list. A file that cannot be converted
 # gets a warning and stays out of the list: the start goes on, and the
 # next start tries again. A start with nothing to
 # convert runs no Python. A flock on CONVERT_LOCK lets one process convert
-# at a time; the kernel releases it when the process stops.
+# or remove at a time; the kernel releases it when the process stops.
+#
+# An old file can go only when all of these are true:
+#   - the list marks it as converted (not kept);
+#   - its TOML file is there;
+#   - the old file is not newer than its TOML file;
+#   - AB_CONFIG does not name it;
+#   - its path is absolute;
+#   - this process found it in a place of old files (old_files_place).
+# Thus a path that you add to the list by hand stays. A .env file in the
+# environment directory is never a place of old files: <repo>.env has the
+# passwords of a repo.
 #
 # To add a kind of file, add a convert_find call to convert_old_files. Give
 # it the kind of the schema (lib/toml-schema/), the form of the old file
 # (lib/toml-writer.py) and the old files. If a step must read a converted
 # file, call convert_run first, then convert_find again.
-#
-# shortcut: the list only grows; clean it in v0.3.0, which removes the old
-# files.
 #
 # Needs SCRIPT_DIR, lib/paths.sh, lib/config.sh (ab_warn, CONFIG_FILE,
 # CONFIG_OLD_FILE) and lib/toml.sh.
@@ -30,6 +41,16 @@ CONVERT_LIST="$AB_HOME_DIR/converted.list"
 CONVERT_LOCK="$AB_HOME_DIR/convert.lock"
 CONVERT_TODO=()  # "<kind> <form> <old file>"
 declare -A CONVERT_LISTED=()  # <old file> -> converted or kept
+# Each old file that this process found on disk, in a place of old files.
+# CONVERT_FOUND_PARTIAL is 1 when the environment directory was not read:
+# then CONVERT_FOUND can lack some old files.
+declare -A CONVERT_FOUND=()
+CONVERT_FOUND_PARTIAL=""
+# The environment directory that convert_old_files read, as a full path.
+# Empty when it did not read it.
+CONVERT_ENV_DIR=""
+# From old_files_list.
+OLD_FILES_PATH=() OLD_FILES_CAN=() OLD_FILES_REASON=()
 
 # CONVERT_LIST into CONVERT_LISTED, one read for each process.
 convert_read_list() {
@@ -44,6 +65,7 @@ convert_read_list() {
 convert_old_files() {
   local env_dir="${AB_ENV_DIR:-}"
   local -A settings=()
+  CONVERT_FOUND=(); CONVERT_FOUND_PARTIAL=""; CONVERT_ENV_DIR=""
   convert_read_list
   # Step 1: the settings file. Step 2 reads AB_ENV_DIR in it.
   convert_find config keys "$CONFIG_OLD_FILE"
@@ -56,7 +78,12 @@ convert_old_files() {
     # AB_ENV_DIR is not known, so no directory is converted now.
     if toml_load config "$CONFIG_FILE" settings 2>/dev/null; then env_dir="${settings[AB_ENV_DIR]:-}"; else env_dir=-; fi
   fi
-  [[ "$env_dir" == - ]] || convert_find config keys "${env_dir:-$USER_ENV_DIR}"/*.conf
+  if [[ "$env_dir" == - ]]; then
+    CONVERT_FOUND_PARTIAL=1
+  else
+    CONVERT_ENV_DIR="$(realpath -m -- "${env_dir:-$USER_ENV_DIR}")"
+    convert_find config keys "${env_dir:-$USER_ENV_DIR}"/*.conf
+  fi
   convert_find egress-group hosts "$USER_EGRESS_DIR"/*.conf
   convert_find skill-source source "$USER_SKILLS_SOURCES_DIR"/*.conf
   convert_find pi-extension-source source "$USER_PI_EXTENSIONS_CONF_DIR"/*.conf
@@ -106,6 +133,7 @@ convert_find() {  # <kind> <form> <old files...>
   shift 2
   for old in "$@"; do
     [[ -f "$old" ]] || continue
+    CONVERT_FOUND[$old]=1
     new="${old%.*}.toml"
     if ! convert_listed "$old"; then
       CONVERT_TODO+=("$kind $form $old")
@@ -148,7 +176,8 @@ convert_run() {
   exec {lock}>&-
   CONVERT_TODO=()
   if (( ${#converted[@]} )); then
-    echo "agentbox: the conversion of your files to TOML. The old files stay unchanged, for a rollback to v0.1.x:" >&2
+    echo "agentbox: the conversion of your files to TOML. The old files stay. To remove them, use agentbox setup, item o." >&2
+    echo "Converted files:" >&2
     printf '  %s\n' "${converted[@]}" >&2
     echo "agentbox: $CONVERT_LIST lists the converted files. To convert a file again, remove its line from the list." >&2
   fi
@@ -182,4 +211,107 @@ convert_file() {  # <kind> <form> <old> <new>
   fi
   chmod --reference="$old" -- "$tmp"
   mv -f -- "$tmp" "$new"
+}
+
+# 0 when this process found <old file> in a place of old files. A .env file
+# in the environment directory is not one: <repo>.env has the passwords of
+# a repo. This rule applies also to the settings file of v0.1.x. When the
+# environment directory is not known, no .env file is one.
+old_files_place() {  # <old file>
+  [[ -n "${CONVERT_FOUND[$1]+x}" ]] || return 1
+  [[ "$1" == *.env ]] || return 0
+  [[ -n "$CONVERT_ENV_DIR" && "$(realpath -m -- "$(dirname -- "$1")")" != "$CONVERT_ENV_DIR" ]]
+}
+
+# Why <old file> cannot go: the first reason that applies, or nothing when
+# it can go. Uses CONVERT_LISTED and old_files_place.
+old_files_why() {  # <old file>
+  local old="$1" new="${1%.*}.toml"
+  if [[ "${CONVERT_LISTED[$old]-}" == kept ]]; then echo "kept: your TOML file was there before the conversion"
+  elif ! convert_listed "$old"; then echo "did not convert: read the warning of the start"
+  elif [[ ! -f "$new" ]]; then echo "no TOML file: $new is missing"
+  elif [[ "$old" -nt "$new" ]]; then echo "changed after the conversion: move the change to $new"
+  elif [[ "$old" == "${AB_CONFIG:-}" ]]; then echo "AB_CONFIG names it: change AB_CONFIG to the .toml file first"
+  elif [[ "$old" != /* ]]; then echo "relative path: remove it yourself"
+  elif ! old_files_place "$old" && [[ -n "$CONVERT_FOUND_PARTIAL" ]]; then echo "the settings file cannot be read"
+  elif ! old_files_place "$old"; then echo "not a place of old files: remove it yourself"
+  fi
+}
+
+# The old files on disk: the paths of CONVERT_LIST in their order, then the
+# old files that did not convert. Fills OLD_FILES_PATH, OLD_FILES_CAN (1:
+# it can go, 0: it stays) and OLD_FILES_REASON (old_files_why). Returns 0
+# when at least one file can go. Call convert_old_files first.
+old_files_list() {
+  local old why can=1
+  local -A seen=()
+  OLD_FILES_PATH=(); OLD_FILES_CAN=(); OLD_FILES_REASON=()
+  convert_read_list
+  while IFS= read -r old; do
+    [[ -n "$old" && -z "${seen[$old]+x}" && -f "$old" ]] || continue
+    seen[$old]=1
+    why="$(old_files_why "$old")"
+    OLD_FILES_PATH+=("$old"); OLD_FILES_REASON+=("$why")
+    if [[ -z "$why" ]]; then OLD_FILES_CAN+=(1); can=0; else OLD_FILES_CAN+=(0); fi
+  done < <(
+    if [[ -f "$CONVERT_LIST" ]]; then
+      while IFS= read -r old; do printf '%s\n' "${old#kept }"; done < "$CONVERT_LIST"
+    fi
+    for old in "${!CONVERT_FOUND[@]}"; do convert_listed "$old" || printf '%s\n' "$old"; done | sort
+  )
+  return "$can"
+}
+
+# Removes each <old file> that can go now, and its line in CONVERT_LIST.
+# Under the lock, it reads the list and the files again: a start at the
+# same time can change them. It also removes the line of each file that is
+# not on disk. It keeps a relative line, and the line of a file that rm
+# cannot remove. Prints "removed <path>" or "kept <path>: <reason>" for
+# each <old file> on disk. Returns 0 when it removed each of them, 1 when
+# one stays, and 2 when it cannot take the lock or write the list.
+old_files_remove() {  # <old files...>
+  local lock old why line rc=0 removed="" total=0 lines=()
+  if ! { mkdir -p -- "$AB_HOME_DIR" && exec {lock}>> "$CONVERT_LOCK"; } 2>/dev/null; then
+    echo "error: cannot change $CONVERT_LIST: nothing removed" >&2
+    return 2
+  fi
+  if ! flock "$lock"; then
+    exec {lock}>&-
+    echo "error: cannot change $CONVERT_LIST: nothing removed" >&2
+    return 2
+  fi
+  convert_read_list
+  for old in "$@"; do
+    [[ -f "$old" ]] || continue
+    why="$(old_files_why "$old")"
+    if [[ -z "$why" ]] && ! rm -f -- "$old" 2>/dev/null; then why="cannot remove it"; fi
+    if [[ -z "$why" ]]; then
+      echo "removed $old"
+      removed=1
+    else
+      echo "kept $old: $why"
+      rc=1
+    fi
+  done
+  if [[ -f "$CONVERT_LIST" ]]; then
+    while IFS= read -r line; do
+      total=$((total + 1))
+      old="${line#kept }"
+      if [[ -n "$line" ]] && [[ "$old" != /* || -f "$old" ]]; then lines+=("$line"); fi
+    done < "$CONVERT_LIST"
+    # A fixed name is safe under the lock.
+    if (( ${#lines[@]} != total )) && ! { { if (( ${#lines[@]} )); then printf '%s\n' "${lines[@]}"; fi; } > "$CONVERT_LIST.new" &&
+        mv -f -- "$CONVERT_LIST.new" "$CONVERT_LIST"; } 2>/dev/null; then
+      rm -f -- "$CONVERT_LIST.new" 2>/dev/null
+      if [[ -n "$removed" ]]; then
+        echo "error: removed the files, but cannot write $CONVERT_LIST; the next removal cleans it" >&2
+      else
+        echo "error: cannot change $CONVERT_LIST: nothing removed" >&2
+      fi
+      rc=2
+    fi
+  fi
+  convert_read_list
+  exec {lock}>&-
+  return "$rc"
 }

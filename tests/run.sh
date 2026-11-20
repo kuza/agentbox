@@ -1620,6 +1620,301 @@ test_convert_settings_of_ab_config() {
   assert_out "other.env was not converted to TOML"
 }
 
+# --- the old files of v0.1.x: the item o of agentbox setup ---
+
+# The numbered lines of the menu in $T/out: the number and the name.
+setup_numbers() { awk '$1 ~ /^[0-9]+$/ { print $1, $3 }' "$T/out"; }
+
+# The item shows only when an old file can go. N counts these files, and
+# the numbers of the entries do not change.
+test_old_files_item_shows_with_count() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  setup_run "o\nq\n"
+  assert_no_out "Remove the old files"
+  assert_no_out "o: remove"
+  assert_out "^> a number, e <number>, s or q$"
+  local before; before="$(setup_numbers)"
+  old_pypi_group
+  setup_run "x\nq\n"
+  assert_out "pypi.conf -> pypi.toml"
+  assert_out "^  o  Remove the old files of v0.1.x \(1 file\)$"
+  assert_out "; o: remove the old files; s: save; q: quit$"
+  assert_out "^> a number, e <number>, o, s or q$"
+  assert_eq "$(setup_numbers)" "$before" "the numbers of the entries"
+  # The item comes after the last entry, before the footer.
+  grep -B1 '^  o  Remove' "$T/out" | head -n1 | grep -qE '^ *[0-9]+ ' || fail "no entry before the item"
+  grep -A1 '^  o  Remove' "$T/out" | tail -n1 | grep -q '^number: ' || fail "no footer after the item"
+  printf '%s\n' 'corp.example' > "$CFG/egress.local.d/corp.conf"
+  setup_run "q\n"
+  assert_out "^  o  Remove the old files of v0.1.x \(2 files\)$"
+  # A kept file does not count, and alone it gives no item.
+  touch -d '+1 minute' "$CFG/egress.local.d/corp.conf" "$CFG/egress.local.d/pypi.conf"
+  setup_run "o\nq\n"
+  assert_no_out "Remove the old files"
+  assert_out "^> a number, e <number>, s or q$"
+}
+
+# The list, the reasons in their order, and the rollback warning; the
+# removal acts at once, and the lines of converted.list after it.
+test_old_files_list_and_remove() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  cd "$T" || return
+  local e="$CFG/egress.local.d" env="$CFG/env" dot="$T/dotfiles"
+  mkdir -p "$e" "$env" "$dot"
+  printf '%s\n' 'AB_EGRESS=anthropic' > "$dot/agentbox.env"
+  printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' > "$env/repo.conf"
+  printf '%s\n' 'DB_PASSWORD=secret' > "$env/repo.env"
+  printf '%s\n' 'hosts = ["mine.example"]' > "$e/mine.toml"
+  for f in mine gone new ok; do printf '%s\n' "$f.example" > "$e/$f.conf"; done
+  printf '%s\n' 'one.example two.example' > "$e/bad.conf"
+  AB_CONFIG="$dot/agentbox.env" setup_run "q\n"
+  assert_out "ok.conf -> ok.toml"
+  rm "$e/gone.toml"
+  touch -d '+1 minute' "$e/new.conf"
+  # A relative path, a relative path with no file in this directory, a
+  # path that you added by hand (the environment file of a repo, with an
+  # older TOML file next to it), and a file that is gone.
+  echo rel.example > rel.conf; echo 'hosts = ["rel.example"]' > rel.toml
+  printf '%s\n' rel.conf elsewhere/rel2.conf "$env/repo.env" "$T/missing.conf" >> "$CFG/converted.list"
+  touch -d '-1 minute' "$env/repo.env"
+  AB_CONFIG="$dot/agentbox.env" setup_run "o\nn\nq\n"
+  assert_out "^  o  Remove the old files of v0.1.x \(2 files\)$"
+  assert_eq "$(sed -n '/^> These old files/,/remove these files?/p' "$T/out")" "> These old files of v0.1.x can go:
+  $env/repo.conf
+  $e/ok.conf
+Not removed:
+  $dot/agentbox.env: AB_CONFIG names it: change AB_CONFIG to the .toml file first
+  $e/gone.conf: no TOML file: $e/gone.toml is missing
+  $e/mine.conf: kept: your TOML file was there before the conversion
+  $e/new.conf: changed after the conversion: move the change to $e/new.toml
+  rel.conf: relative path: remove it yourself
+  $env/repo.env: not a place of old files: remove it yourself
+  $e/bad.conf: did not convert: read the warning of the start
+After this, agentbox rollback to v0.1.x does not find your settings.
+A rollback to v0.2.x still works: it reads the TOML files.
+remove these files? [y/N] " "the list"
+  [[ -f "$env/repo.conf" && -f "$e/ok.conf" ]] || fail "a file is gone after no"
+  # A pending change, then the removal: it acts with no "s", the change
+  # stays pending, and "q" does not bring the files back.
+  local trivy; trivy="$(AB_CONFIG="$dot/agentbox.env" setup_entry AB_TRIVY)"
+  AB_CONFIG="$dot/agentbox.env" setup_run "$trivy\no\ny\nq\ny\n"
+  assert_out "^remove these files\? \[y/N\] removed $env/repo.conf$"
+  assert_out "^removed $e/ok.conf$"
+  assert_out "\(changed, not saved\)"
+  assert_out "quit without saving"
+  [[ -e "$env/repo.conf" || -e "$e/ok.conf" ]] && fail "the files stay"
+  assert_file_lacks "$dot/agentbox.toml" AB_TRIVY
+  # The environment file of the repo, its TOML file and the kept files stay.
+  [[ -f "$env/repo.env" && -f "$env/repo.toml" && -f "$e/ok.toml" && -f "$e/mine.conf" && -f rel.conf ]] || fail "a file that must stay is gone"
+  assert_eq "$(cat "$CFG/converted.list")" "$dot/agentbox.env
+$e/gone.conf
+kept $e/mine.conf
+$e/new.conf
+rel.conf
+elsewhere/rel2.conf
+$env/repo.env" "converted.list"
+  # No item now; a new old file with the same path converts again.
+  AB_CONFIG="$dot/agentbox.env" setup_run "q\n"
+  assert_no_out "Remove the old files"
+  rm "$e/ok.toml"
+  printf '%s\n' 'ok2.example' > "$e/ok.conf"
+  AB_CONFIG="$dot/agentbox.env" setup_run "q\n"
+  assert_out "ok.conf -> ok.toml"
+  assert_out "^  o  Remove the old files of v0.1.x \(1 file\)$"
+}
+
+# config.toml cannot be read: the environment directory is not read, so
+# its old files stay with this reason.
+test_old_files_settings_file_cannot_be_read() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  mkdir -p "$CFG/env"
+  printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' > "$CFG/env/repo.conf"
+  old_pypi_group
+  setup_run "q\n"
+  assert_out "repo.conf -> repo.toml"
+  echo 'AB_MCP = [' > "$CFG/config.toml"
+  setup_run "o\nn\nq\n"
+  assert_out "^  o  Remove the old files of v0.1.x \(1 file\)$"
+  assert_out "^  $CFG/env/repo.conf: the settings file cannot be read$"
+  assert_out "^  $CFG/egress.local.d/pypi.conf$"
+}
+
+# Two reasons apply: the first one in the order of the spec shows.
+test_old_files_reason_order() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  cd "$T" || return
+  mkdir -p "$T/dot" "$T/rel"
+  old_pypi_group
+  printf '%s\n' 'AB_EGRESS=anthropic' > "$T/dot/agentbox.env"
+  printf '%s\n' 'AB_EGRESS=anthropic' > "$T/rel/agentbox.env"
+  AB_CONFIG="$T/dot/agentbox.env" setup_run "q\n"
+  AB_CONFIG=rel/agentbox.env setup_run "q\n"
+  assert_file_has "$CFG/converted.list" '^rel/agentbox.env$'
+  # Reason 4 (newer) comes before reason 5 (AB_CONFIG).
+  touch -d '+1 minute' "$T/dot/agentbox.env"
+  AB_CONFIG="$T/dot/agentbox.env" setup_run "o\nn\nq\n"
+  assert_out "^  $T/dot/agentbox.env: changed after the conversion: move the change to $T/dot/agentbox.toml$"
+  # Reason 5 (AB_CONFIG) comes before reason 6 (relative path).
+  AB_CONFIG=rel/agentbox.env setup_run "o\nn\nq\n"
+  assert_out "^  rel/agentbox.env: AB_CONFIG names it: change AB_CONFIG to the .toml file first$"
+}
+
+# A .env file of the environment directory never goes: it has the
+# passwords of a repo. Also not when it is the settings file of v0.1.x
+# (AB_CONFIG names its .toml file, or AB_ENV_DIR is the settings directory).
+test_old_files_env_file_of_a_repo_stays() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  old_pypi_group
+  mkdir -p "$CFG/env"
+  printf '%s\n' 'AB_EGRESS=anthropic' > "$CFG/env/repo.env"
+  AB_CONFIG="$CFG/env/repo.toml" setup_run "q\n"
+  assert_out "repo.env -> repo.toml"
+  AB_CONFIG="$CFG/env/repo.toml" setup_run "o\ny\nq\n"
+  assert_out "^  $CFG/env/repo.env: not a place of old files: remove it yourself$"
+  assert_out "\\] removed $CFG/egress.local.d/pypi.conf$"
+  [[ -f "$CFG/env/repo.env" ]] || fail "the environment file of the repo is gone"
+  # AB_ENV_DIR is the settings directory: config.env is also the
+  # environment file of the repo "config".
+  rm "$CFG/config.toml"
+  printf '%s\n' "AB_ENV_DIR=$CFG" > "$CFG/config.env"
+  old_pypi_group; rm "$CFG/egress.local.d/pypi.toml"
+  sed -i '\#pypi.conf#d' "$CFG/converted.list"
+  setup_run "o\ny\nq\n"
+  assert_out "config.env -> config.toml"
+  assert_out "^  $CFG/config.env: not a place of old files: remove it yourself$"
+  assert_out "\\] removed $CFG/egress.local.d/pypi.conf$"
+  [[ -f "$CFG/config.env" ]] || fail "config.env is gone"
+}
+
+# rm cannot remove the file: it stays, with its line.
+test_old_files_failed_rm_keeps_the_line() {
+  (( EUID )) || { skip "root can remove each file"; return 0; }
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  old_pypi_group
+  setup_run "q\n"
+  chmod a-w "$CFG/egress.local.d"
+  setup_run "o\ny\nq\n"
+  chmod u+w "$CFG/egress.local.d"
+  assert_out "kept $CFG/egress.local.d/pypi.conf: cannot remove it$"
+  assert_no_out "^rm: "
+  [[ -f "$CFG/egress.local.d/pypi.conf" ]] || fail "the file is gone"
+  assert_eq "$(cat "$CFG/converted.list")" "$CFG/egress.local.d/pypi.conf" "converted.list"
+}
+
+# fifo_setup_start: agentbox setup with its input from the FIFO $T/in, in
+# the background; its output in $T/out. A time limit stops a hang.
+# fifo_send <text>: fails the test when the menu stopped before it read
+# the text. fifo_wait <ERE>: waits at most 10 seconds for the ERE in the
+# output. fifo_setup_end: ends the input, waits for the menu, RC.
+fifo_setup_start() {
+  mkfifo "$T/in"
+  timeout -k 5 30 env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH" \
+    bash "$AB/agentbox" setup < "$T/in" > "$T/out" 2>&1 &
+  FIFO_PID=$!
+  exec {FIFO_FD}> "$T/in"
+  # A write after the menu stopped then fails, and does not stop the test
+  # with SIGPIPE: run_test would count that as a pass.
+  trap '' PIPE
+}
+fifo_send() {
+  if ! { printf '%b' "$1" >&"$FIFO_FD"; } 2>/dev/null; then
+    fail "the menu stopped before the input '$1'"$'\n'"$(sed 's/^/      | /' "$T/out")"
+    return 1
+  fi
+}
+fifo_wait() {
+  local i
+  for i in $(seq 100); do grep -qE -- "$1" "$T/out" && return 0; sleep 0.1; done
+  fail "no /$1/ in the output"$'\n'"$(sed 's/^/      | /' "$T/out")"
+  return 1
+}
+fifo_setup_end() {
+  exec {FIFO_FD}>&-
+  wait "$FIFO_PID"
+  RC=$?
+}
+
+# old_files_race <name> <command>: the menu shows the list of the old
+# file pypi.conf. A shell takes the lock, and the yes comes. The shell
+# waits, runs <command> as a start could, and releases the lock. In
+# <command>, $OLD is the old file and $LIST is converted.list. The menu
+# output is in $T/out.
+old_files_race() {
+  setup "$1"
+  cp "$ROOT/agentbox" "$AB/"
+  old_pypi_group
+  setup_run "q\n"
+  local old="$CFG/egress.local.d/pypi.conf" holder i
+  fifo_setup_start
+  fifo_send "o\n"
+  if fifo_wait "remove these files\?"; then
+    OLD="$old" LIST="$CFG/converted.list" timeout 20 flock "$CFG/convert.lock" bash -c "touch '$T/locked'; sleep 1; $2" &
+    holder=$!
+    for i in $(seq 100); do [[ -e "$T/locked" ]] && break; sleep 0.1; done
+    [[ -e "$T/locked" ]] || fail "the shell did not take the lock"
+    fifo_send "y\n"
+    wait "$holder" || fail "the shell that holds the lock failed"
+    fifo_wait "kept $old"
+  fi
+  fifo_send "q\n"
+  fifo_setup_end
+  assert_rc 0
+  [[ -f "$old" ]] || fail "the old file is gone"
+}
+
+# The start makes the old file newer: the check after the yes keeps it.
+test_old_files_race_newer_file() {
+  local old
+  old_files_race "${FUNCNAME[0]}" 'touch -d "+1 minute" "$OLD"'
+  old="$CFG/egress.local.d/pypi.conf"
+  assert_out "^remove these files\? \[y/N\] kept $old: changed after the conversion: move the change to .*pypi.toml$"
+  assert_eq "$(cat "$CFG/converted.list")" "$old" "converted.list"
+}
+
+# The start removes the line of the old file from converted.list: the yes
+# reads the list again under the lock, and keeps the file.
+test_old_files_race_line_removed() {
+  local old
+  old_files_race "${FUNCNAME[0]}" 'sed -i "\#pypi.conf#d" "$LIST"'
+  old="$CFG/egress.local.d/pypi.conf"
+  assert_out "^remove these files\? \[y/N\] kept $old: did not convert: read the warning of the start$"
+  assert_eq "$(cat "$CFG/converted.list")" "" "converted.list"
+}
+
+# A direct call with a path that converted.list names, but that is not a
+# place of old files: it stays, also with an older TOML file next to it.
+test_old_files_remove_foreign_path() {
+  [[ -n "$TEST_PYTHON" ]] || { skip "no Python 3.11+"; return 0; }
+  setup "${FUNCNAME[0]}"
+  old_pypi_group
+  ab_run --
+  assert_rc 0
+  mkdir -p "$T/data"
+  echo 'hosts = ["x.example"]' > "$T/data/x.toml"
+  echo x.example > "$T/data/x.conf"
+  touch -d '-1 minute' "$T/data/x.conf"
+  echo "$T/data/x.conf" >> "$CFG/converted.list"
+  local out rc
+  out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" PATH="$T/bin:$PATH"
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/convert.sh"
+    toml_python
+    convert_old_files
+    old_files_remove "$T/data/x.conf" "$CFG/egress.local.d/pypi.conf" 2>&1
+    echo "status $?"
+  )"
+  assert_eq "$out" "kept $T/data/x.conf: not a place of old files: remove it yourself
+removed $CFG/egress.local.d/pypi.conf
+status 1" "old_files_remove"
+  [[ -f "$T/data/x.conf" ]] || fail "the foreign file is gone"
+  assert_eq "$(cat "$CFG/converted.list")" "$T/data/x.conf" "converted.list"
+}
+
 # --- run.sh: forwards ---
 
 # The hash in tabularis_bridge_dir (mcp/tabularis/mcp.sh), for the tests.

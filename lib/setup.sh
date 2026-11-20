@@ -12,7 +12,10 @@
 # and the order of the lines stay. For a key that is not set, setup uses
 # its "#KEY =" line from the example. Setup keeps the old file as config.toml.bak, and stores
 # the secrets. Setup does not change config.env of v0.1.x. Tokens never go into
-# config.toml. A module may say what to type for a setting and a secret
+# config.toml. The item "o" shows when an old file of v0.1.x can go
+# (lib/convert.sh, old_files_list). It lists the old files, and removes
+# them at once after a yes. "s" is not necessary, and "q" does not restore
+# them. A module may say what to type for a setting and a secret
 # (MCP_SETTING_HELP, MCP_SECRET_HELP_OF) and how that becomes the secret
 # (mcp_secret_value).
 #
@@ -42,6 +45,8 @@ SETUP_OTHER=(
 # error of config.toml.
 declare -A SETUP_NEW=() SETUP_SECRETS=() SETUP_FILE=() SETUP_AT=() SETUP_INFO=() SETUP_REASON=() SETUP_HAS=() SETUP_PROBLEM=()
 SETUP_ERROR="" SETUP_LISTS=" "
+# The number of old files that can go, from setup_show; empty: no item "o".
+SETUP_OLD_FILES=""
 
 # The value of <key> in config.toml, as run.sh reads it: "set <value>" or
 # "unset". The environment does not count here. From setup_prime.
@@ -550,8 +555,41 @@ setup_show() {
     [[ -n "$status" ]] && printf '        %s\n' "$status"
   done < <(setup_entries)
   for key in "${CONFIG_KEYS[@]}" ${keys[@]+"${keys[@]}"}; do [[ -n "${!key+x}" ]] && env+=" $key"; done
+  SETUP_OLD_FILES=""
+  if old_files_list; then
+    SETUP_OLD_FILES=0
+    for mark in "${OLD_FILES_CAN[@]}"; do SETUP_OLD_FILES=$((SETUP_OLD_FILES + mark)); done
+    if (( SETUP_OLD_FILES == 1 )); then text="file"; else text="files"; fi
+    echo "  o  Remove the old files of v0.1.x ($SETUP_OLD_FILES $text)"
+  fi
   [[ -n "$env" ]] && echo "Note: set in your environment, which wins over config.toml:$env"
-  echo "number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit"
+  if [[ -n "$SETUP_OLD_FILES" ]]; then
+    echo "number: toggle or edit; e <number>: settings and secrets of a module; o: remove the old files; s: save; q: quit"
+  else
+    echo "number: toggle or edit; e <number>: settings and secrets of a module; s: save; q: quit"
+  fi
+}
+
+# The item "o": shows the old files that can go and the files that stay,
+# with their reasons, and removes the first ones after a yes. The removal
+# acts at once, and the pending changes of the menu stay.
+setup_old_files() {
+  local i reply go=() kept=()
+  old_files_list || { echo "  no old file can go now"; return; }
+  for i in "${!OLD_FILES_PATH[@]}"; do
+    if (( OLD_FILES_CAN[i] )); then go+=("${OLD_FILES_PATH[i]}"); else kept+=("${OLD_FILES_PATH[i]}: ${OLD_FILES_REASON[i]}"); fi
+  done
+  echo "These old files of v0.1.x can go:"
+  printf '  %s\n' "${go[@]}"
+  if (( ${#kept[@]} )); then
+    echo "Not removed:"
+    printf '  %s\n' "${kept[@]}"
+  fi
+  echo "After this, agentbox rollback to v0.1.x does not find your settings."
+  echo "A rollback to v0.2.x still works: it reads the TOML files."
+  setup_read reply "remove these files? [y/N] " || reply=n
+  [[ "$reply" == [yY]* ]] || return 0
+  old_files_remove "${go[@]}"
 }
 
 setup_act() {  # <number> [e]
@@ -658,9 +696,9 @@ setup_save() {
       echo "error: could not write $CONFIG_FILE; nothing saved" >&2
       return 1
     fi
-    # Once: v0.1.x reads config.env, which setup no longer changes.
+    # Once: setup no longer changes config.env of v0.1.x.
     if [[ -f "$CONFIG_OLD_FILE" && ! -e "$note" ]]; then
-      echo "agentbox: note: setup now saves your settings only in $CONFIG_FILE. It does not change $CONFIG_OLD_FILE, which agentbox v0.1.x reads."
+      echo "agentbox: note: setup now saves your settings only in $CONFIG_FILE. It does not change $CONFIG_OLD_FILE. The old files stay. To remove them, use agentbox setup, item o."
       { : > "$note"; } 2>/dev/null
     fi
   fi
@@ -719,8 +757,9 @@ agentbox_setup() {
           [[ "$reply" == [yY]* ]] || continue
         fi
         return 0 ;;
+      o) if [[ -n "$SETUP_OLD_FILES" ]]; then setup_old_files; else echo "a number, e <number>, s or q"; fi ;;
       "") ;;
-      *) echo "a number, e <number>, s or q" ;;
+      *) if [[ -n "$SETUP_OLD_FILES" ]]; then echo "a number, e <number>, o, s or q"; else echo "a number, e <number>, s or q"; fi ;;
     esac
   done
 }
