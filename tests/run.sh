@@ -4198,6 +4198,69 @@ test_setup_manifest_module() {
   assert_out "TR_URL NEEDED · TR_TEAMS=Bad!"
 }
 
+# A module with a reserved setting name in the menu (stories 51, 53, 54):
+# NOT USABLE with the reason of the start, also while a setting is NEEDED.
+# The reason names the first reserved setting. The menu does not set the
+# setting, show its value, ask for it, write it, or run the module code.
+# The value of a variable of the menu's shell (HOSTNAME, which bash sets)
+# does not make a for_each secret.
+test_setup_reserved_setting() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module tr 'format = 1' 'description = "Tracker"' \
+    '[settings.TR_URL]' 'required = true' '[settings.PATH]' '[settings.FUNCNEST]' \
+    '[settings.HOSTNAME]' 'list = true' 'check = "name"' \
+    '[secrets.tok]' '[secrets."team_{item}"]' 'for_each = "HOSTNAME"' \
+    '[[servers]]' 'name = "tr"' 'url = "https://t.example/mcp"'
+  printf '%s\n' "touch '$T/bound'" 'mcp_secret_value() { printf "made:%s" "$2"; }' > "$CFG/mcp.local/tr/mcp.sh"
+  local tr status="TR_URL NEEDED · secret tr_tok: MISSING · NOT USABLE: PATH is a reserved name: rename this setting"
+  tr="$(setup_entry tr)"
+  setup_run "q\n"
+  assert_rc 0
+  assert_out "^ +$status · e $tr\$"
+  assert_no_out "FUNCNEST|HOSTNAME|PATH=|tr_team_|Note: set in your environment"
+  # On: the menu asks for TR_URL and refuses the reserved settings. It
+  # does not ask for the secret, and says why: the module code cannot run.
+  setup_run "$tr\nhttps://t.example\ns\n"
+  assert_rc 0
+  assert_out "  PATH is a reserved name: rename this setting\$"
+  assert_out "^  FUNCNEST is a reserved name: rename this setting\$"
+  assert_out "^  HOSTNAME is a reserved name: rename this setting\$"
+  assert_out "  the menu does not ask for the secrets of tr until you rename the setting: PATH is a reserved name: rename this setting\$"
+  assert_out "note: agentbox leaves tr out of the start until this is fixed: PATH is a reserved name: rename this setting"
+  assert_no_out "secret tr_tok for tr"
+  grep -qx 'TR_URL = "https://t.example"' "$CFG/config.toml" || fail "TR_URL not saved"
+  grep -qE '^#? *(PATH|FUNCNEST) *=' "$CFG/config.toml" && fail "a reserved setting in config.toml: $(grep -E 'PATH|FUNCNEST' "$CFG/config.toml")"
+  # A value of a reserved setting in config.toml does not break the menu,
+  # and the menu does not show it.
+  printf '%s\n' 'PATH = "/nowhere"' 'FUNCNEST = "1"' >> "$CFG/config.toml"
+  setup_run "e $tr\n\nq\n"
+  assert_rc 0
+  assert_out "^ +TR_URL=https://t.example · secret tr_tok: MISSING · NOT USABLE: PATH is a reserved name: rename this setting · e $tr\$"
+  assert_no_out "/nowhere|FUNCNEST=|tr_team_|maximum function nesting|command not found"
+  [[ ! -e "$T/bound" ]] || fail "the menu ran the code of a module with a reserved setting"
+}
+
+# A module with a reserved setting AB_MCP can be turned off and saved: the
+# menu does not forget the pending change of AB_MCP with the settings of
+# the module.
+test_setup_reserved_setting_turn_off() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module tr 'format = 1' '[settings.AB_MCP]' '[[servers]]' 'name = "tr"' 'url = "https://t.example/mcp"'
+  config "AB_MCP=tr"
+  local tr; tr="$(setup_entry tr)"
+  setup_run "q\n"
+  assert_out "[0-9] \\[x\\] tr "
+  assert_out "NOT USABLE: AB_MCP is a reserved name: rename this setting"
+  setup_run "$tr\ns\n"
+  assert_rc 0
+  assert_out "agentbox: saved "
+  grep -q '"tr"' "$CFG/config.toml" && fail "tr still in AB_MCP: $(grep AB_MCP "$CFG/config.toml")"
+  setup_run "q\n"
+  assert_out "[0-9] \\[ \\] tr "
+}
+
 # The file check of WOODPECKER_CA (v0.2.1): a CA file that does not exist
 # makes woodpecker NOT USABLE in the menu.
 test_setup_woodpecker_missing_ca() {

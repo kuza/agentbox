@@ -478,7 +478,11 @@ mcp_load_manifest() {  # <name> [--declared]
   for k in ${all[@]+"${all[@]}"}; do mcp_manifest_subst egress "$k" || return 2; done
   [[ "${2:-}" != --declared ]] || return 0
   for k in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
-    val="${!k:-}"
+    # The start leaves out a module with a reserved setting name (mcp_init),
+    # so only the menu gets here. A variable of its shell (HOSTNAME) is not
+    # a value of the setting.
+    val=""
+    setting_name_reserved "$k" || val="${!k:-}"
     at="${SETTING_AT[$k]:-environment}"
     if [[ -z "$val" ]]; then
       val="${v[settings.$k.default]:-}"
@@ -651,7 +655,7 @@ mcp_config_keys_text() {  # <mcp.sh>
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.toml), before the second.
 mcp_init() {
-  local name keys key rc d why seen=" " list="${AB_MCP:-}"
+  local name keys rc d why seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -694,12 +698,11 @@ mcp_init() {
     # A setting with a reserved name would change agentbox or the shell
     # (lib/config.sh, RESERVED_NAMES): left out, and its sidecars stay.
     # The warning names the first such setting of the manifest.
-    for key in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
-      setting_name_reserved "$key" || continue
-      ab_warn "MCP module '$name' left out of this session: $key is a reserved name: rename this setting"
+    if why="$(setting_reserved_reason ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})"; then
+      ab_warn "MCP module '$name' left out of this session: $why"
       MCP_SKIPPED+=("$name")
-      continue 2
-    done
+      continue
+    fi
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done

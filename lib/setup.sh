@@ -61,6 +61,9 @@ setup_prime() {
     info="$(setup_module_info "$n")" || { SETUP_INFO[$n]="!"; continue; }
     SETUP_INFO[$n]="$info"
     read -ra more <<<"$(sed -n 2p <<<"$info")"
+    # A reserved name (lib/config.sh) is not read: unset in the subshell
+    # below, PATH or IFS would break it.
+    read -ra more <<<"$(settings_not_reserved ${more[@]+"${more[@]}"})"
     keys+=(${more[@]+"${more[@]}"})
     SETUP_LISTS+="$(sed -n 8p <<<"$info") "
   done < <(mcp_names | sort)
@@ -247,6 +250,15 @@ setup_module_line() {  # <name> <n>
   setup_module_info "$1" | sed -n "${2}p"
 }
 
+# The reason of the start for a module with a setting with a reserved name
+# (setting_reserved_reason): the first such setting of the manifest. Status
+# 1 if it has none. The menu does not run the code of such a module
+# (mcp_bind): the code gets the settings as variables.
+setup_module_reserved() {  # <name>
+  # shellcheck disable=SC2046  # the keys are words
+  setting_reserved_reason $(setup_module_line "$1" 2)
+}
+
 # The help of <name> from line <n> of the module info; empty if none.
 setup_help() {  # <module> <n> <name>
   local h
@@ -267,6 +279,7 @@ setup_secret_help() {  # <module> <secret>: what to type, from MCP_SECRET_HELP_O
 # as they are now in the menu.
 setup_secret_value() {  # <module> <secret> <typed>
   (
+    setup_module_reserved "$1" >/dev/null && exit 1
     # shellcheck disable=SC2046  # the keys are words
     setup_apply_settings $(setup_module_line "$1" 2)
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
@@ -346,10 +359,12 @@ setup_ask_secret() {  # <secret> <module> [replace]
 
 # Settings and secrets of module <name>; with "all", existing secrets too.
 setup_module_settings() {  # <name> [all]
-  local keys req missing k s h
+  local keys req missing k s h why
   if ! setup_module_info "$1" >/dev/null; then echo "  module $1: $(setup_module_reason "$1")"; return; fi
   keys="$(setup_module_line "$1" 2)"; req="$(setup_module_line "$1" 3)"
-  for k in $keys; do
+  # The menu does not edit a setting with a reserved name.
+  for k in $keys; do why="$(setting_reserved_reason "$k")" && echo "  $why"; done
+  for k in $(settings_not_reserved $keys); do
     # In this shell: a changed setting empties the cache, and $(...) would
     # make the info again for each call.
     setup_module_info "$1" >/dev/null
@@ -361,15 +376,22 @@ setup_module_settings() {  # <name> [all]
     else setup_ask_value "$k" "setting of $1, optional${h:+: $h}"; fi
   done
   setup_module_info "$1" >/dev/null
+  # Its secrets can come from its code (mcp_secret_value), which does not
+  # run.
+  if why="$(setup_module_reserved "$1")"; then
+    [[ -z "$(setup_module_line "$1" 4)" ]] || echo "  the menu does not ask for the secrets of $1 until you rename the setting: $why"
+    return 0
+  fi
   for s in $(setup_module_line "$1" 4); do setup_ask_secret "$s" "$1" ${2:+replace}; done
 }
 
 # Sets <keys> as they are now in the menu, saved or not; the environment
-# wins, as for run.sh. SETTING_AT gets the place of each value: its line in
+# wins, as for run.sh. It does not set a key with a reserved name
+# (setting_name_reserved). SETTING_AT gets the place of each value: its line in
 # config.toml, or "setup (not saved)". For a subshell that loads a module.
 setup_apply_settings() {  # <keys...>
   local k v
-  for k in "$@"; do
+  for k in $(settings_not_reserved "$@"); do
     [[ -n "${!k+x}" ]] && continue
     v="$(setup_get "$k")"
     [[ -n "$v" ]] || continue
@@ -382,7 +404,8 @@ setup_apply_settings() {  # <keys...>
 # What run.sh would leave module <name> out for, with the settings as they
 # are now in the menu (saved or not; the environment wins, as for run.sh):
 # its mcp_check and its server lines (lib/mcp.sh), the first problem only.
-# Nothing while a setting is missing (MCP_MISSING): the status says NEEDED.
+# A setting with a reserved name comes first (setup_module_reserved). Then
+# nothing while a setting is missing (MCP_MISSING): the status says NEEDED.
 # Kept in SETUP_PROBLEM[<name>] until a setting changes: call it in the
 # menu's own shell, not in $(...), and read the array.
 setup_module_problem() {  # <name>
@@ -393,6 +416,7 @@ setup_module_problem_now() {  # <name>
   (
     local v="" rc
     setup_module_info "$1" >/dev/null || exit 0
+    setup_module_reserved "$1" && exit 0
     # shellcheck disable=SC2046  # the keys are words
     setup_apply_settings $(setup_module_line "$1" 2)
     rc=0; mcp_load "$1" >/dev/null 2>&1 || rc=$?
@@ -417,19 +441,22 @@ setup_module_warn() {  # <name>: says so when run.sh would leave it out
 setup_module_forget() {  # <name>
   local k
   for k in $(setup_module_line "$1" 4); do unset "SETUP_SECRETS[$k]"; done
-  for k in $(setup_module_line "$1" 2); do unset "SETUP_NEW[$k]"; done
+  # Not a reserved name: AB_MCP holds the change that turned it off.
+  # shellcheck disable=SC2046  # the keys are words
+  for k in $(settings_not_reserved $(setup_module_line "$1" 2)); do unset "SETUP_NEW[$k]"; done
   # Its settings changed: its info (secrets from a setting) is made again.
   SETUP_INFO=(); SETUP_REASON=(); SETUP_PROBLEM=()
 }
 
 # The status line under module <name>, number <n>: its settings, whether
-# its secrets are there. Empty for a module with neither.
+# its secrets are there. Empty for a module with neither. A setting with a
+# reserved name does not show: the reason of NOT USABLE names it.
 setup_module_status() {  # <name> <n>
   local keys missing secrets k v out="" problem
   keys="$(setup_module_line "$1" 2)"; missing="$(setup_module_line "$1" 7)"; secrets="$(setup_module_line "$1" 4)"
   problem="${SETUP_PROBLEM[$1]:-}"   # setup_show fills it
   [[ -n "$keys$secrets$problem" ]] || return 0
-  for k in $keys; do
+  for k in $(settings_not_reserved $keys); do
     v="$(setup_get "$k")"
     if [[ -n "${!k+x}" ]]; then out+=" · $k=${!k} (environment)"
     elif [[ -n "$v" ]]; then out+=" · $k=$v"
@@ -490,7 +517,9 @@ setup_show() {
              [[ "$(mcp_find "$name")" == "$USER_MCP_DIR/"* ]] && text="(yours) $text"
              setup_module_problem "$name"
              status="$(setup_module_status "$name" "$i")"
-             read -ra more <<<"$(setup_module_line "$name" 2)"
+             # The note does not show a reserved name (PATH) from the environment.
+             # shellcheck disable=SC2046  # the keys are words
+             read -ra more <<<"$(settings_not_reserved $(setup_module_line "$name" 2))"
              keys+=(${more[@]+"${more[@]}"})
            else
              text="($(setup_module_reason "$name"))"

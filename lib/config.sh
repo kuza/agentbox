@@ -110,6 +110,28 @@ setting_name_reserved() {  # <name>
   return 1
 }
 
+# The names of <keys> that are not reserved (setting_name_reserved), in
+# their order, on one line. The menu reads, sets, shows and forgets only
+# these.
+settings_not_reserved() {  # <keys...>
+  local key out=()
+  for key in "$@"; do setting_name_reserved "$key" || out+=("$key"); done
+  echo "${out[*]-}"
+}
+
+# The reason that a module with the settings <keys> cannot be used: its
+# first setting with a reserved name. The start and the menu show it.
+# Status 1 if no setting has a reserved name.
+setting_reserved_reason() {  # <keys...>
+  local key
+  for key in "$@"; do
+    setting_name_reserved "$key" || continue
+    echo "$key is a reserved name: rename this setting"
+    return 0
+  done
+  return 1
+}
+
 # The settings file: config.toml in AB_HOME, or the file of AB_CONFIG. When
 # AB_CONFIG names a .env file of v0.1.x, the TOML file next to it
 # (lib/convert.sh writes it).
