@@ -508,6 +508,19 @@ test_mcp_server_names_and_urls_checked() {
   assert_skipped c
   assert_out "c' left out of this session: it needs C_URL"
   grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its URL setting emptied"
+  # An empty URL with all settings set (status 3 of mcp_servers_problem): an
+  # empty url, or a field of a setting that is empty (no port in C_URL). The
+  # module is left out, and its sidecars go.
+  local url
+  for url in '""' '"{C_URL.port}"'; do
+    manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' '[[servers]]' 'name = "c"' "url = $url"
+    : > "$CFG/config.toml"; config "AB_MCP=c" "C_URL=https://c.example/mcp"
+    printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
+    ab_run --
+    assert_skipped c
+    assert_out "c' left out of this session: its server 'c' has an empty URL"
+    grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "url = $url: sidecar kept with an empty URL"
+  done
 }
 
 # mcp_load on its own: the status codes, the normalized variables, and
