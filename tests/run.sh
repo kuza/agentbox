@@ -333,6 +333,8 @@ test_warnings_named_again_at_a_terminal() {
   tty_run '\n' --
   assert_rc 0
   grep -q '^podman run --rm -i' "$STUB_DIR/calls" || fail "the session did not start on Enter"
+  # The session mounts the test repo, not the current directory.
+  session_args | grep -qx -- "$REPO:/work/repo:z" || fail "tty_run did not give the test repo to run.sh"
   # AB_WARNINGS_ASK=0: printed, not asked.
   tty_run '' AB_WARNINGS_ASK=0 --
   assert_rc 0
@@ -2022,7 +2024,7 @@ test_old_files_reminder_terminal_and_login() {
   assert_out "token stored as the podman secret claude_oauth"
   assert_no_out "old files? of v0\.1\.x can go"
   [[ ! -e "$CFG/.old-files-reminded" ]] || fail "agentbox login wrote the stamp"
-  tty_run '\n' -- "$REPO"
+  tty_run '\n' --
   assert_rc 0
   assert_out '^agentbox: 1 old file of v0\.1\.x can go: agentbox setup, item o'
   assert_out "agentbox: this start warned:"
@@ -2031,7 +2033,7 @@ test_old_files_reminder_terminal_and_login() {
   printf '%s\n' '#!/bin/sh' '# agentbox git-guard (a stand-in of the tests)' "exec \"$WORK/realgit/git\" \"\$@\"" > "$T/bin/git"
   chmod +x "$T/bin/git"
   touch -d '25 hours ago' "$CFG/.old-files-reminded"
-  tty_run '' STUB_GRAPHIFY=ok -- "$REPO"
+  tty_run '' STUB_GRAPHIFY=ok --
   assert_rc 0
   assert_out '^agentbox: 1 old file of v0\.1\.x can go: agentbox setup, item o'
   assert_no_out "this start warned:"
@@ -3922,9 +3924,10 @@ test_uninstall_asks() {
 
 # --- agentbox login: a real terminal through script(1) ---
 
-# tty_run <input> <env...> -- <run.sh args...>: run.sh on a pseudo-terminal,
-# <input> typed into it; a "\p" in it waits a second before the rest, as a
-# person would (agent_login reads on what comes right after a token).
+# tty_run <input> <env...> -- <run.sh args...>: run.sh with $REPO on a
+# pseudo-terminal, as ab_run does, and <input> typed into it. A "\p" in
+# <input> waits a second before the rest, as a person would (agent_login
+# reads on what comes right after a token).
 tty_run() {
   local input="$1"; shift
   local envs=()
@@ -3937,7 +3940,7 @@ tty_run() {
       part="${input%%\\p*}"; printf '%b' "$part"; sleep 1; input="${input#*\\p}"
     done
     printf '%b' "$input"; } | timeout 60 script -qec "$(printf '%q ' env HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache" \
-      PATH="$T/bin:$PATH" STUB_DIR="$STUB_DIR" AB_CHECK_UPDATES=0 ${envs[@]+"${envs[@]}"} bash "$AB/run.sh" "$@")" /dev/null \
+      PATH="$T/bin:$PATH" STUB_DIR="$STUB_DIR" AB_CHECK_UPDATES=0 ${envs[@]+"${envs[@]}"} bash "$AB/run.sh" "$REPO" "$@")" /dev/null \
       > "$T/out" 2>&1
   RC=$?
 }
@@ -4077,6 +4080,9 @@ test_session_log() {
 
   # At a terminal, the message comes after the reset of the terminal.
   command -v script >/dev/null || { skip "no script(1) for a terminal"; return 0; }
+  # The plain test repo: script(1) gives the command to a shell, and not
+  # each shell reads the quotes that printf %q makes for a newline.
+  REPO="$T/repo"
   tty_run '' AB_WARNINGS_ASK=0 STUB_SESSION_RC=139 --
   assert_rc 139
   [[ "$(cat "$T/out")" == *"STUB-SESSION-END$TEST_TERM_RESET"*"the agent crashed"* ]] ||
@@ -4439,6 +4445,23 @@ test_setup_secrets() {
   local sv; sv="$(setup_entry sv)"
   setup_run "$sv\nabc\ns\n"
   assert_eq "$(cat "$STUB_DIR/secret-sv_tok" 2>/dev/null)" "made:abc" "secret of a manifest module"
+  return 0
+}
+
+# A manifest module whose mcp.sh does not parse cannot make a secret: the
+# menu says so, and stores nothing.
+test_setup_secret_of_broken_module() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module bad 'format = 1' '[secrets.tok]' 'help = "The token"' \
+    '[[servers]]' 'name = "bad"' 'url = "https://bad.example/mcp"'
+  printf '%s\n' 'mcp_secret_value() { printf "made:%s" "$2"; }' 'if then' > "$CFG/mcp.local/bad/mcp.sh"
+  local bad; bad="$(setup_entry bad)"
+  [[ -n "$bad" ]] || { fail "module bad not in the menu"; return 0; }
+  setup_run "$bad\nabc\ns\n"
+  assert_out "secret bad_tok for bad"
+  assert_out "module bad cannot make the secret from that; not stored"
+  [[ -e "$STUB_DIR/secret-bad_tok" ]] && fail "the secret of a module whose mcp.sh does not parse stored"
   return 0
 }
 
