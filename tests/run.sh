@@ -525,16 +525,24 @@ test_mcp_load_status() {
     source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"; source "$AB/lib/toml.sh"; source "$AB/lib/mcp.sh"; source "$AB/lib/egress.sh"
     rc=0; mcp_load nope || rc=$?; echo "nope $rc $MCP_PROBLEM"
     rc=0; mcp_load broken --declared || rc=$?; echo "broken $rc $MCP_PROBLEM"
+    rc=0; why="$(mcp_old_format broken)" || rc=$?; echo "old broken $rc $why"
+    rc=0; why="$(mcp_old_format a)" || rc=$?; echo "old a $rc $why"
+    rc=0; why="$(mcp_old_format nope)" || rc=$?; echo "old nope $rc $why"
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
     rc=0; mcp_load grafana || rc=$?; echo "grafana $rc ${MCP_SERVERS[*]} ${#MCP_SECRET_HELP_OF[@]}"
     rc=0; mcp_load github || rc=$?; echo "github $rc ${MCP_SERVERS[0]%%|*}"
     echo "names $(mcp_names | tr '\n' ' ')" )"
   assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for module.toml or mcp.sh in $CFG/mcp.local/nope and mcp/nope)"
-  assert_eq "$(sed -n 2p <<<"$out")" "broken 2 its mcp.sh does not parse (bash -n $CFG/mcp.local/broken/mcp.sh)"
-  assert_eq "$(sed -n 3p <<<"$out")" "a 0 a|https://a.example/mcp|caller|A what to type: a token"
-  assert_eq "$(sed -n 4p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|-| 0" "yours wins"
-  assert_eq "$(sed -n 5p <<<"$out")" "github 0 github"
-  local names; names="$(sed -n 6p <<<"$out")"
+  # An old-format module (only mcp.sh) does not load. Its mcp.sh does not
+  # run, so a parse error does not count.
+  assert_eq "$(sed -n 2p <<<"$out")" "broken 2 old format: see README, Converting a module"
+  assert_eq "$(sed -n 3p <<<"$out")" "old broken 0 old format: see README, Converting a module"
+  assert_eq "$(sed -n 4p <<<"$out")" "old a 1 " "a manifest module"
+  assert_eq "$(sed -n 5p <<<"$out")" "old nope 1 " "no such module"
+  assert_eq "$(sed -n 6p <<<"$out")" "a 0 a|https://a.example/mcp|caller|A what to type: a token"
+  assert_eq "$(sed -n 7p <<<"$out")" "grafana 0 grafana|https://g.example/mcp|-| 0" "yours wins"
+  assert_eq "$(sed -n 8p <<<"$out")" "github 0 github"
+  local names; names="$(sed -n 9p <<<"$out")"
   [[ "$names" == "names a broken grafana "* ]] || fail "yours not first: $names"
   [[ "$names" == *" context7 "* ]] || fail "no shared module: $names"
   (( $(grep -o ' grafana ' <<<"$names" | wc -l) == 1 )) || fail "grafana not once: $names"
@@ -638,6 +646,70 @@ test_mcp_unknown_module() {
   ab_run --
   grep -qx 'podman rm -f -v ab-mcp-jira' "$STUB_DIR/calls" && fail "another version's sidecar removed"
   grep -qx 'podman rm -f -v ab-mcp-jira-old' "$STUB_DIR/calls" || fail "an unmarked sidecar kept by its name"
+  return 0
+}
+
+# An old-format module in AB_MCP (v0.3.0): left out with the old-format
+# warning, and its sidecars and host services go. Its settings give no
+# "unknown key" warning. The other modules start. agentbox login does the
+# same. An old copy of a shared module keeps the shared module out, and the
+# warning names the copy. An old directory that is not in AB_MCP gives no
+# warning.
+test_mcp_old_format_module_left_out() {
+  setup "${FUNCNAME[0]}"
+  local why="old format: see README, Converting a module"
+  mkdir -p "$CFG/mcp.local/tracker" "$CFG/mcp.local/idle"
+  printf '%s\n' 'MCP_URL="https://t.example/mcp"' 'MCP_CONFIG=(TRACKER_SITE)' "touch '$T/sourced'" > "$CFG/mcp.local/tracker/mcp.sh"
+  printf '%s\n' 'MCP_URL="https://i.example/mcp"' "touch '$T/sourced'" > "$CFG/mcp.local/idle/mcp.sh"
+  manifest_module notes 'format = 1' '[[servers]]' 'name = "notes"' 'url = "https://n.example/mcp"'
+  config "AB_MCP=tracker notes" "TRACKER_SITE=acme"
+  # What an earlier version started for tracker: a marked sidecar, its
+  # copies in the cache, and a host service.
+  old_tracker_runs() {
+    printf 'ab-mcp-tracker x\n' >> "$STUB_DIR/running"
+    printf 'ab-mcp-tracker agentbox.module=tracker\n' >> "$STUB_DIR/labels"
+    mkdir -p "$T/home/.cache/agentbox/sidecars/ab-mcp-tracker"
+    echo tracker > "$T/home/.cache/agentbox/sidecars/ab-mcp-tracker/.module"
+    printf '%s\n' "agentbox-mcp-tracker.service agentbox host service of tracker [x]" "agentbox-mine.service my own" > "$STUB_DIR/units"
+  }
+  old_tracker_gone() {  # <command>
+    grep -qx 'podman rm -f -v ab-mcp-tracker' "$STUB_DIR/calls" || fail "$1: the sidecar of tracker stays"
+    [[ ! -e "$T/home/.cache/agentbox/sidecars/ab-mcp-tracker" ]] || fail "$1: the copies of tracker stay"
+    assert_eq "$(awk '{ print $1 }' "$STUB_DIR/units")" "agentbox-mine.service" "$1: host services left"
+  }
+  old_tracker_runs
+  # A sidecar with no mark goes at the cleanup of the start: the name is
+  # neither in MCP_SKIPPED nor in MCP_UNKNOWN.
+  printf 'ab-mcp-tracker-old x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped tracker
+  grep -qx 'podman rm -f -v ab-mcp-tracker-old' "$STUB_DIR/calls" || fail "the sidecar of tracker with no mark stays"
+  grep -qxF "agentbox: warning: MCP module 'tracker' left out of this session: $why" "$T/out" || fail "no old-format warning"
+  assert_no_out "no such module|has the old format|unknown key 'TRACKER_SITE'|'idle'"
+  old_tracker_gone start
+  grep -q '"notes"' "$(cache mcp-claude.json)" || fail "notes left out too"
+  [[ ! -e "$T/sourced" ]] || fail "the mcp.sh of an old-format module was sourced"
+  # agentbox login: the same warning, and the same removal.
+  if command -v script >/dev/null; then
+    old_tracker_runs
+    tty_run 'sk-ant-oat01-abc123\n' AB_LOGIN=1 --
+    assert_rc 0
+    grep -qF "MCP module 'tracker' left out of this session: $why" "$T/out" || fail "login: no old-format warning"
+    old_tracker_gone login
+  fi
+  # An old copy of a shared module: the shared module does not load in its
+  # place.
+  mkdir -p "$CFG/mcp.local/grafana"
+  printf '%s\n' 'MCP_URL="https://g.example/mcp"' 'MCP_CONFIG=(GRAFANA_URL)' > "$CFG/mcp.local/grafana/mcp.sh"
+  : > "$CFG/config.toml"
+  config "AB_MCP=grafana" "GRAFANA_URL=https://grafana.example"
+  secrets grafana_sa
+  ab_run --
+  assert_skipped grafana
+  grep -qxF "agentbox: warning: MCP module 'grafana' left out of this session: $why; remove $CFG/mcp.local/grafana to use the shared module" "$T/out" \
+    || fail "no line for the old copy of a shared module"
+  assert_no_out "unknown key 'GRAFANA_URL'"
+  [[ ! -e "$T/sourced" ]] || fail "the mcp.sh of an old-format module was sourced"
   return 0
 }
 
@@ -3901,6 +3973,29 @@ s
     assert_no_out "cannot be read|note: agentbox leaves bad out"
     assert_out "nothing to save"
   done
+  return 0
+}
+
+# An old-format module in the menu: the old-format text in its line, at
+# e <number> and at the toggle, and no note of setup_module_warn.
+test_setup_old_format_module_reason() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  local why="old format: see README, Converting a module" n
+  mkdir -p "$CFG/mcp.local/old"
+  printf '%s\n' 'MCP_URL="https://o.example/mcp"' "touch '$T/sourced'" > "$CFG/mcp.local/old/mcp.sh"
+  n="$(setup_entry old)"
+  [[ -n "$n" ]] || { fail "no entry of old"; return 0; }
+  setup_run "e $n
+$n
+s
+"
+  grep -qF -- "$(printf '%3d [ ] %-14s (%s)' "$n" old "$why")" "$T/out" || fail "the line lacks the old-format text"
+  grep -F -- "module old: $why" "$T/out" | grep -qvF "not turned on" || fail "e $n lacks the old-format text"
+  grep -qF -- "module old: $why; not turned on" "$T/out" || fail "the toggle lacks the old-format text"
+  assert_no_out "cannot be read|note: agentbox leaves old out"
+  assert_out "nothing to save"
+  [[ ! -e "$T/sourced" ]] || fail "the menu sourced the mcp.sh of an old-format module"
   return 0
 }
 

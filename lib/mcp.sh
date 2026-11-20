@@ -107,6 +107,15 @@ mcp_names() {
   done
 }
 
+# Status 0 if the directory of module <name> has an mcp.sh and no
+# module.toml (an old-format module). Then it prints the reason that the
+# start and agentbox setup show. v0.3.0 does not load such a module.
+mcp_old_format() {  # <name>
+  local d
+  d="$(mcp_find "$1")" && [[ -f "$d/mcp.sh" && ! -f "$d/module.toml" ]] || return 1
+  echo "old format: see README, Converting a module"
+}
+
 # 0 if the mcp.sh in <directory> parses (bash -n).
 mcp_parses() {  # <its directory, from mcp_find>
   bash -n "$1/mcp.sh" 2>/dev/null
@@ -126,8 +135,8 @@ mcp_load_again() {  # <name>
 # 2 broken, 3 no Python, 4 no such module. MCP_PROBLEM gives the reason.
 # With --declared, it checks no setting values (status 0, 2, 3 or 4).
 # A module with module.toml goes to mcp_load_manifest, which runs no module
-# code (MCP_FORMAT=manifest). A module with only mcp.sh (MCP_FORMAT=old)
-# gives 0, 1, 2 or 4: mcp_load sources its mcp.sh, also with --declared.
+# code (MCP_FORMAT=manifest). A module with only mcp.sh (an old-format
+# module) gives 2, and MCP_PROBLEM is the text of mcp_old_format.
 # MCP_SERVERS has the servers: the old adapter fills it also with
 # --declared, the manifest adapter only without --declared (with
 # MCP_EGRESS). MCP_SECRET_HELP_OF[<secret>] holds the help of each secret.
@@ -145,6 +154,11 @@ mcp_load() {  # <name> [--declared]
   if [[ -f "$MCP_DIR/module.toml" ]]; then
     mcp_load_manifest "$1" "${2:-}"
     return
+  fi
+  # An old-format module does not load: no module reaches the old adapter
+  # below.
+  if MCP_PROBLEM="$(mcp_old_format "$1")"; then
+    return 2
   fi
   MCP_FORMAT=old
   if ! mcp_parses "$MCP_DIR"; then
@@ -723,7 +737,7 @@ mcp_config_keys_text() {  # <mcp.sh>
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.toml), before the second.
 mcp_init() {
-  local name keys rc d seen=" " list="${AB_MCP:-}"
+  local name keys rc d why seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -733,6 +747,18 @@ mcp_init() {
     fi
     [[ "$seen" == *" $name "* ]] && continue
     seen+="$name "
+    # An old-format module: left out, and what it runs goes now. agentbox
+    # does not manage it. An old copy of a shared module in mcp.local/
+    # keeps the shared module out too, so the warning names the copy.
+    if why="$(mcp_old_format "$name")"; then
+      d="$(mcp_find "$name")"
+      if [[ "$d" == "$USER_MCP_DIR/$name" && -f "$SCRIPT_DIR/mcp/$name/module.toml" ]]; then
+        why+="; remove $d to use the shared module"
+      fi
+      ab_warn "MCP module '$name' left out of this session: $why"
+      module_remove "$name"
+      continue
+    fi
     # A module this version does not have (a newer or older one's, or a
     # typo): left out, with a warning, like a module that cannot run.
     # What it runs (another version's sessions) stays.
@@ -746,7 +772,8 @@ mcp_init() {
       3) toml_no_python "read $MCP_DIR/module.toml"; exit 2 ;;
       *) ab_warn "MCP module '$name' left out of this session: $MCP_PROBLEM"
          # Its settings are not read. They get no warning (MCP_QUIET_KEYS)
-         # for a module of the old format, and for a manifest that loads.
+         # only for a manifest that loads. An old-format module does not
+         # get here: the check above leaves it out.
          MCP_SKIPPED+=("$name")
          continue ;;
     esac
