@@ -651,7 +651,7 @@ mcp_config_keys_text() {  # <mcp.sh>
 # Enabled modules from AB_MCP, and the config keys they read. Run after the
 # first config pass (AB_MCP may come from config.toml), before the second.
 mcp_init() {
-  local name keys rc d why seen=" " list="${AB_MCP:-}"
+  local name keys key rc d why seen=" " list="${AB_MCP:-}"
   MCP_ENABLED=()
   MCP_CONFIG_KEYS=()
   for name in context7 ${list//,/ }; do
@@ -691,6 +691,15 @@ mcp_init() {
          MCP_SKIPPED+=("$name")
          continue ;;
     esac
+    # A setting with a reserved name would change agentbox or the shell
+    # (lib/config.sh, RESERVED_NAMES): left out, and its sidecars stay.
+    # The warning names the first such setting of the manifest.
+    for key in ${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"}; do
+      setting_name_reserved "$key" || continue
+      ab_warn "MCP module '$name' left out of this session: $key is a reserved name: rename this setting"
+      MCP_SKIPPED+=("$name")
+      continue 2
+    done
     MCP_ENABLED+=("$name")
     MCP_CONFIG_KEYS+=(${MCP_CONFIG[@]+"${MCP_CONFIG[@]}"})
   done

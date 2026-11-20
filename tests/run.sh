@@ -1028,6 +1028,145 @@ test_mcp_manifest_module_left_out() {
   assert_out "'git' left out of this session: .*/git/module.toml: .*\(reserved-name\)"
 }
 
+# A module with a reserved setting name does not start. Its sidecars stay,
+# as for a module that cannot start. The other modules start.
+test_mcp_reserved_setting_left_out() {
+  setup "${FUNCNAME[0]}"
+  local srv=('[[servers]]' 'name = "tracker"' 'url = "https://t.example/mcp"') key
+  manifest_module notes 'format = 1' '[[servers]]' 'name = "notes"' 'url = "https://n.example/mcp"'
+  manifest_module tracker 'format = 1' '[settings.TRACKER_SITE]' '[settings.SETUP_MODE]' '[settings.SCRIPT_DIR]' "${srv[@]}"
+  printf '%s\n' "mcp_start() { touch '$T/started'; }" > "$CFG/mcp.local/tracker/mcp.sh"
+  config "AB_MCP=tracker notes" "TRACKER_SITE=acme" "SETUP_MODE=x"
+  # What an earlier start of tracker runs: a marked sidecar.
+  printf 'ab-mcp-tracker x\n' >> "$STUB_DIR/running"
+  printf 'ab-mcp-tracker agentbox.module=tracker\n' >> "$STUB_DIR/labels"
+  ab_run --
+  assert_skipped tracker
+  grep -qxF "agentbox: warning: MCP module 'tracker' left out of this session: SETUP_MODE is a reserved name: rename this setting" "$T/out" \
+    || fail "no reserved-name warning for the first reserved setting"
+  assert_no_out "unknown key|SCRIPT_DIR is a reserved"
+  grep -q '^podman rm -f.* ab-mcp-tracker' "$STUB_DIR/calls" && fail "the sidecar of tracker went"
+  [[ " $(started) " == *" ab-mcp-tracker "* ]] || fail "the sidecar of tracker stopped"
+  [[ ! -e "$T/started" ]] || fail "the code of tracker ran"
+  grep -q '"notes"' "$(cache mcp-claude.json)" || fail "notes left out too"
+  # A name of bash (story 47) and names with a prefix of the list (story 48).
+  : > "$CFG/config.toml"
+  config "AB_MCP=tracker"
+  for key in FUNCNEST GIT_X LC_X; do
+    manifest_module tracker 'format = 1' "[settings.$key]" "${srv[@]}"
+    ab_run --
+    assert_skipped tracker
+    assert_out "'tracker' left out of this session: $key is a reserved name: rename this setting$"
+  done
+}
+
+# A variable in the environment with the name of a setting overrides the
+# file (story 52). The rule of the reserved names does not change this.
+test_mcp_setting_from_environment_overrides_file() {
+  setup "${FUNCNAME[0]}"
+  manifest_module a 'format = 1' '[settings.A_URL]' 'check = "url"' '[[servers]]' 'name = "a"' 'url = "{A_URL.base}/mcp"'
+  config "AB_MCP=a" "A_URL=https://file.example"
+  ab_run --
+  assert_rc 0
+  assert_file_has "$(cache mcp-claude.json)" '"url": "https://file.example/mcp"'
+  ab_run A_URL=https://env.example --
+  assert_rc 0
+  assert_file_has "$(cache mcp-claude.json)" '"url": "https://env.example/mcp"'
+}
+
+# code_scan_names <files...>: each upper-case name that the code sets or
+# reads, one time, sorted. A # starts a comment only at the start of a
+# word and outside quotes, so ${#NAME[@]} and "a #b" stay. The forms: NAME=, NAME+=, NAME[...]=,
+# declare -g, printf -v, read, mapfile, $NAME, ${NAME, and a name in
+# (( )). A name in a string counts too. In (( )), the text of $(...) and
+# of "..." is not arithmetic: the other forms read it.
+code_scan_names() {
+  local n='[A-Za-z_][A-Za-z0-9_]*' code
+  # A form with no match is not an error: also under set -e of the caller,
+  # each form runs. "local -" puts the options back on return.
+  local -
+  set +e +o pipefail
+  # The quotes count only on one line: a ' in the text of a here-document
+  # must not hide the comments of the lines after it.
+  code="$(awk '{
+    q = ""; out = $0
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (c == "\\" && q != "\047") { i++; continue }
+      if (q == "") {
+        if (c == "\047" || c == "\"") q = c
+        else if (c == "#" && (i == 1 || substr($0, i - 1, 1) ~ /[[:space:]]/)) { out = substr($0, 1, i - 1); break }
+      } else if (c == q) q = ""
+    }
+    print out
+  }' "$@")"
+  {
+    grep -oE "(^|[^A-Za-z0-9_\$])$n(\\[[^]=]*\\])?\\+?=" <<<"$code" | sed -E "s/^[^A-Za-z_]?($n).*/\\1/"
+    grep -oE "\\\$\\{?[#!]?$n" <<<"$code" | sed -E 's/^\$\{?[#!]?//'
+    grep -oE "printf[[:space:]]+-v[[:space:]]+\"?$n" <<<"$code" | grep -oE "$n\$"
+    grep -oE "(declare[[:space:]]+-[A-Za-z]*g[A-Za-z]*|(^|[^A-Za-z0-9_-])(read|mapfile|readarray))([[:space:]]+[^;&|<>[:space:]]+)*" <<<"$code" \
+      | sed -E 's/^[^A-Za-z]*(declare|read|mapfile|readarray)//' | tr -s '[:space:]' '\n'
+    grep -oE '\(\(([^)]|\)[^)])*\)\)' <<<"$code" | sed -E 's/\$\([^()]*\)//g; s/"[^"]*"//g' \
+      | grep -oE "(^|[^A-Za-z0-9_\$])$n" | grep -oE "$n"
+  } | grep -E '^[A-Z][A-Z0-9_]*$' | sort -u
+}
+
+# The code scan (story 56): setting_name_reserved refuses each upper-case
+# name of the code of agentbox, and a probe name for each fixed item of
+# RESERVED_NAMES. No glob matches a setting of a shared
+# module: the shared module could not start.
+test_config_reserved_names_cover_the_code() {
+  setup "${FUNCNAME[0]}"
+  # The scan finds each form, and skips the comments.
+  cat > "$T/sample.sh" <<'EOF'
+F_SET=1; F_ADD+=(x) F_ARR[$i]=y
+  declare -gA F_DECL=() F_DECL2
+printf -v F_PRINTF '%s' NOT_A_NAME
+while IFS= read -r F_READ1 F_READ2; do :; done
+mapfile -t F_MAP < x
+echo "$F_DOLLAR ${F_BRACE:-} ${#F_LEN[@]}"
+(( F_ARITH > 1 )) && echo $(( $(stat -c %Y x) + F_ARITH2 ))
+# F_COMMENT=1 $F_COMMENT
+echo x # F_COMMENT2=1
+x="a #b"; F_AFTER_HASH=1; y='c #d' F_AFTER_HASH2=1
+lower=1 Mixed=1
+EOF
+  assert_eq "$(code_scan_names "$T/sample.sh" | paste -sd' ')" \
+    "F_ADD F_AFTER_HASH F_AFTER_HASH2 F_ARITH F_ARITH2 F_ARR F_BRACE F_DECL F_DECL2 F_DOLLAR F_LEN F_MAP F_PRINTF F_READ1 F_READ2 F_SET IFS" "the names of the sample"
+  # Under set -e of the caller, a form with no match does not stop the scan:
+  # the last form (( )) still runs.
+  printf '%s\n' 'F_ONE=1' '(( F_LAST > 1 ))' > "$T/sparse.sh"
+  assert_eq "$(set -euo pipefail; code_scan_names "$T/sparse.sh" | paste -sd' ')" "F_LAST F_ONE" "the names under set -e"
+  # One probe name for each fixed item of RESERVED_NAMES: the prefixes, the
+  # shell names, the special variables of bash 5.3, and the names that bash
+  # reads or sets outside "Shell Variables". The code does not use most of
+  # them, so the scan cannot hold them.
+  local probes=(
+    AB_X MCP_X GITMOD_X BASHOPTS GIT_X LD_PRELOAD XDG_X LC_X
+    HOME PATH IFS PWD OLDPWD SHELL USER LOGNAME TERM TZ LANG TMPDIR
+    CDPATH CHILD_MAX COLUMNS COMPREPLY COMP_WORDS COPROC DIRSTACK EMACS ENV EPOCHREALTIME EPOCHSECONDS EUID
+    EXECIGNORE FCEDIT FIGNORE FUNCNAME FUNCNEST GLOBIGNORE GLOBSORT GROUPS HISTCMD HISTCONTROL HISTFILE
+    HISTFILESIZE HISTIGNORE HISTSIZE HISTTIMEFORMAT HOSTFILE HOSTNAME HOSTTYPE IGNOREEOF INPUTRC
+    INSIDE_EMACS LINENO LINES MACHTYPE MAIL MAILCHECK MAILPATH MAPFILE OPTARG OPTERR OPTIND OSTYPE
+    PIPESTATUS POSIXLY_CORRECT PPID PROMPT_COMMAND PROMPT_DIRTRIM PS0 PS1 PS2 PS3 PS4 RANDOM READLINE_LINE
+    REPLY SECONDS SHELLOPTS SHLVL SRANDOM TIMEFORMAT TMOUT UID
+    TEXTDOMAIN TEXTDOMAINDIR COPROC_PID
+  )
+  local out
+  out="$( SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    set -euo pipefail
+    source "$AB/lib/paths.sh"; source "$AB/lib/config.sh"
+    while IFS= read -r name; do
+      setting_name_reserved "$name" || echo "not reserved: $name"
+    done < <(code_scan_names "$ROOT/agentbox" "$ROOT/run.sh" "$ROOT"/lib/*.sh; printf '%s\n' "${probes[@]}")
+    while IFS= read -r name; do
+      setting_name_reserved "$name" && echo "shared setting reserved: $name"
+    done < <(sed -n 's/^\[settings\.\([A-Za-z0-9_]*\)\].*/\1/p' "$ROOT"/mcp/*/module.toml)
+    echo end
+  )"
+  assert_eq "$out" "end" "the names that the rule does not refuse"
+}
+
 test_mcp_config_keys_of_disabled_module_quiet() {
   setup "${FUNCNAME[0]}"
   # Settings of a module that is there but not enabled: kept, no warning.

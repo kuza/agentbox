@@ -65,6 +65,51 @@ CONFIG_KEYS=(AB_MCP AB_EGRESS AB_FORWARD AB_SKILLS AB_SKILLS_DIR AB_PI_EXTENSION
 # The keys of CONFIG_KEYS that are lists. lib/toml-schema/config.toml gives
 # them the type list.
 CONFIG_LIST_KEYS=(AB_MCP AB_EGRESS AB_SKILLS AB_PI_EXTENSIONS AB_SERVICES AB_FORWARD AB_PYTHON_VERSIONS)
+# The names that a setting of a module cannot have, as globs: a setting
+# becomes a shell variable, so it must not change agentbox, bash or the
+# tools that the start runs. The list is fixed: the names of the host
+# environment are not in it, and a variable in the environment still
+# overrides the file.
+# The last items are the upper-case names of the code of agentbox: the
+# test test_config_reserved_names_cover_the_code finds them. The prefix of
+# a name is its text up to and including its first "_". A prefix becomes a
+# glob when two or more names share it and no setting of a shared module
+# matches the glob. Each other name is its own item. If you add a global,
+# add its glob or name here.
+RESERVED_NAMES=(
+  'AB_*' 'MCP_*' 'GITMOD_*' 'BASH*' 'GIT_*' 'LD_*' 'XDG_*' 'LC_*'
+  HOME PATH IFS PWD OLDPWD SHELL USER LOGNAME TERM TZ LANG TMPDIR
+  # The special variables of bash 5.3 that have no prefix above.
+  CDPATH CHILD_MAX COLUMNS COMPREPLY 'COMP_*' COPROC DIRSTACK EMACS ENV EPOCHREALTIME EPOCHSECONDS EUID
+  EXECIGNORE FCEDIT FIGNORE FUNCNAME FUNCNEST GLOBIGNORE GLOBSORT GROUPS HISTCMD HISTCONTROL HISTFILE
+  HISTFILESIZE HISTIGNORE HISTSIZE HISTTIMEFORMAT HOSTFILE HOSTNAME HOSTTYPE IGNOREEOF INPUTRC
+  INSIDE_EMACS LINENO LINES MACHTYPE MAIL MAILCHECK MAILPATH MAPFILE OPTARG OPTERR OPTIND OSTYPE
+  PIPESTATUS POSIXLY_CORRECT PPID PROMPT_COMMAND PROMPT_DIRTRIM PS0 PS1 PS2 PS3 PS4 RANDOM 'READLINE_*'
+  REPLY SECONDS SHELLOPTS SHLVL SRANDOM TIMEFORMAT TMOUT UID
+  # bash reads or sets these outside "Shell Variables".
+  TEXTDOMAIN TEXTDOMAINDIR 'COPROC_*'
+  # The families of the globals of agentbox.
+  'AGENT_*' 'CONFIG_*' 'CONVERT_*' 'EGRESS_*' 'ENVIRONMENT_*' 'FORWARD_*' 'FWD_*' 'GRAPHIFY_*' 'HOST_*'
+  'IMG_*' 'PI_*' 'RELEASE_*' 'SECRET_*' 'SERVICE_*' 'SETUP_*' 'SKILLS_*' 'TOML_*' 'TRIVY_*' 'USER_*'
+  # The other names of the code of agentbox.
+  AGENT AGENTBOX_IMAGE_ID BUILD_ARGS CLAUDE_CODE_DISABLE_ARTIFACT COMPLETION_LINK
+  ENABLE_CLAUDEAI_MCP_SERVERS ENV_FILE_ARGS HTTPS_PROXY HTTP_PROXY IMAGE INSTALL_DIR NO_PROXY
+  OLD_PLACES REPO RESERVED_NAMES RETIRED_IMAGES RUNNING_VERSION SCRIPT_DIR SESSION_LOG_LINES SETTING_AT
+  SIDECARS_WANTED SKILL SOURCE SOURCE_FILE STAMP STATUSLINE TERM_RESET TZ_ENV UNINSTALL_CONFIG
+  UPDATE_EVERY USERNS UV_PROJECT_ENVIRONMENT VERSION_RE WITH_TRIVY WORK_DIR
+)
+
+# 0 if a glob of RESERVED_NAMES matches <name>. Setting names are upper
+# case, so the match has no rule for the case.
+setting_name_reserved() {  # <name>
+  local glob
+  for glob in "${RESERVED_NAMES[@]}"; do
+    # shellcheck disable=SC2053  # The item is a glob.
+    [[ "$1" == $glob ]] && return 0
+  done
+  return 1
+}
+
 # The settings file: config.toml in AB_HOME, or the file of AB_CONFIG. When
 # AB_CONFIG names a .env file of v0.1.x, the TOML file next to it
 # (lib/convert.sh writes it).
