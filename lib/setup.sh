@@ -299,6 +299,10 @@ setup_secret_value() {  # <module> <secret> <typed>
 # read -p shows its prompt only when the input is a terminal: printed
 # here, it shows with piped input too.
 setup_read() {  # <variable> <prompt> [-s]
+  # Bytes, not characters: in a UTF-8 locale, read takes a byte that is
+  # not UTF-8 (a terminal in Latin-1) and the newline after it as one
+  # character, and the next line joins the reply.
+  local LC_ALL=C
   printf '%s' "$2"
   if [[ "${3:-}" == -s ]]; then
     IFS= read -r -s "$1" || return 1
