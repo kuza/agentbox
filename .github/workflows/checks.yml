@@ -14,8 +14,8 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-24.04
-    # Two runs of the full suite, about 7 min each on a runner.
-    timeout-minutes: 20
+    # Two runs of the full suite, about 10 min each on a runner.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -29,7 +29,7 @@ jobs:
           mkdir -p ~/.local/bin ~/.config/agentbox
           install -m 755 git-guard ~/.local/bin/git
           printf '%s\tnone\n' "$HOME/somewhere" > ~/.config/agentbox/mounted-repos
-          PATH="$HOME/.local/bin:$PATH" timeout 600 ./tests/run.sh
+          PATH="$HOME/.local/bin:$PATH" timeout 900 ./tests/run.sh
 
   shellcheck:
     runs-on: ubuntu-24.04
