@@ -9,9 +9,15 @@ good. Exit 4: the file is bad, and the records tell why. Any other exit
 status is a failure of the reader.
 """
 import datetime
+import os
 import re
 import sys
 import tomllib
+
+# -I leaves the directory of this file out of the path. No .pyc in lib/.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from terminal_text import first_control, shown  # noqa: E402
 
 KEY_LINE = re.compile(r"\s*([A-Za-z0-9_-]+)\s*=")
 SYNTAX_LINE = re.compile(r"\s*\(at line (\d+), column \d+\)$|\s*\(at end of document\)$")
@@ -28,9 +34,11 @@ def record(rtype, key, line, endline, text):
 
 
 def error(code, line, message):
+    """A message can quote a key or a value of the file: each terminal
+    control character in it gets its visible form (lib/terminal_text.py)."""
     global bad
     bad = True
-    record("error", code, line, line, message)
+    record("error", code, line, line, shown(message))
 
 
 def finish():
@@ -174,8 +182,9 @@ def form_error(key, value, newline=False):
         return "date", f"'{key}': a date or time is not allowed; use quotes"
     if isinstance(value, dict):
         return "table", f"'{key}': a table is not allowed"
-    if isinstance(value, str) and any((ord(c) < 32 and not (newline and c == "\n")) or ord(c) == 127 for c in value):
-        return "control-character", f"'{key}': a control character in a value is not allowed"
+    c = isinstance(value, str) and first_control(value, newline)
+    if c:
+        return "control-character", f"'{key}': the control character {shown(c)} in a value is not allowed"
     if isinstance(value, list):
         for item in value:
             found = form_error(key, item)

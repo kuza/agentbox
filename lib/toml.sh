@@ -21,6 +21,7 @@
 #
 #   lib/toml-schema/<kind>.toml   the keys of a kind: type and required; nested tables for manifest
 #   lib/toml-reader.py            the parser (Python, tomllib)
+#   lib/terminal_text.py          the rule for terminal control characters
 #
 # Good results go into a cache in <cache>/agentbox/toml/, keyed by the
 # reader version (sha256sum of the reader code and the schemas), the kind
@@ -62,7 +63,7 @@ toml_no_python() {  # <what agentbox needs it for> [error|warning]
 toml_version() {
   local lib="$SCRIPT_DIR/lib"
   if [[ -z "$TOML_VERSION" ]]; then
-    TOML_VERSION="$(cat -- "$lib/toml.sh" "$lib/toml-reader.py" "$lib"/toml-schema/*.toml | sha256sum)"
+    TOML_VERSION="$(cat -- "$lib/toml.sh" "$lib/toml-reader.py" "$lib/terminal_text.py" "$lib"/toml-schema/*.toml | sha256sum)"
     TOML_VERSION="${TOML_VERSION%% *}"
   fi
 }

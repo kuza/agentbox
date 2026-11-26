@@ -1,0 +1,3 @@
+# A bidirectional mark: U+202E in a value.
+format = 1
+description = "abc\u202Edef"

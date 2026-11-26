@@ -1,0 +1,5 @@
+# A help text allows a newline, not C1 (U+0080).
+format = 1
+
+[settings.A]
+help = "a\nb\u0080"

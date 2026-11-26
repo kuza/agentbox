@@ -167,7 +167,9 @@ setup_describe() {  # <egress|skill|piext> <file>
     esac
     rm -f -- "$err"
   fi
-  (( ${#text} > 60 )) && text="${text:0:60}" && text="${text% *} ..."
+  # At most 60 characters, cut at a space. The cut does not split a UTF-8
+  # character, also with LC_ALL=C.
+  mcp_shown_into text "$text" 60 || text="${text% *} ..."
   [[ "$2" == "$AB_HOME_DIR"/* ]] && text="(yours) $text"
   echo "$text"
 }
@@ -318,7 +320,7 @@ list_toggle() {  # <word> <list>: the list with <word> added or removed
 }
 
 setup_ask_value() {  # <key> <text> [required]: asks, records in SETUP_NEW
-  local key="$1" cur reply
+  local key="$1" cur reply shown notutf8
   cur="$(setup_get "$key")"
   while :; do
     setup_read reply "  $key ($2) [${cur}]; Enter keeps it, - unsets: " || return 0
@@ -332,8 +334,11 @@ setup_ask_value() {  # <key> <text> [required]: asks, records in SETUP_NEW
       [[ -n "${3:-}" ]] && { echo "  $key is needed"; continue; }
       setup_record "$key" unset; return 0
     fi
-    # config.toml refuses a control character in a value.
-    if [[ "$reply" == *[[:cntrl:]]* ]]; then echo "  a value without control characters"; continue; fi
+    # config.toml refuses a terminal control character in a value
+    # (lib/terminal_text.py), and bytes that are not UTF-8.
+    mcp_shown_into shown "$reply" "" notutf8
+    if (( notutf8 )); then echo "  a value in UTF-8: this value has bytes that are not UTF-8"; continue; fi
+    if [[ "$shown" != "$reply" ]]; then echo "  a value without control characters"; continue; fi
     if [[ "$key" == AB_UPDATE_EVERY && ! "$reply" =~ ^(0|[1-9][0-9]*)$ ]]; then echo "  a number of seconds"; continue; fi
     setup_record "$key" "set $reply"; return 0
   done
@@ -462,7 +467,7 @@ setup_module_status() {  # <name> <n>
   [[ -n "$keys$secrets$problem" ]] || return 0
   for k in $(settings_not_reserved $keys); do
     v="$(setup_get "$k")"
-    if [[ -n "${!k+x}" ]]; then out+=" · $k=${!k} (environment)"
+    if [[ -n "${!k+x}" ]]; then out+=" · $k=$(mcp_shown_text "${!k}") (environment)"
     elif [[ -n "$v" ]]; then out+=" · $k=$v"
     elif in_list "$k" "$missing"; then out+=" · $k NEEDED"
     else out+=" · $k (default)"; fi

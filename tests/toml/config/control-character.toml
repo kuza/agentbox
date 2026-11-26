@@ -1,0 +1,3 @@
+# U+200E in a setting of a module, and C1 (U+0085) in a setting of agentbox.
+GH_OWNERS = "a\u200Eb"
+AB_GO_VERSION = "1.2\u0085"

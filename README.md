@@ -128,6 +128,7 @@ cp ~/.local/share/agentbox/current/agents/AGENTS.md.example ~/.config/agentbox/A
 - A flag is `true` or `false`: `AB_TRIVY = true`.
 - A number has no quotes: `AB_UPDATE_EVERY = 21600`.
 - agentbox refuses a float, a date, a table, a quoted key and a multi-line string. Put a version in quotes: `AB_PYTHON_VERSIONS = ["3.12", "3.13"]`, `AB_GO_VERSION = "1.26"`.
+- agentbox refuses a terminal control character in a value, with the code `control-character`. These characters are C0 (U+0000 to U+001F), DEL (U+007F), C1 (U+0080 to U+009F) and the bidirectional marks (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069). A copy from a web page can add an invisible U+200E. The message shows such a character in a visible form: `\x1b` for C0, DEL and C1, `<U+202E>` for a bidirectional mark. The same rule applies to each TOML file of agentbox, also to `module.toml`, where a help text can have a newline.
 
 If the file is not valid TOML, the start stops and names the file and the line. A key that agentbox and the enabled modules do not know gets a warning with its line. The settings of a module that is not enabled get no warning.
 
@@ -781,7 +782,7 @@ Substitutions put the value of a setting into a text of the manifest. They work 
 - `{item}`: the item, in a table with `for_each`.
 - `{{` and `}}`: a `{` and a `}`.
 
-A setting in a substitution must have a check, and `for_each` needs a setting with `list = true` and a check. agentbox refuses a substituted value with a `|`, a control character or a space. If a setting in the name or the URL of a server has no value, the module needs it: `agentbox setup` shows "NEEDED". A field of a set value can be empty: for example `{C_URL.port}` when the value of `C_URL` has no port. If the URL of a server is then empty, the setting fails with the code `empty-field`. The start leaves the module out, as for a value that fails its check. `agentbox setup` shows "NOT USABLE" and the reason, and lets you correct the value. If a setting in an egress host has no value, agentbox leaves out that host.
+A setting in a substitution must have a check, and `for_each` needs a setting with `list = true` and a check. agentbox refuses a substituted value with a `|`, a terminal control character (see Setup in detail), a space or bytes that are not UTF-8. If a setting in the name or the URL of a server has no value, the module needs it: `agentbox setup` shows "NEEDED". A field of a set value can be empty: for example `{C_URL.port}` when the value of `C_URL` has no port. If the URL of a server is then empty, the setting fails with the code `empty-field`. The start leaves the module out, as for a value that fails its check. `agentbox setup` shows "NOT USABLE" and the reason, and lets you correct the value. If a setting in an egress host has no value, agentbox leaves out that host.
 
 If the manifest has an error, the start leaves the module out with `module.toml:<line>: <reason> (<code>)`. The other modules work. `tests/manifest/README` lists the error codes. An example is a server with `url = ""` (`empty-url`). agentbox refuses a module with the name `git`: this name is for modules from git in a later version.
 
@@ -1672,7 +1673,7 @@ AB_RESTART=1 agentbox .
 | `lib/*.sh` | The steps of `run.sh`: settings, agent, sidecars, MCP modules, local services, skills, session |
 | `mcp/<name>/` | MCP server modules, which you enable with `AB_MCP`: the manifest `module.toml`, its `module.index`, and the code `mcp.sh` with files such as nginx templates. See [MCP servers](#mcp-servers) |
 | `config.toml.example` | The settings template. `install.sh` copies it to `~/.config/agentbox/config.toml` |
-| `lib/toml-reader.py`, `lib/toml-writer.py`, `lib/toml-schema/` | The TOML reader of the settings, the sources and the egress groups, the writer of the [conversion](#conversion-to-toml), and the keys and types of each kind of file |
+| `lib/toml-reader.py`, `lib/toml-writer.py`, `lib/terminal_text.py`, `lib/toml-schema/` | The TOML reader of the settings, the sources and the egress groups, the writer of the [conversion](#conversion-to-toml), the rule for terminal control characters that both use, and the keys and types of each kind of file |
 | `pi.sh` | The same as `run.sh`, with pi as the agent (`AB_AGENT=pi`) |
 | `pi/models.json` | The pi configuration: the model endpoint for API-key mode. Each start makes a copy in `~/.cache/agentbox/session/pi/` and mounts the copy read-only |
 | `pi/llm-openai.conf.template` | The nginx config for the OpenAI sidecar (pi with an API key): it checks the caller and injects the API key |

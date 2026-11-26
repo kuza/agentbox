@@ -9,7 +9,8 @@ The forms of the old file:
     keys   KEY=VALUE lines, as load_config of v0.1.x read them (the
            settings). A key outside the schema is a setting of a module:
            a string. An empty value of an int or bool, or a value with a
-           control character, becomes a comment, with a warning.
+           terminal control character (lib/terminal_text.py), becomes a
+           comment, with a warning.
     source the same parser, but the last of two equal keys wins, as in
            source_value (lib/skills.sh). The parser of load_config
            (v0.1.x) also removes quotes, "export " and a " # note", which
@@ -22,9 +23,15 @@ not know becomes a comment. The comments of the old file stay. Writes
 "<old file>:<line>: <message>" lines to stderr: warnings with exit 0, the
 errors with exit 4. Any other exit status is a failure of the writer.
 """
+import os
 import re
 import sys
 import tomllib
+
+# -I leaves the directory of this file out of the path. No .pyc in lib/.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from terminal_text import first_control, shown  # noqa: E402
 
 schema_path, form, path = sys.argv[1:4]
 with open(schema_path, "rb") as f:
@@ -33,9 +40,10 @@ out = []
 errors = []
 
 
-# UTF-8 out, whatever the locale is.
+# UTF-8 out, whatever the locale is. A value in the text gets the visible
+# form of its terminal control characters.
 def message(n, text):
-    sys.stderr.buffer.write(f"{path}:{n}: {text}\n".encode())
+    sys.stderr.buffer.write(f"{path}:{n}: {shown(text)}\n".encode())
 
 
 try:
@@ -57,16 +65,19 @@ def comment(text):
 
 
 def string(n, value):
-    """A TOML basic string; a control character is an error, as in the reader."""
-    if any(ord(c) < 32 or ord(c) == 127 for c in value):
-        errors.append((n, "a control character in a value is not allowed"))
+    """A TOML basic string; a terminal control character is an error, as in
+    the reader."""
+    c = first_control(value)
+    if c:
+        errors.append((n, f"the control character {shown(c)} in a value is not allowed"))
     if "\ufffd" in value:
         errors.append((n, "not valid UTF-8"))
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def item(n, value):
-    """An item of a list, with the rules of the reader."""
+    """An item of a list, with the rules of the reader. message() gives the
+    visible form of the value in the text."""
     if "," in value:
         errors.append((n, f"'{value}': an item of a list cannot hold a comma"))
     return string(n, value)
@@ -141,9 +152,9 @@ def keys():
             name = key if key in schema else key.lower() if key.isupper() and key.lower() in schema else None
         if form == "keys" and name not in seen:
             # v0.1.x took an empty value as not set, and a value of the wrong
-            # type gave a warning at most. The reader refuses a control
-            # character, which v0.1.x kept (a tab). None of these stops the
-            # conversion.
+            # type gave a warning at most. The reader refuses a terminal
+            # control character, which v0.1.x kept (a tab, or a U+200E from
+            # a copy of a web page). None of these stops the conversion.
             want = schema.get(key, {}).get("type")
             if value == "" and want in ("bool", "int"):
                 why = "empty value"
@@ -151,8 +162,8 @@ def keys():
                 why = "a value that is not 0 or 1"
             elif want == "int" and not re.fullmatch(r"[0-9]+", value):
                 why = "a value that is not a number"
-            elif any(ord(c) < 32 or ord(c) == 127 for c in value):
-                why = "a control character in the value"
+            elif first_control(value):
+                why = f"the control character {shown(first_control(value))} in the value"
             else:
                 why = None
             if why:

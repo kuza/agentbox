@@ -645,15 +645,15 @@ test_mcp_url_hint_cut() {
   return 0
 }
 
-# A control character from the environment becomes ? in the hint (v0.2.3),
-# so the message stays on one line.
+# A control character from the environment gets its visible form in the
+# hint (\x0a for a newline), so the message stays on one line.
 test_mcp_url_hint_control_char() {
   setup "${FUNCNAME[0]}"
   config "AB_MCP=graylog"
   secrets graylog_basic
   ab_run $'GRAYLOG_URL=https://graylog.example/?a\nb' --
   assert_skipped graylog
-  assert_out 'remove the part from "\?": "\?a\?b" \(url\)$'
+  assert_out 'remove the part from "\?": "\?a\\x0ab" \(url\)$'
   return 0
 }
 
@@ -960,7 +960,12 @@ test_mcp_manifest_module_checks() {
     '[[servers]]' 'name = "a"' 'url = "https://a.example/{A_CA}"'
   ab_run A_CA="$T/a"$'\t'"b" --
   assert_skipped a
-  assert_out "'a' left out of this session: .*\(bad-value\)$"
+  assert_out "'a' left out of this session: .*the value has a \\|, a control character or a space \(bad-value\)$"
+  # A file name with a byte that is not UTF-8: its own reason.
+  printf 'ca\n' > "$T/caf"$'\xe9'
+  ab_run A_CA="$T/caf"$'\xe9' --
+  assert_skipped a
+  assert_out "'a' left out of this session: .*the value has bytes that are not UTF-8 \(bad-value\)$"
 }
 
 # The code of a manifest module can leave it out, with a reason. The output
@@ -1565,7 +1570,8 @@ test_convert_settings() {
     'AB_UPDATE_EVERY=010' 'AB_TRIVY=' "AB_GRAPHIFY_EXTRAS=a	b" 'GH_TOOLSETS=repos,issues' 'GRAFANA_URL="https://g.example"' \
     'TYPO=1' 'AB_MCP=second' 'not a setting' "AB_ENV_DIR=$CFG/myenv" \
     "export WOODPECKER_CA='/ca dir/ca.pem'" 'TABULARIS_CMD=my\tab"x" # note' \
-    "BB4_URL=https://b.example/x	# tab before the note" 'GRAYLOG_URL="https://l.example/#frag"' > "$CFG/config.env"
+    "BB4_URL=https://b.example/x	# tab before the note" 'GRAYLOG_URL="https://l.example/#frag"' \
+    "GH_OWNERS=a"$'\xe2\x80\x8e'"b" > "$CFG/config.env"
   # A wrong type in a repo file warned in v0.1.x: a comment, not a stop.
   printf '%s\n' 'AB_FORWARD=db=db.test.example:5432' 'AB_UPDATE_EVERY=6h' > "$CFG/myenv/repo.conf"
   secrets github_pat grafana_sa
@@ -1579,7 +1585,9 @@ test_convert_settings() {
   assert_out "config.env -> config.toml"
   assert_out "myenv/repo.conf -> repo.toml"
   assert_out "warning: .*config.env:6: empty value of 'AB_TRIVY', kept as a comment"
-  assert_out "warning: .*config.env:7: a control character in the value of 'AB_GRAPHIFY_EXTRAS', kept as a comment"
+  assert_out "warning: .*config.env:7: the control character \\\\x09 in the value of 'AB_GRAPHIFY_EXTRAS', kept as a comment"
+  # A U+200E from a copy of a web page: the same, with the visible form.
+  assert_out "warning: .*config.env:18: the control character <U\\+200E> in the value of 'GH_OWNERS', kept as a comment"
   assert_out "warning: .*config.env:11: second time 'AB_MCP', kept as a comment"
   assert_out "warning: .*config.env:12: not KEY=VALUE, kept as a comment"
   assert_eq "$(cat "$CFG/config.toml")" "# my settings
@@ -1598,7 +1606,8 @@ AB_ENV_DIR = \"$CFG/myenv\"
 WOODPECKER_CA = \"/ca dir/ca.pem\"
 TABULARIS_CMD = \"my\\\\tab\\\"x\\\"\"  # note
 BB4_URL = \"https://b.example/x\"  # tab before the note
-GRAYLOG_URL = \"https://l.example/#frag\""
+GRAYLOG_URL = \"https://l.example/#frag\"
+# GH_OWNERS=a"$'\xe2\x80\x8e'"b"
   assert_out "warning: .*repo.conf:2: a value that is not a number of 'AB_UPDATE_EVERY', kept as a comment"
   assert_eq "$(cat "$CFG/myenv/repo.toml")" 'AB_FORWARD = ["db=db.test.example:5432"]
 # AB_UPDATE_EVERY=6h'
@@ -2609,11 +2618,11 @@ test_list_setting_names_bad_item() {
   ab_run --
   assert_skipped github
   assert_out "config\\.toml:2: GH_OWNERS: 'bad_x': not a name: .* \\(name\\)"
-  # A control character of the item becomes ?. The message shows at most
-  # 40 characters of the item.
+  # A control character of the item gets its visible form (\x1b). The
+  # message shows at most 40 characters of the item.
   ab_run "GH_OWNERS=ok,b"$'\e]0;x\a' --
   assert_skipped github
-  assert_out "environment: GH_OWNERS: 'b\\?]0;x\\?': not a name"
+  assert_out "environment: GH_OWNERS: 'b\\\\x1b]0;x\\\\x07': not a name"
   grep -q $'\e' "$T/out" && fail "an escape character in the output"
   ab_run "GH_OWNERS=ok,$(printf 'x_%.0s' {1..30})" --
   assert_skipped github
@@ -2624,6 +2633,27 @@ test_list_setting_names_bad_item() {
   ab_run --
   assert_skipped grafana
   assert_out "config\\.toml:2: GRAFANA_URL: not an http:// or https:// URL"
+}
+
+# A value from the environment in a message: ESC, C1 and a bidirectional
+# mark get their visible forms, and the cut at 40 characters does not split
+# a UTF-8 character, also with LC_ALL=C.
+test_shown_text_from_environment() {
+  setup "${FUNCNAME[0]}"
+  config "AB_MCP=github"
+  secrets github_pat github_pat_ok
+  ab_run "GH_OWNERS=ok,b"$'\e'"x"$'\xc2\x9b'"y"$'\xe2\x80\xae'"z" --
+  assert_skipped github
+  assert_out "environment: GH_OWNERS: 'b\\\\x1bx\\\\x9by<U\\+202E>z': not a name"
+  LC_ALL=C grep -q $'\e\\|\xc2\x9b\\|\xe2\x80\xae' "$T/out" && fail "a raw control character in the output"
+  # 39 characters, then a character of two bytes at the cut: the line keeps
+  # it whole. A cut by bytes would keep its first byte only.
+  local head
+  head="$(printf 'x%.0s' {1..39})"$'\xc3\xa9'
+  ab_run LC_ALL=C "GH_OWNERS=ok,$head$(printf 'x%.0s' {1..10})" --
+  assert_skipped github
+  grep -qF "'$head...': not a name" "$T/out" || fail "the cut item lacks its last character: $(grep 'not a name' "$T/out")"
+  iconv -f UTF-8 -t UTF-8 "$T/out" > /dev/null || fail "the output is not valid UTF-8"
 }
 
 # GH_TOOLSETS goes into a header of nginx: a toolset with a character other
@@ -4634,6 +4664,63 @@ test_setup_empty_field() {
   assert_no_out "NOT USABLE"
 }
 
+# A module.toml with a terminal control character in a quoted key: the
+# warning of the start and the lines of the menu show its visible form, and
+# none of these lines has a raw control character.
+test_control_character_in_module_text() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module c 'format = 1' '[[servers]]' 'name = "c"' 'url = "https://c.example/mcp"' \
+    '"\u001b]0;x\u0007\u009b\u202e" = 1'
+  config "AB_MCP=c"
+  local raw=$'[\x01-\x08\x0b-\x1f\x7f]\\|\xc2[\x80-\x9f]\\|\xe2\x80[\x8e\x8f\xaa-\xae]\\|\xe2\x81[\xa6-\xa9]\\|\xd8\x9c'
+  ab_run --
+  assert_skipped c
+  assert_out "unknown key 'servers\\.0\\.\\\\x1b]0;x\\\\x07\\\\x9b<U\\+202E>'"
+  LC_ALL=C grep -q "$raw" "$T/out" && fail "start: a raw control character in the output"
+  setup_run "q\n"
+  assert_out "unknown key 'servers\\.0\\.\\\\x1b]0;x\\\\x07\\\\x9b<U\\+202E>'"
+  LC_ALL=C grep -q "$raw" "$T/out" && fail "setup: a raw control character in the menu"
+  return 0
+}
+
+# agentbox setup: a typed value with a terminal control character (a
+# pasted U+200E) is refused at once, and the prompt asks again. A value
+# from the environment shows its visible form in the status line.
+test_setup_value_control_character() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' '[[servers]]' 'name = "c"' 'url = "{C_URL}"'
+  config "AB_MCP=c" "C_URL=https://c.example/mcp"
+  local n; n="$(setup_entry c)"
+  [[ -n "$n" ]] || { fail "no entry of c"; return 0; }
+  setup_run "e $n\nhttps://c.example/x\xe2\x80\x8e\nhttps://c.example/caf\xe9\nhttps://c.example/y\ns\n"
+  assert_rc 0
+  assert_out "a value without control characters"
+  # A byte that is not UTF-8 (a terminal in Latin-1) has its own reason.
+  assert_out "a value in UTF-8: this value has bytes that are not UTF-8"
+  assert_no_out "could not set"
+  grep -qx 'C_URL = "https://c.example/y"' "$CFG/config.toml" || fail "the second value not saved: $(grep C_URL "$CFG/config.toml")"
+  C_URL=$'https://c\e]0;x\a\xe2\x80\xae' setup_run "q\n"
+  assert_out "C_URL=https://c\\\\x1b]0;x\\\\x07<U\\+202E> \\(environment\\)"
+  LC_ALL=C grep -q $'\e\\|\a\\|\xe2\x80\xae' "$T/out" && fail "a raw control character in the status line"
+  return 0
+}
+
+# The text of an entry in the menu (the hosts of an egress group) is cut at
+# 60 characters. With LC_ALL=C, the cut does not split a UTF-8 character.
+test_setup_describe_cut_keeps_utf8() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  mkdir -p "$CFG/egress.local.d"
+  local head
+  head="$(printf 'a%.0s' {1..59})"$'\xc3\xa9'
+  printf 'hosts = ["%s", "b.example"]\n' "$head" > "$CFG/egress.local.d/long.toml"
+  LC_ALL=C setup_run "q\n"
+  grep -qF "(yours) $head ..." "$T/out" || fail "the cut text lacks its last character: $(grep long "$T/out")"
+  iconv -f UTF-8 -t UTF-8 "$T/out" > /dev/null || fail "the menu is not valid UTF-8"
+}
+
 # An old-format module in the menu: the old-format text in its line, at
 # e <number> and at the toggle, and no note of setup_module_warn.
 test_setup_old_format_module_reason() {
@@ -5865,6 +5952,28 @@ test_convert_source_bad_first_key() {
   assert_out "skills.local.d/acme.conf -> acme.toml"
 }
 
+# A U+200E (a bidirectional mark) in a value of a source or in a host:
+# the reader refuses it, so the writer refuses it too, with the visible
+# form. The file is not converted, and this is not a fault of agentbox.
+test_convert_bidi_mark_in_source_and_hosts() {
+  ss_setup "${FUNCNAME[0]}"
+  mkdir -p "$CFG/skills.local.d" "$CFG/egress.local.d"
+  printf 'URL=%s\xe2\x80\x8e\n' "$SRC" > "$CFG/skills.local.d/acme.conf"
+  # Line 2: a comma and U+202E. The message of the writer quotes the
+  # item, and message() gives the visible form.
+  printf 'a\xe2\x80\x8e.example\na,b\xe2\x80\xae\n' > "$CFG/egress.local.d/bidi.conf"
+  ab_run --
+  assert_out "acme.conf:1: the control character <U\\+200E> in a value is not allowed"
+  assert_out "did not convert .*acme.conf"
+  assert_out "bidi.conf:1: the control character <U\\+200E> in a value is not allowed"
+  assert_out "bidi.conf:2: 'a,b<U\\+202E>': an item of a list cannot hold a comma"
+  assert_out "did not convert .*bidi.conf"
+  assert_no_out "fault of agentbox"
+  LC_ALL=C grep -q $'\xe2\x80\x8e\\|\xe2\x80\xae' "$T/out" && fail "a raw bidirectional mark in the output"
+  [[ -e "$CFG/skills.local.d/acme.toml" || -e "$CFG/egress.local.d/bidi.toml" ]] && fail "a file with U+200E converted"
+  return 0
+}
+
 test_skills_source_sync_failure_continues() {
   ss_setup "${FUNCNAME[0]}"
   src_conf skills.d broken "url = '$T/src/no/such-repo'"
@@ -5950,6 +6059,119 @@ s = tomllib.load(open(sys.argv[1], "rb"))
 print(" ".join(sorted(s)))
 print(" ".join(sorted(k for k in s if s[k]["type"] == "list")))' "$ROOT/lib/toml-schema/config.toml")"
   assert_eq "$got" "$want" "CONFIG_KEYS and CONFIG_LIST_KEYS against the schema"
+}
+
+# The messages of the reader for the cases of terminal control characters
+# in tests/toml/: they name the key and the character in its visible form,
+# and have no raw control character.
+test_toml_control_character_messages() {
+  setup "${FUNCNAME[0]}"
+  local f kind want got
+  while IFS='|' read -r f want; do
+    kind="${f%%/*}"
+    got="$("$TEST_PYTHON" -I "$AB/lib/toml-reader.py" "$AB/lib/toml-schema/$kind.toml" "$kind" "$ROOT/tests/toml/$f.toml" | tr '\0' '\n')"
+    grep -qxF -- "$want" <<< "$got" || fail "$f: no message '$want' in"$'\n'"$got"
+    LC_ALL=C grep -q $'[\x01-\x08\x0b-\x1f\x7f]\\|\xc2[\x80-\x9f]\\|\xe2\x80[\x8e\x8f\xaa-\xae]\\|\xe2\x81[\xa6-\xa9]\\|\xd8\x9c' <<< "$got" \
+      && fail "$f: a raw control character in the records"
+  done <<'EOF'
+manifest/control-character-c1|'description': the control character \x9b in a value is not allowed
+manifest/control-character-bidi|'description': the control character <U+202E> in a value is not allowed
+manifest/control-character-isolate|'egress': the control character <U+2066> in a value is not allowed
+manifest/control-character-help|'settings.A.help': the control character \x80 in a value is not allowed
+manifest/control-character|'servers.0.name': the control character \x0a in a value is not allowed
+manifest/quoted-key-escape|unknown key 'servers.0.\x1b[31m'
+config/control-character|'GH_OWNERS': the control character <U+200E> in a value is not allowed
+egress-group/control-character-c1|'hosts': the control character \x85 in a value is not allowed
+skill-source/control-character|'url': the control character <U+2069> in a value is not allowed
+pi-extension-source/control-character|'ref': the control character <U+061C> in a value is not allowed
+EOF
+}
+
+# The reader version (the key of the reader cache) changes when the rule
+# of lib/terminal_text.py changes, so a new rule takes effect at the next
+# start.
+test_toml_version_has_terminal_text() {
+  setup "${FUNCNAME[0]}"
+  local before after
+  before="$(SCRIPT_DIR="$AB"; source "$AB/lib/toml.sh"; toml_version; echo "$TOML_VERSION")"
+  echo '# changed' >> "$AB/lib/terminal_text.py"
+  after="$(SCRIPT_DIR="$AB"; source "$AB/lib/toml.sh"; toml_version; echo "$TOML_VERSION")"
+  [[ -n "$before" && "$before" != "$after" ]] || fail "the reader version does not change with lib/terminal_text.py: $before"
+}
+
+# Prints mcp_shown_into of each <text>, with a NUL after each, in the
+# locale <locale>. For C.UTF-8 it first checks that bash uses the locale.
+shown_into_in() {  # <locale> <text>...
+  (
+    SCRIPT_DIR="$AB" HOME="$T/home" XDG_CACHE_HOME="$T/home/.cache"
+    for k in paths config toml mcp; do
+      # shellcheck source=/dev/null
+      source "$AB/lib/$k.sh"
+    done
+    LC_ALL="$1"
+    shift
+    local e=$'\xc3\xa9'
+    [[ "$LC_ALL" == C || ${#e} == 1 ]] || { echo "the locale $LC_ALL is missing" >&2; exit 1; }
+    for c in "$@"; do mcp_shown_into s "$c" "" bad; printf '%s %s\0' "$bad" "$s"; done
+  )
+}
+
+# mcp_shown_into: each byte of a sequence that is not valid UTF-8 gets
+# \x<2 hex digits>, and sets <badvar>. Overlong forms, surrogates, code
+# points above U+10FFFF, the lead bytes f5 to ff and a sequence cut at the
+# end are not valid. The sequences next to these limits are valid.
+test_shown_into_bytes_not_utf8() {
+  setup "${FUNCNAME[0]}"
+  local loc i got=() in=() cases=(
+    $'\xc0\x80' '\xc0\x80' $'\xc1\xbf' '\xc1\xbf' $'\xe0\x80\xaf' '\xe0\x80\xaf' $'\xe0\x9f\xbf' '\xe0\x9f\xbf'
+    $'\xed\xa0\x80' '\xed\xa0\x80' $'\xed\xbf\xbf' '\xed\xbf\xbf' $'\xf0\x8f\xbf\xbf' '\xf0\x8f\xbf\xbf'
+    $'\xf4\x90\x80\x80' '\xf4\x90\x80\x80' $'\xf5\x80\x80\x80' '\xf5\x80\x80\x80' $'\xff' '\xff' $'\x80' '\x80'
+    $'ab\xe2\x80' 'ab\xe2\x80' $'\xc2' '\xc2' $'\xf0\x9f\x98' '\xf0\x9f\x98' $'\xe2\x80a' '\xe2\x80a'
+  ) good=($'\xc2\xa0' $'\xe0\xa0\x80' $'\xed\x9f\xbf' $'\xee\x80\x80' $'\xf0\x90\x80\x80' $'\xf4\x8f\xbf\xbf' $'\xf0\x9f\x98\x80')
+  for (( i = 0; i < ${#cases[@]}; i += 2 )); do in+=("${cases[i]}"); done
+  for loc in C C.UTF-8; do
+    mapfile -d '' got < <(shown_into_in "$loc" "${in[@]}" "${good[@]}")
+    assert_eq "${#got[@]}" "$(( ${#cases[@]} / 2 + ${#good[@]} ))" "$loc: results"
+    for (( i = 0; i < ${#cases[@]} / 2; i++ )); do
+      assert_eq "${got[i]-}" "1 ${cases[2 * i + 1]}" "$loc: $(printf '%q' "${cases[2 * i]}")"
+    done
+    for i in "${!good[@]}"; do
+      assert_eq "${got[${#cases[@]} / 2 + i]-}" "0 ${good[i]}" "$loc: $(printf '%q' "${good[i]}")"
+    done
+  done
+}
+
+# The reader (lib/terminal_text.py) and mcp_shown_into (lib/mcp.sh) give
+# the same visible form for each character of the rule, and keep the
+# characters next to the ranges as they are. The reader gets each one in a
+# quoted key of an unknown-key error. The bash part runs in the C locale
+# and in C.UTF-8: the result does not depend on the locale of the caller.
+test_terminal_text_rule_same_in_python_and_bash() {
+  setup "${FUNCNAME[0]}"
+  local cps=() cp i chars=() recs=() shown=() loc
+  for (( cp = 1; cp <= 0x20; cp++ )); do cps+=("$cp"); done
+  for (( cp = 0x7e; cp <= 0xa0; cp++ )); do cps+=("$cp"); done
+  cps+=(0xe9 0x61b 0x61c 0x61d 0x200d 0x200e 0x200f 0x2010 0x2028 0x2029)
+  for (( cp = 0x202a; cp <= 0x202f; cp++ )); do cps+=("$cp"); done
+  for (( cp = 0x2065; cp <= 0x206a; cp++ )); do cps+=("$cp"); done
+  cps+=(0xfeff 0x1f600)
+  { echo "format = 1"; for cp in "${cps[@]}"; do printf '"k\\U%08X" = 1\n' "$cp"; done; } > "$T/m.toml"
+  # The characters as UTF-8, without the locale of bash.
+  mapfile -d '' chars < <("$TEST_PYTHON" -I -c 'import sys
+sys.stdout.buffer.write(b"".join(chr(int(c, 0)).encode() + b"\0" for c in sys.argv[1:]))' "${cps[@]}")
+  mapfile -d '' recs < <("$TEST_PYTHON" -I "$AB/lib/toml-reader.py" "$AB/lib/toml-schema/manifest.toml" manifest "$T/m.toml")
+  assert_eq "${#recs[@]}" "$(( 5 * ${#cps[@]} ))" "fields of the records"
+  for loc in C C.UTF-8; do
+    mapfile -d '' shown < <(shown_into_in "$loc" "${chars[@]/#/k}")
+    assert_eq "${#shown[@]}" "${#cps[@]}" "$loc: results of mcp_shown_into"
+    for i in "${!cps[@]}"; do
+      assert_eq "${recs[5 * i + 4]}" "unknown key '${shown[i]#0 }'" "$loc: U+$(printf '%04X' "${cps[i]}")"
+    done
+  done
+  # A NUL cannot be in a bash value: the reader only.
+  printf '%s\n' 'format = 1' '"k\u0000" = 1' > "$T/m.toml"
+  "$TEST_PYTHON" -I "$AB/lib/toml-reader.py" "$AB/lib/toml-schema/manifest.toml" manifest "$T/m.toml" > "$T/recs"
+  tr '\0' '\n' < "$T/recs" | grep -qxF "unknown key 'k\\x00'" || fail "NUL in a key: no \\x00 in the message"
 }
 
 # One line of the dump of tests/manifest/README: <key>=<value>, with \, a

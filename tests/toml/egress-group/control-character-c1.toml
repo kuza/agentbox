@@ -1,0 +1,2 @@
+# C1: U+0085 (NEL) in a host.
+hosts = ["a.example\u0085"]

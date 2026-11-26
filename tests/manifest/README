@@ -34,7 +34,8 @@ The dump (expected)
   newline after each line.
 - A value has these escapes, in the key too: "\" is "\\", a newline is
   "\n", and "=" is "\=". These three are enough: the reader refuses each
-  other control character, and allows a newline only in a help text.
+  other terminal control character (lib/terminal_text.py: C0, DEL, C1
+  and the bidirectional marks), and allows a newline only in a help text.
 - An empty value gives no line. Exception: each setting of the manifest
   has its "settings.<KEY>" line, also with an empty value.
 - The lines are sorted by bytes (LC_ALL=C sort), after the escapes.
@@ -242,8 +243,8 @@ bad-substitution    A substitution is not {SETTING}, {SETTING.field} or
                     for_each that names a setting with no list = true.
 unchecked-setting   A substitution or a for_each uses a setting with no
                     check.
-bad-value           A substituted value has a "|", a control character
-                    or a space.
+bad-value           A substituted value has a "|", a terminal control
+                    character, a space or bytes that are not UTF-8.
 bad-secret-name     The name of a secret with for_each has no {item}.
                     Or a name from for_each has a character other than
                     A-Z a-z 0-9 _ . -, or another secret of the module

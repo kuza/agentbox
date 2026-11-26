@@ -221,14 +221,71 @@ mcp_manifest_at() {  # <path>
 declare -gA MCP_CHECKS=([url]="scheme host port hostport base" [url-base]="scheme host port hostport base"
   [port]="" [name]="" [file]="")
 
-# Prints <text> in a form that a message can show: each control character
-# becomes ?, so that the message stays on one line and cannot change the
-# terminal. It prints at most 40 characters and then "...", because a value
-# can hold a token.
+# Puts the visible form of <text> into the variable <var>, by the rule of
+# lib/terminal_text.py. A terminal control character becomes \x1b (C0,
+# DEL, C1) or <U+202E> (a bidirectional mark), also a newline and a tab. A
+# byte that is not part of valid UTF-8 becomes \x<2 hex digits> too. With
+# <max>, it keeps the first <max> characters of <text> and returns 1 if it
+# cut the text. With <badvar>, it sets that variable to 1 if the kept text
+# has a byte that is not part of valid UTF-8, else to 0. It reads bytes
+# with LC_ALL=C, so the result does not depend on the locale, and a cut
+# never splits a UTF-8 character.
+mcp_shown_into() {  # <var> <text> [max] [badvar]
+  local LC_ALL=C
+  local _st_t="$2" _st_max="${3:-}" _st_out="" _st_i=0 _st_n=0 _st_len _st_b _st_cp _st_need _st_lo _st_hi _st_j _st_c
+  _st_len=${#_st_t}
+  [[ -z "${4:-}" ]] || printf -v "$4" '%s' 0
+  # Printable ASCII only: no loop.
+  if [[ "$_st_t" != *[!\ -~]* ]]; then
+    if [[ -z "$_st_max" ]] || (( _st_len <= _st_max )); then printf -v "$1" '%s' "$_st_t"; return 0; fi
+    printf -v "$1" '%s' "${_st_t:0:_st_max}"; return 1
+  fi
+  while (( _st_i < _st_len )); do
+    if [[ -n "$_st_max" ]] && (( _st_n == _st_max )); then printf -v "$1" '%s' "$_st_out"; return 1; fi
+    # musl gives U+DF80 to U+DFFF for the bytes 0x80 to 0xff: keep the byte.
+    printf -v _st_b '%d' "'${_st_t:_st_i:1}"; (( _st_b &= 0xff ))
+    # The UTF-8 sequence that starts here: its length and the range of
+    # its second byte (no overlong form, no surrogate, at most U+10FFFF).
+    _st_need=0 _st_lo=128 _st_hi=191 _st_cp=$_st_b
+    if (( _st_b >= 0xc2 && _st_b <= 0xdf )); then _st_need=1 _st_cp=$(( _st_b & 0x1f ))
+    elif (( _st_b >= 0xe0 && _st_b <= 0xef )); then _st_need=2 _st_cp=$(( _st_b & 0x0f ))
+      _st_lo=$(( _st_b == 0xe0 ? 160 : 128 )) _st_hi=$(( _st_b == 0xed ? 159 : 191 ))
+    elif (( _st_b >= 0xf0 && _st_b <= 0xf4 )); then _st_need=3 _st_cp=$(( _st_b & 0x07 ))
+      _st_lo=$(( _st_b == 0xf0 ? 144 : 128 )) _st_hi=$(( _st_b == 0xf4 ? 143 : 191 ))
+    elif (( _st_b >= 0x80 )); then _st_cp=-1
+    fi
+    for (( _st_j = 1; _st_j <= _st_need && _st_cp >= 0; _st_j++ )); do
+      if (( _st_i + _st_j >= _st_len )); then _st_cp=-1; break; fi
+      printf -v _st_c '%d' "'${_st_t:_st_i+_st_j:1}"; (( _st_c &= 0xff ))
+      if (( _st_c < _st_lo || _st_c > _st_hi )); then _st_cp=-1; break; fi
+      _st_cp=$(( (_st_cp << 6) | (_st_c & 0x3f) )) _st_lo=128 _st_hi=191
+    done
+    if (( _st_cp < 0 )); then
+      printf -v _st_c '\\x%02x' "$_st_b"; _st_need=0
+      [[ -z "${4:-}" ]] || printf -v "$4" '%s' 1
+    elif (( _st_cp < 0x20 || (_st_cp >= 0x7f && _st_cp <= 0x9f) )); then
+      printf -v _st_c '\\x%02x' "$_st_cp"
+    elif (( _st_cp == 0x61c || _st_cp == 0x200e || _st_cp == 0x200f || (_st_cp >= 0x202a && _st_cp <= 0x202e)
+            || (_st_cp >= 0x2066 && _st_cp <= 0x2069) )); then
+      printf -v _st_c '<U+%04X>' "$_st_cp"
+    else
+      _st_c="${_st_t:_st_i:_st_need+1}"
+    fi
+    _st_out+="$_st_c"
+    (( _st_i += _st_need + 1, _st_n += 1 ))
+  done
+  printf -v "$1" '%s' "$_st_out"
+  return 0
+}
+
+# Prints <text> in a form that a message can show (mcp_shown_into): the
+# message stays on one line and cannot change the terminal. It prints at
+# most 40 characters of <text> and then "...", because a value can hold a
+# token.
 mcp_shown_text() {  # <text>
-  local t="${1//[[:cntrl:]]/?}"
-  (( ${#t} <= 40 )) || t="${t:0:40}..."
-  printf '%s' "$t"
+  local shown
+  mcp_shown_into shown "$1" 40 || shown+="..."
+  printf '%s' "$shown"
 }
 
 # One function for each check: mcp_valid_<check>, with "_" in place of
@@ -285,15 +342,16 @@ mcp_valid_file() {  # <value>
 # Expands the substitutions of <template> into sub, for mcp_load_manifest
 # (its v, l and f): {SETTING}, {SETTING.field}, {item} with <item>, and
 # {{ and }} for { and }. A setting goes in only when it has a check. A value
-# with a |, a control character or a space gives an error. Status 2, with
+# with a |, a terminal control character (mcp_shown_into) or a space gives
+# an error. Status 2, with
 # MCP_PROBLEM, for a bad template or value. <path> names the key.
 # sub_unset lists the settings with no value that the template uses, and
 # the settings in failed (of mcp_load_manifest), which give empty text.
 # sub_empty is "<KEY>.<field>" for the first field of a setting with a value
 # that gives empty text (port, for a URL with no port), or empty.
 mcp_manifest_subst() {  # <path> <template> [<item>]
-  local t="$2" tok name key val why code=bad-substitution
-  local re='^([^{}]*)(\{\{|\}\}|\{[^{}]*\}|\{|\})(.*)$' bad='[[:cntrl:]| ]'
+  local t="$2" tok name key val why code=bad-substitution shown notutf8
+  local re='^([^{}]*)(\{\{|\}\}|\{[^{}]*\}|\{|\})(.*)$' bad='[| ]'
   sub=""; sub_unset=""; sub_empty=""
   while [[ "$t" =~ $re ]]; do
     sub+="${BASH_REMATCH[1]}"; tok="${BASH_REMATCH[2]}"; t="${BASH_REMATCH[3]}"
@@ -316,7 +374,10 @@ mcp_manifest_subst() {  # <path> <template> [<item>]
       val="${MCP_FIELD[$name]-}"
       [[ -n "$val" || -n "$sub_empty" || -z "${MCP_VALUE[$key]-}" ]] || sub_empty="$name"
     fi
-    if [[ -z "${why:-}" && "$val" =~ $bad ]]; then why="{$name}: the value has a |, a control character or a space"; code="bad-value"; fi
+    # A terminal control character: the value differs from its visible form.
+    mcp_shown_into shown "$val" "" notutf8
+    if [[ -z "${why:-}" ]] && (( notutf8 )); then why="{$name}: the value has bytes that are not UTF-8"; code="bad-value"
+    elif [[ -z "${why:-}" ]] && [[ "$val" =~ $bad || "$shown" != "$val" ]]; then why="{$name}: the value has a |, a control character or a space"; code="bad-value"; fi
     if [[ -n "${why:-}" ]]; then
       MCP_PROBLEM="$(mcp_manifest_at "$1"): $1: $why ($code)"
       return 2

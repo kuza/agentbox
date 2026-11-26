@@ -1,0 +1,7 @@
+# A quoted key with ESC: the message shows \x1b, not the raw byte.
+format = 1
+
+[[servers]]
+name = "a"
+url = "http://a"
+"\u001b[31m" = 1

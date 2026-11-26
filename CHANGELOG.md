@@ -19,6 +19,32 @@ the steps a release needs from you, such as a rebuild.
   lets you correct the value.
 - The reason `its server '<name>' has an empty URL` is gone. Both new
   reasons come before a missing Podman secret.
+- A TOML file with a terminal control character in a value now fails
+  with the code `control-character`. Before, only C0 and DEL failed. Now
+  C1 (U+0080 to U+009F) and the bidirectional marks (U+061C, U+200E,
+  U+200F, U+202A to U+202E, U+2066 to U+2069) fail too. This applies to
+  each kind of file, also `config.toml`: the start stops, as for C0. A
+  copy from a web page can add an invisible U+200E. The message names the
+  key and the character.
+- A message now shows a terminal control character as `\x1b` (C0, DEL,
+  C1) or as `<U+202E>` (a bidirectional mark). Before, an item of a list
+  setting or a part of a URL showed `?`. A key of `module.toml` in a
+  message, and a value from the environment in the status line of
+  `agentbox setup`, get the same form.
+- A substituted value from the environment with such a character now
+  gives `bad-value`. Before, a bidirectional mark passed in each locale,
+  and C1 passed with `LC_ALL=C`. A substituted value with bytes that are
+  not UTF-8 also gives `bad-value`, with the reason
+  `the value has bytes that are not UTF-8`.
+- The conversion of the files of v0.1.x uses the same rule. In
+  `config.env`, a value with such a character becomes a comment with a
+  warning, as for C0. In an egress group or a source, the file is not
+  converted.
+- `agentbox setup` refuses a typed value with such a character at once,
+  and asks again. Before, a pasted U+200E passed, and the save failed. A
+  typed value with bytes that are not UTF-8 gets its own reason.
+- A cut of a long text in a message or in the menu of `agentbox setup`
+  no longer splits a UTF-8 character, also with `LC_ALL=C`.
 
 ## v0.3.0
 

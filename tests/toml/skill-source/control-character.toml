@@ -1,0 +1,2 @@
+# U+2069 at the end of the URL.
+url = "https://example.com/acme/skills\u2069"

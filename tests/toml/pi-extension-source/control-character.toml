@@ -1,0 +1,3 @@
+# U+061C in the ref.
+url = "https://example.com/acme/ext"
+ref = "v1\u061C"
