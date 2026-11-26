@@ -1,0 +1,15 @@
+format = 1
+
+[settings.P]
+check = "port"
+
+[settings.U]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "{U.port}"
+
+[[servers]]
+name = "tracker-local"
+url = "http://ab-mcp-tracker:{P}/mcp"

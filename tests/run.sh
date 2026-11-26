@@ -474,6 +474,11 @@ test_mcp_server_names_and_urls_checked() {
   ab_run --
   assert_skipped b
   assert_out "MCP module 'b' left out of this session: its server 'shared' has the name of one of module 'a'"
+  # The sidecars of b stay.
+  printf 'ab-mcp-b x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped b
+  grep -qx 'podman rm -f -v ab-mcp-b' "$STUB_DIR/calls" && fail "sidecar of b removed for a name clash"
   grep -q 'a.example' "$T/home/.cache/agentbox/mcp-claude.json" || fail "a left out"
   # A name is taken only by a module that is not left out for another
   # reason: b gets it once a lacks its secret. a keeps its servers.
@@ -510,19 +515,33 @@ test_mcp_server_names_and_urls_checked() {
   assert_skipped c
   assert_out "c' left out of this session: it needs C_URL"
   grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "sidecar kept with its URL setting emptied"
-  # An empty URL with all settings set (status 3 of mcp_servers_problem): an
-  # empty url, or a field of a setting that is empty (no port in C_URL). The
-  # module is left out, and its sidecars go.
-  local url
-  for url in '""' '"{C_URL.port}"'; do
-    manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' '[[servers]]' 'name = "c"' "url = $url"
-    : > "$CFG/config.toml"; config "AB_MCP=c" "C_URL=https://c.example/mcp"
-    printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
-    ab_run --
-    assert_skipped c
-    assert_out "c' left out of this session: its server 'c' has an empty URL"
-    grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "url = $url: sidecar kept with an empty URL"
-  done
+  # url = "" is an error of the manifest (empty-url): the module is left
+  # out, and its sidecars stay.
+  manifest_module c 'format = 1' '[[servers]]' 'name = "c"' 'url = ""'
+  : > "$CFG/config.toml"; config "AB_MCP=c"
+  printf 'ab-mcp-c x\n' >> "$STUB_DIR/running"
+  ab_run --
+  assert_skipped c
+  assert_out "c' left out of this session: .*/c/module.toml:2: servers.0.url: the URL is empty \\(empty-url\\)"
+  grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" && fail "url = \"\": sidecar removed for a broken module"
+  # A field of a set value that gives an empty URL fails the setting
+  # (empty-field): the module is left out, and its sidecars go. The reason
+  # names the place of the value: config.toml, the environment, a default.
+  manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' '[[servers]]' 'name = "c"' 'url = "{C_URL.port}"'
+  config "C_URL=https://c.example/mcp"
+  ab_run --
+  assert_skipped c
+  assert_out "c' left out of this session: .*config.toml:[0-9]+: C_URL: the value gives no port for servers.0.url \\(empty-field\\)"
+  grep -qx 'podman rm -f -v ab-mcp-c' "$STUB_DIR/calls" || fail "{C_URL.port}: sidecar kept with an empty URL"
+  : > "$CFG/config.toml"; config "AB_MCP=c"
+  ab_run C_URL=https://c.example/mcp --
+  assert_skipped c
+  assert_out "c' left out of this session: environment: C_URL: the value gives no port for servers.0.url \\(empty-field\\)"
+  manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' 'default = "https://c.example/mcp"' \
+    '[[servers]]' 'name = "c"' 'url = "{C_URL.port}"'
+  ab_run --
+  assert_skipped c
+  assert_out "c' left out of this session: .*/c/module.toml:[0-9]+: C_URL: the value gives no port for servers.0.url \\(empty-field\\)"
 }
 
 # mcp_load on its own: the status codes, the normalized variables, and
@@ -532,6 +551,7 @@ test_mcp_load_status() {
   manifest_module a 'format = 1' 'description = "A"' '[secrets.tok]' 'help = "what to type: a token"' \
     '[[servers]]' 'name = "a"' 'url = "https://a.example/mcp"' 'caller = true'
   manifest_module grafana 'format = 1' '[[servers]]' 'name = "grafana"' 'url = "https://g.example/mcp"'
+  manifest_module nourl 'format = 1' '[[servers]]' 'name = "nourl"' 'url = ""'
   mkdir -p "$CFG/mcp.local/broken"
   printf 'MCP_URL=https://a.example/mcp\nif\n' > "$CFG/mcp.local/broken/mcp.sh"
   local out
@@ -546,7 +566,8 @@ test_mcp_load_status() {
     rc=0; mcp_load a || rc=$?; echo "a $rc ${MCP_SERVERS[*]} ${MCP_SECRET_HELP_OF[a_tok]}"
     rc=0; mcp_load grafana || rc=$?; echo "grafana $rc ${MCP_SERVERS[*]} ${#MCP_SECRET_HELP_OF[@]}"
     rc=0; mcp_load github || rc=$?; echo "github $rc ${MCP_SERVERS[0]%%|*}"
-    echo "names $(mcp_names | tr '\n' ' ')" )"
+    echo "names $(mcp_names | tr '\n' ' ')"
+    rc=0; mcp_load nourl --declared || rc=$?; echo "nourl $rc ${MCP_PROBLEM#"$CFG/mcp.local/"}" )"
   assert_eq "$(sed -n 1p <<<"$out")" "nope 4 this agentbox has no such module (looked for module.toml or mcp.sh in $CFG/mcp.local/nope and mcp/nope)"
   # An old-format module (only mcp.sh) does not load. Its mcp.sh does not
   # run, so a parse error does not count.
@@ -561,6 +582,8 @@ test_mcp_load_status() {
   [[ "$names" == "names a broken grafana "* ]] || fail "yours not first: $names"
   [[ "$names" == *" context7 "* ]] || fail "no shared module: $names"
   (( $(grep -o ' grafana ' <<<"$names" | wc -l) == 1 )) || fail "grafana not once: $names"
+  # url = "" is an error of the manifest also with --declared.
+  assert_eq "$(sed -n 10p <<<"$out")" "nourl 2 nourl/module.toml:2: servers.0.url: the URL is empty (empty-url)"
 }
 
 test_mcp_missing_setting() {
@@ -4551,16 +4574,18 @@ test_setup_unreadable_module_reason() {
   setup "${FUNCNAME[0]}"
   cp "$ROOT/agentbox" "$AB/"
   local case why n value=()
-  # A bad format (not TOML), an unknown key, and a bad value of a setting.
-  # The menu reads the bad value only at its second mcp_load, with the
-  # settings of config.toml: a file name with a space (bad-value).
+  # A bad format (not TOML), an unknown key, an empty server URL, and a bad
+  # value of a setting. The menu reads the bad value only at its second
+  # mcp_load, with the settings of config.toml: a file name with a space
+  # (bad-value).
   printf 'ca\n' > "$T/a b"
-  for case in format key value; do
+  for case in format key url value; do
     rm -rf "$CFG/mcp.local/bad"
     value=()
     case "$case" in
       format) manifest_module bad 'format = 1' 'description = "Bad' '[[servers]]' 'name = "bad"' 'url = "https://bad.example/mcp"' ;;
       key) manifest_module bad 'format = 1' 'colour = "red"' '[[servers]]' 'name = "bad"' 'url = "https://bad.example/mcp"' ;;
+      url) manifest_module bad 'format = 1' '[[servers]]' 'name = "bad"' 'url = ""' ;;
       value) manifest_module bad 'format = 1' '[settings.BAD_CA]' 'check = "file"' \
                '[[servers]]' 'name = "bad"' 'url = "https://bad.example/{BAD_CA}"'
              value=("BAD_CA = \"$T/a b\"") ;;
@@ -4571,6 +4596,7 @@ test_setup_unreadable_module_reason() {
     why="$(sed -n "s/.*MCP module 'bad' left out of this session: //p" "$T/out" | head -1)"
     [[ -n "$why" ]] || { fail "$case: the start gives no reason"; continue; }
     [[ "$case" == key ]] && [[ "$why" != *colour* ]] && fail "$case: the reason does not name the key: $why"
+    [[ "$case" == url ]] && [[ "$why" != *"servers.0.url: the URL is empty (empty-url)" ]] && fail "$case: the reason is not empty-url: $why"
     [[ "$case" == value ]] && [[ "$why" != *bad-value* ]] && fail "$case: the reason is not bad-value: $why"
     # The menu shows the same reason, with the module turned off.
     : > "$CFG/config.toml"; config ${value[@]+"${value[@]}"}
@@ -4586,6 +4612,26 @@ s
     assert_out "nothing to save"
   done
   return 0
+}
+
+# A set value whose field gives an empty server URL (empty-field): the
+# module is NOT USABLE with the reason of the start, and e <number> asks
+# for the setting, so that you can correct it.
+test_setup_empty_field() {
+  setup "${FUNCNAME[0]}"
+  cp "$ROOT/agentbox" "$AB/"
+  manifest_module c 'format = 1' '[settings.C_URL]' 'check = "url"' '[[servers]]' 'name = "c"' 'url = "{C_URL.port}"'
+  config "AB_MCP=c" "C_URL=https://c.example/mcp"
+  local n; n="$(setup_entry c)"
+  [[ -n "$n" ]] || { fail "no entry of c"; return 0; }
+  setup_run "q\n"
+  assert_out "C_URL=https://c.example/mcp · NOT USABLE: $CFG/config.toml:[0-9]+: C_URL: the value gives no port for servers.0.url \\(empty-field\\) · e $n"
+  setup_run "e $n\nhttps://c.example:8080/mcp\ns\n"
+  assert_rc 0
+  assert_out "C_URL \\(setting of c, optional"
+  grep -qx 'C_URL = "https://c.example:8080/mcp"' "$CFG/config.toml" || fail "the corrected URL not saved: $(grep C_URL "$CFG/config.toml")"
+  setup_run "q\n"
+  assert_no_out "NOT USABLE"
 }
 
 # An old-format module in the menu: the old-format text in its line, at
@@ -6288,6 +6334,19 @@ test_mcp_index_drift_orphan() {
   [[ -e "$T/tree/mcp/ix/module.index" ]] && fail "release.sh --index kept the module.index with no module.toml"
   index_check "$T/tree"
   assert_rc 0
+}
+
+# release.sh --index refuses a shared module with url = "" (empty-url),
+# and writes no module.index for it.
+test_mcp_index_refuses_empty_url() {
+  setup "${FUNCNAME[0]}"
+  index_tree
+  printf '%s\n' 'format = 1' '[[servers]]' 'name = "ix"' 'url = ""' > "$T/tree/mcp/ix/module.toml"
+  release_index
+  (( RC )) || fail "release.sh --index accepted url = \"\""
+  assert_out "MCP module 'ix': .*/ix/module.toml:2: servers.0.url: the URL is empty \\(empty-url\\)"
+  [[ -e "$T/tree/mcp/ix/module.index" ]] && fail "a module.index for a module with url = \"\""
+  return 0
 }
 
 test_mcp_index_drift_stale() {

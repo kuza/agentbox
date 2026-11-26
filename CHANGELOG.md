@@ -4,6 +4,22 @@ Each release has a section here; `agentbox update` shows it before you
 confirm, and `release.sh` refuses a version without one. Under "Action" go
 the steps a release needs from you, such as a rebuild.
 
+## v0.3.1
+
+- A module with a server URL that is empty in `module.toml` (`url = ""`)
+  is now a broken module, with the code `empty-url`. The start leaves it
+  out, and its sidecars stay. `agentbox setup` shows the reason in the
+  line of the module. `release.sh --index` refuses it too. Before, the
+  start removed its sidecars.
+- A setting value that gives an empty server URL is now a setting that
+  fails, with the code `empty-field`. An example is `url = "{C_URL.port}"`
+  with a value of `C_URL` that has no port. The start leaves the module
+  out and removes its sidecars, as for each setting that fails.
+  `agentbox setup` shows "NOT USABLE" with the reason, and `e <number>`
+  lets you correct the value.
+- The reason `its server '<name>' has an empty URL` is gone. Both new
+  reasons come before a missing Podman secret.
+
 ## v0.3.0
 
 - The loader of the old-format modules is gone. An old-format module is

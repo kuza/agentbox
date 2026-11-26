@@ -289,10 +289,12 @@ mcp_valid_file() {  # <value>
 # MCP_PROBLEM, for a bad template or value. <path> names the key.
 # sub_unset lists the settings with no value that the template uses, and
 # the settings in failed (of mcp_load_manifest), which give empty text.
+# sub_empty is "<KEY>.<field>" for the first field of a setting with a value
+# that gives empty text (port, for a URL with no port), or empty.
 mcp_manifest_subst() {  # <path> <template> [<item>]
   local t="$2" tok name key val why code=bad-substitution
   local re='^([^{}]*)(\{\{|\}\}|\{[^{}]*\}|\{|\})(.*)$' bad='[[:cntrl:]| ]'
-  sub=""; sub_unset=""
+  sub=""; sub_unset=""; sub_empty=""
   while [[ "$t" =~ $re ]]; do
     sub+="${BASH_REMATCH[1]}"; tok="${BASH_REMATCH[2]}"; t="${BASH_REMATCH[3]}"
     case "$tok" in
@@ -310,7 +312,9 @@ mcp_manifest_subst() {  # <path> <template> [<item>]
     elif [[ "$name" == "$key" ]]; then val="${MCP_VALUE[$key]-}"
     elif [[ " ${MCP_LIST_CONFIG[*]-} " == *" $key "* || " ${MCP_CHECKS[${v[settings.$key.check]}]} " != *" ${name#*.} "* ]]; then
       why="{$name}: the check of $key gives no field ${name#*.}"
-    else val="${MCP_FIELD[$name]-}"
+    else
+      val="${MCP_FIELD[$name]-}"
+      [[ -n "$val" || -n "$sub_empty" || -z "${MCP_VALUE[$key]-}" ]] || sub_empty="$name"
     fi
     if [[ -z "${why:-}" && "$val" =~ $bad ]]; then why="{$name}: the value has a |, a control character or a space"; code="bad-value"; fi
     if [[ -n "${why:-}" ]]; then
@@ -370,11 +374,18 @@ mcp_manifest_items() {  # <path>
 # MCP_PROBLEM the first reason, "<place>: <KEY>: <reason> (<check>)". For a
 # list setting, the reason names the first item that fails: "<place>: <KEY>:
 # '<item>': <reason> (<check>)". The place is SETTING_AT (lib/config.sh),
-# "environment", or the line of the manifest for a default.
+# "environment", or the line of the manifest for a default. A server URL
+# that is "" in the file gives status 2 (empty-url). A server URL that is
+# empty because a field of a set value is empty fails that setting
+# ("<KEY>: empty-field", status 1).
 mcp_load_manifest() {  # <name> [--declared]
-  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset unset fe url why failed=" " nfailed
+  local f="$MCP_DIR/module.toml" rc=0 k i n name desc auth at names=" " c val it seen sub sub_unset sub_empty unset fe url why failed=" " nfailed
+  local empty=" "
   local -a items=() all=() each=()
   local -A v=() l=() fld=()
+  # The place of the value of each setting (SETTING_AT, "environment", or
+  # the line of the default), for the reason of an empty field.
+  local -A place=()
   MCP_FORMAT=manifest
   toml_load manifest "$f" v l 2>/dev/null || rc=$?
   if (( rc == 3 )); then
@@ -470,6 +481,10 @@ mcp_load_manifest() {  # <name> [--declared]
       mcp_manifest_items "servers.$i.for_each" || return 2
       each=(x)
     fi
+    if [[ -z "${v[servers.$i.url]:-}" ]]; then
+      MCP_PROBLEM="$(mcp_manifest_at "servers.$i.url"): servers.$i.url: the URL is empty (empty-url)"
+      return 2
+    fi
     for k in name url description; do
       mcp_manifest_subst "servers.$i.$k" "${v[servers.$i.$k]:-}" ${each[@]+"${each[@]}"} || return 2
     done
@@ -488,6 +503,7 @@ mcp_load_manifest() {  # <name> [--declared]
       val="${v[settings.$k.default]:-}"
       at="$(mcp_manifest_at "settings.$k.default")"
     fi
+    place[$k]="$at"
     [[ "${v[settings.$k.lowercase]:-}" != 1 ]] || val="${val,,}"
     items=("$val")
     if [[ " ${MCP_LIST_CONFIG[*]-} " == *" $k "* ]]; then
@@ -569,6 +585,18 @@ mcp_load_manifest() {  # <name> [--declared]
         for k in $unset; do [[ "$failed" == *" $k "* ]] || mcp_manifest_missing "$k"; done
         continue
       fi
+      # Step 5 refuses a URL that is "" in the file. Thus an empty URL here
+      # comes from an empty field of a setting with a value: that setting
+      # fails, one time.
+      if [[ -z "$url" ]]; then
+        k="${sub_empty%%.*}"
+        if [[ "$empty" != *" $k "* ]]; then
+          empty+="$k "
+          MCP_FAILED+=("$k: empty-field")
+          [[ -n "$MCP_PROBLEM" ]] || MCP_PROBLEM="${place[$k]}: $k: the value gives no ${sub_empty#*.} for servers.$i.url (empty-field)"
+        fi
+        continue
+      fi
       (( ! nfailed )) || continue
       if [[ ! "$name" =~ $AB_NAME_RE ]]; then
         MCP_PROBLEM="$(mcp_manifest_at "servers.$i.name"): servers.$i.name: '$name' is not a server name: use lowercase letters, digits and - (bad-server-name)"
@@ -619,15 +647,11 @@ mcp_servers() {
 
 # What is wrong with the servers of the module mcp_load loaded, on stdout;
 # nothing if they are fine. Names already taken by other modules are in
-# <taken> (" server=module ..."). Run after the settings are read: a URL may
-# come from them. Status 3 for an empty URL ("take away"), 0 for the rest
-# ("keep"; see mcp_check_secrets).
+# <taken> (" server=module ..."). mcp_load refuses an empty URL, so only
+# a server name that another module has is a problem here.
 mcp_servers_problem() {  # <module name> <taken>
-  local server url owner
-  while IFS='|' read -r server url _; do
-    if [[ -z "$url" ]]; then
-      echo "its server '$server' has an empty URL"; return 3
-    fi
+  local server owner
+  while IFS='|' read -r server _; do
     if [[ "$2" == *" $server="* ]]; then
       owner="${2#* "$server"=}"; owner="${owner%% *}"
       echo "its server '$server' has the name of one of module '$owner'"; return
@@ -1012,8 +1036,9 @@ mcp_uninstall_names() {  # images|secrets [<values>]
 # already runs (marked with its name, lib/sidecars.sh) stays for the
 # sessions using it: the cleanups skip MCP_SKIPPED. That is for a start that
 # failed. Access goes for a setting or secret that is gone, a setting that
-# mcp_check refuses (check settings there, not in mcp_start), no URL, and an
-# mcp_start that exits $MCP_TAKE_AWAY (mcp/dbhub, mcp/woodpecker): then
+# mcp_check refuses (check settings there, not in mcp_start), a setting
+# that fails in mcp_load (also empty-field), and an mcp_start that exits
+# $MCP_TAKE_AWAY (mcp/dbhub, mcp/woodpecker): then
 # mcp_skip removes its sidecars, their copies in the cache and its host
 # services at once, like a disabled module's.
 # The status of an mcp_start that wants its module's access taken away.
@@ -1069,15 +1094,11 @@ mcp_check_secrets() {
       mcp_skip "$name" "missing podman secrets ${missing[*]} (agentbox setup, or README, Setup in detail, step 5)"
       continue
     fi
-    # A module with a server that has an empty URL, or that has the name of
-    # a server of a module before it, is left out. Only modules that are not
-    # left out for another reason take names.
-    rc=0; why="$(mcp_servers_problem "$name" "$taken")" || rc=$?
-    if (( rc == 3 )); then
-      # A server with an empty URL: access goes, as for a module turned off.
-      mcp_skip "$name" "$why"
-      continue
-    elif [[ -n "$why" ]]; then
+    # A module with a server that has the name of a server of a module
+    # before it is left out, and its sidecars stay. Only modules that are
+    # not left out for another reason take names.
+    why="$(mcp_servers_problem "$name" "$taken")"
+    if [[ -n "$why" ]]; then
       mcp_skip "$name" "$why" keep
       continue
     fi

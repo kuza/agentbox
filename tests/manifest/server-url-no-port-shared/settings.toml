@@ -1,0 +1,3 @@
+TEAMS = ["red", "blue"]
+U = "https://h.example/mcp"
+V = "https://v.example"

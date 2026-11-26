@@ -107,8 +107,9 @@ A template is text with these substitutions:
 
 Any other { or } is an error. The unit does not expand a substituted
 value again. An empty field of a setting with a value (port, for a URL
-with no port) gives empty text. A setting with no value has these
-results:
+with no port) gives empty text. If the URL of a server is then empty,
+the first such setting fails (empty-field, status 1). A setting with no
+value has these results:
 
 - in the name or the URL of a server: missing-setting (status 1);
 - in an egress host: the unit leaves out that host;
@@ -131,7 +132,9 @@ The first line is "status=<n>", the status of mcp_load:
 Then one line for each problem:
 
 - Status 1: "<KEY>: <code>", one line for each setting that is missing
-  or fails its check, in the order of the manifest.
+  or fails its check, in the order of the manifest. Then the lines of
+  step 9 (missing-setting, empty-field), in the order of the servers.
+  Each key has one line at most.
 - Status 2: "module.toml:<line>: <code>" for the first error only. The
   line is the line of the key, or of its table header. A key with no
   line gives "module.toml: <code>": a key in an inline table, a table
@@ -150,21 +153,26 @@ first error:
    duplicate-secret.
 4. no-server.
 5. The templates, before the values: each secret with for_each
-   (bad-secret-name for a name with no {item}), each server, then egress
-   (bad-substitution, unchecked-setting). The declared part checks them
-   too.
+   (bad-secret-name for a name with no {item}), each server (empty-url
+   for a URL that is "" in the file), then egress (bad-substitution,
+   unchecked-setting). The declared part checks them too.
 6. The settings, in their order: a missing setting or a failed check.
 7. Each secret with for_each whose list setting passed step 6, in its
    order: bad-value, bad-secret-name.
-8. If step 6 found a problem, the unit stops with status 1.
+8. If step 6 found a problem, step 9 does only its first two checks,
+   and the unit stops with status 1 at step 10.
 9. Each server in its order: the substitutions of the name and the URL
    (bad-value). A setting with no value in the name or the URL is a
-   missing setting, and the unit goes to the next server. Then
+   missing setting, and the unit goes to the next server. A URL that is
+   empty after the substitutions fails the first setting whose field
+   gave the empty text (empty-field), and the unit goes to the next
+   server. These two checks run also after a problem of step 6. Then
    bad-server-name, duplicate-server, the substitutions of the
    description, pipe-in-server.
-10. If step 9 found a missing setting, the unit stops with status 1. The
-    "<KEY>: missing-setting" lines of step 9 come after the lines of
-    step 6, in the order of the servers.
+10. If step 9 found a missing setting or an empty-field, the unit stops
+    with status 1. The "<KEY>: missing-setting" and "<KEY>: empty-field"
+    lines of step 9 come after the lines of step 6, in the order of the
+    servers.
 11. The substitutions of egress (bad-value), then bad-egress-host.
 
 
@@ -176,6 +184,10 @@ Status 1:
 missing-setting     A required setting has no value and no default, or
                     the name or the URL of a server uses a setting with
                     no value.
+empty-field         The URL of a server is empty after the
+                    substitutions, because a field of the value of this
+                    setting is empty ({KEY.port}, and the value has no
+                    port).
 url, url-base,      The value fails the built-in check of this name
 port, name, file    (the check of the setting). For a list setting,
                     one item fails. A default can fail too.
@@ -213,6 +225,8 @@ duplicate-secret    An item of own_secrets is also a name in [secrets],
                     "own_secrets".
 no-server           The manifest has no [[servers]]. The line of
                     "format".
+empty-url           The URL of a server is "" in the file. The line of
+                    its [[servers]].
 bad-server-name     A server name is not lowercase letters, digits and
                     "-", with a letter or a digit first. A "|" in a
                     server name gives this code.

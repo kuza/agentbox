@@ -1,0 +1,10 @@
+format = 1
+
+[settings.TEAMS]
+list = true
+check = "name"
+
+[[servers]]
+for_each = "TEAMS"
+name = "tracker-{item}"
+url = ""

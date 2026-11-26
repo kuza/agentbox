@@ -1,0 +1,8 @@
+format = 1
+
+[settings.U]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "{U.port}"

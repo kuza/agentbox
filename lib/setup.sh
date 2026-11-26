@@ -408,7 +408,7 @@ setup_apply_settings() {  # <keys...>
 
 # What run.sh would leave module <name> out for, with the settings as they
 # are now in the menu (saved or not; the environment wins, as for run.sh):
-# its mcp_check and its server lines (lib/mcp.sh), the first problem only.
+# its mcp_load and its mcp_check (lib/mcp.sh), the first problem only.
 # A setting with a reserved name comes first (setup_module_reserved). Then
 # nothing while a setting is missing (MCP_MISSING): the status says NEEDED.
 # Kept in SETUP_PROBLEM[<name>] until a setting changes: call it in the
@@ -430,8 +430,7 @@ setup_module_problem_now() {  # <name>
     (( rc == 0 )) || exit 0
     v="$(mcp_bind_check "$1" 2>/dev/null)" || true
     v="${v%%$'\n'*}"
-    [[ -z "$v" ]] || { echo "$v"; exit 0; }
-    mcp_servers_problem "$1" " " 2>/dev/null || true
+    [[ -z "$v" ]] || echo "$v"
   ) 2>/dev/null | head -1
 }
 

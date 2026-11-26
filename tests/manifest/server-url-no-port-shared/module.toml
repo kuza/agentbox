@@ -1,0 +1,27 @@
+format = 1
+
+[settings.TEAMS]
+list = true
+check = "name"
+
+[settings.P]
+check = "port"
+
+[settings.U]
+check = "url"
+
+[settings.V]
+check = "url"
+
+[[servers]]
+name = "tracker"
+url = "{U.port}{V.port}"
+
+[[servers]]
+name = "tracker-local"
+url = "http://ab-mcp-tracker:{P}/mcp"
+
+[[servers]]
+for_each = "TEAMS"
+name = "tracker-{item}"
+url = "{U.port}"
